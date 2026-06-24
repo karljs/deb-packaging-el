@@ -474,15 +474,23 @@ a waiting note."
             (deb-packaging-status--insert-note
              "RET to open the test transient")))))))
 
-(defun deb-packaging-status--insert-upload (_ctx hide)
+(defun deb-packaging-status--insert-upload (ctx hide)
   "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE.
-Upload is always `ready' — the PPA is configured inside the transient."
-  (let ((state (deb-packaging-status--phase-state 'ppa-tests nil t)))
+Upload is always `ready' — the PPA is configured inside the transient.
+The body shows the .changes file to upload (if source build is done) and
+a hint about the available actions (dput upload, view test results)."
+  (let* ((arts (plist-get ctx :artifacts))
+         (changes (alist-get 'source-changes arts))
+         (state (deb-packaging-status--phase-state 'ppa-tests nil t)))
     (magit-insert-section (deb-packaging-upload nil hide)
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Upload" 'ppa-tests))
       (magit-insert-section-body
-        (deb-packaging-status--insert-note "set PPA in the transient")))))
+        (if changes
+            (deb-packaging-status--insert-file-line changes)
+          (deb-packaging-status--insert-note "waiting on source build"))
+        (deb-packaging-status--insert-note
+         "RET to open the upload transient (dput / view tests)")))))
 
 (defun deb-packaging-status--insert-stale (ctx hide)
   "Insert the Stale artifacts section from CTX, collapsed when HIDE.

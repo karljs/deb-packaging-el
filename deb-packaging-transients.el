@@ -39,6 +39,7 @@
 (declare-function deb-packaging-lintian-binary "deb-packaging-commands")
 (declare-function deb-packaging-lintian-binary-one "deb-packaging-commands")
 (declare-function deb-packaging-autopkgtest "deb-packaging-commands")
+(declare-function deb-packaging-dput-upload "deb-packaging-commands")
 (declare-function deb-packaging-ppa-tests "deb-packaging-commands")
 (declare-function deb-packaging-clean "deb-packaging-commands")
 (declare-function deb-packaging-infra--list-ppas "deb-packaging-infra")
@@ -175,7 +176,7 @@ substituted) when the command is actually run.")
   ["Run"
    ("t" "Run autopkgtest" deb-packaging-autopkgtest)])
 
-;;; ── 5. Upload / PPA tests ─────────────────────────────────────────────────────
+;;; ── 5. Upload / PPA ───────────────────────────────────────────────────────────
 
 (defun deb-packaging--upload-default-value ()
   "Dynamic default for the upload transient."
@@ -189,22 +190,26 @@ substituted) when the command is actually run.")
 
 ;;;###autoload(autoload 'deb-packaging-upload-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-upload-transient ()
-  "Check autopkgtest results on Launchpad for a PPA."
+  "Upload to a Launchpad PPA with dput, or view test results."
   :value #'deb-packaging--upload-default-value
-  ["Arguments"
-   ("-p"  "PPA"
+  ["PPA"
+   ("-p"  "PPA (required)"
     "--ppa="
     :class transient-option
     :prompt "PPA (e.g. ppa:user/name): "
-    :reader deb-packaging--read-ppa)
+    :reader deb-packaging--read-ppa
+    :always-read t
+    :allow-empty nil)]
+  ["Options"
    ("-d"  "Distribution"
     "--dist="
     :class transient-option
     :choices deb-packaging--distro-choices
     :always-read t
     :allow-empty nil)]
-  ["Run"
-   ("p" "Show PPA tests" deb-packaging-ppa-tests)])
+  ["Upload"
+   ("u" "Upload with dput"     deb-packaging-dput-upload)
+   ("p" "Show PPA test results" deb-packaging-ppa-tests)])
 
 ;;; ── 6. Clean ──────────────────────────────────────────────────────────────────
 

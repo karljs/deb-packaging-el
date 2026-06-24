@@ -304,6 +304,39 @@ is not registered."
          pkg-dir
          'autopkgtest)))))
 
+;;; PPA upload (dput)
+
+(defun deb-packaging-dput-upload (&optional args)
+  "Upload source .changes to a PPA with dput.
+ARGS is the argument list from `deb-packaging-upload-transient'.
+The PPA is mandatory; distro defaults to `deb-packaging-target-distro'."
+  (interactive (list (transient-args 'deb-packaging-upload-transient)))
+  (let* ((effective-args (or args '()))
+         (ppa (transient-arg-value "--ppa=" effective-args))
+         (distro (or (transient-arg-value "--dist=" effective-args)
+                     deb-packaging-target-distro)))
+    (unless (and ppa (not (string-empty-p ppa)))
+      (user-error "No PPA specified — set it with the -p option"))
+    (let* ((pkg-dir (deb-packaging--find-package-dir))
+           (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
+           (name (nth 0 info))
+           (version (nth 1 info))
+           (parent-dir (when pkg-dir
+                         (file-name-directory (directory-file-name pkg-dir))))
+           (artifacts (when (and name version parent-dir)
+                        (deb-packaging--scan-artifacts
+                         name version parent-dir)))
+           (changes (alist-get 'source-changes artifacts)))
+      (unless changes
+        (user-error "No source .changes file found — run source build first"))
+      (let* ((changes-file (if (consp changes) (car changes) changes))
+             (cmd-args (list "dput" ppa changes-file)))
+        (setq deb-packaging-target-distro distro
+              deb-packaging--distro-user-set t)
+        (deb-packaging--run-command "dput" cmd-args
+                                    (or parent-dir default-directory)
+                                    'dput)))))
+
 ;;; PPA (Launchpad) testing
 
 (defun deb-packaging-ppa-tests (&optional args)

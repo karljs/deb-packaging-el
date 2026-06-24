@@ -70,7 +70,7 @@
    ("l" "Lintian..."       deb-packaging-lint-transient)
    ("t" "Autopkgtest..."   deb-packaging-test-transient)]
   ["Publish"
-   ("p" "PPA tests..."     deb-packaging-upload-transient)]
+   ("p" "PPA upload..."   deb-packaging-upload-transient)]
   ["Cleanup"
    ("c" "Clean..."         deb-packaging-clean-transient)]
   ["Other"
