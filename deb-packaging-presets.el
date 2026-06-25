@@ -21,6 +21,10 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+(require 'subr-x)
+(require 'deb-packaging-detect)
+
 (defgroup deb-packaging nil
   "Debian/Ubuntu packaging tools."
   :group 'tools)
@@ -52,6 +56,34 @@ Returns the resulting `deb-packaging-target-distro'."
     (setq deb-packaging-target-distro distro
           deb-packaging--distro-user-set t))
   deb-packaging-target-distro)
+
+(defun deb-packaging--effective-distro ()
+  "Return the target distro, seeding from the changelog if needed.
+Uses `deb-packaging-target-distro' if the user has already chosen one;
+otherwise seeds it once from the current package's changelog and falls
+back to \"noble\" when not inside a package tree."
+  (when-let ((distro (plist-get (deb-packaging--scan-context) :distro)))
+    (deb-packaging--maybe-seed-distro distro))
+  deb-packaging-target-distro)
+
+;;; Distribution choices
+
+(defconst deb-packaging-ubuntu-distros
+  '("focal" "jammy" "noble" "oracular" "plucky" "questing")
+  "Known Ubuntu distribution codenames, alphabetical.")
+
+(defconst deb-packaging-debian-distros
+  '("sid" "stable" "testing")
+  "Known Debian distribution names, alphabetical.")
+
+(defun deb-packaging--distro-choices ()
+  "Return distro completion list, prepending the changelog distro if unknown."
+  (let ((current (deb-packaging--effective-distro))
+        (candidates (append deb-packaging-ubuntu-distros
+                            deb-packaging-debian-distros)))
+    (if (member current candidates)
+        candidates
+      (cons current candidates))))
 
 ;;; sbuild variants
 ;;

@@ -5,7 +5,7 @@
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
 ;; URL: https://github.com/example/deb-packaging
-;; Package-Requires: ((emacs "28.1") (transient "0.4.0"))
+;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (magit-section "3.3"))
 
 ;;; Commentary:
 

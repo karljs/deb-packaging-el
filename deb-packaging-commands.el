@@ -19,10 +19,14 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'comint)
 (require 'ansi-color)
+(require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-presets)
+
+(declare-function deb-packaging--effective-distro "deb-packaging-presets")
 
 ;;; Core Execution
 
@@ -104,7 +108,7 @@ it is scoped to buffer creation only and never mutates the caller's
       (when-let ((proc (get-buffer-process buf-name)))
         (deb-packaging--attach-run-sentinel proc key buf-name))
       (deb-packaging--notify-status-refresh))
-    (pop-to-buffer buf-name)
+    (switch-to-buffer buf-name)
     buf-name))
 
 ;;; dpkg-buildpackage
@@ -180,10 +184,14 @@ lintian to process every .deb in a multi-binary package."
 
 ;;; sbuild
 
-(defun deb-packaging--expand-extra-repo (variant-name distro)
-  "Expand VARIANT-NAME from `deb-packaging-sbuild-variants' with DISTRO."
-  (when-let ((template (cdr (assoc variant-name deb-packaging-sbuild-variants))))
-    (format template distro)))
+(defun deb-packaging--expand-extra-repo (value distro)
+  "Expand VALUE into a full extra-repository string for DISTRO.
+If VALUE matches a key in `deb-packaging-sbuild-variants', substitute the
+template; otherwise return VALUE unchanged so custom repository strings can
+be passed through directly."
+  (if-let ((template (cdr (assoc value deb-packaging-sbuild-variants))))
+      (format template distro)
+    value))
 
 (defun deb-packaging-sbuild (&optional args)
   "Run sbuild with ARGS from the binary-build transient."
@@ -201,20 +209,21 @@ lintian to process every .deb in a multi-binary package."
         (user-error "No .dsc file found — run source build first"))
       (let* ((effective-args (or args '()))
              (distro (or (transient-arg-value "--dist=" effective-args)
-                         deb-packaging-target-distro))
+                         (deb-packaging--effective-distro)))
              (variant-name (transient-arg-value "--extra-repository=" effective-args))
-             ;; Strip our synthetic options before passing to sbuild
-             (passthrough (cl-remove-if
-                           (lambda (a)
-                             (or (string-prefix-p "--dist=" a)
-                                 (string-prefix-p "--extra-repository=" a)))
-                           effective-args))
+             ;; Expand the extra-repository alias if needed, leaving the flag
+             ;; name unchanged.
              (extra-repo-arg
               (when variant-name
-                (when-let ((expanded (deb-packaging--expand-extra-repo
-                                      variant-name distro)))
-                  (list (concat "--extra-repository=" expanded))))))
-        ;; Update the global so the status buffer stays in sync
+                (list (concat "--extra-repository="
+                              (deb-packaging--expand-extra-repo variant-name distro)))))
+             (passthrough (cl-remove-if
+                           (lambda (a) (string-prefix-p "--extra-repository=" a))
+                           effective-args)))
+        ;; Ensure --dist= is present; if the user cleared it, default it back.
+        (unless (transient-arg-value "--dist=" passthrough)
+          (setq passthrough (cons (format "--dist=%s" distro) passthrough)))
+        ;; Update the global so the status buffer stays in sync.
         (setq deb-packaging-target-distro distro
               deb-packaging--distro-user-set t)
         (deb-packaging--run-command
@@ -222,7 +231,7 @@ lintian to process every .deb in a multi-binary package."
          (append (list "sbuild")
                  passthrough
                  extra-repo-arg
-                 (list (format "-d%s" distro) dsc-file))
+                 (list dsc-file))
          parent-dir
          'sbuild)))))
 
@@ -234,12 +243,12 @@ lintian to process every .deb in a multi-binary package."
 
 (defun deb-packaging--test-image-info (&optional runner distro)
   "Return a plist describing the test image for RUNNER and DISTRO.
-RUNNER defaults to \"lxd\", DISTRO to `deb-packaging-target-distro'.
+RUNNER defaults to \"lxd\", DISTRO to `deb-packaging--effective-distro'.
 The plist keys are :runner, :image (the expanded path/alias, or nil),
 and :exists (non-nil if the image is available locally, or nil when
 the runner or template is unknown)."
   (let* ((runner (or runner "lxd"))
-         (distro (or distro deb-packaging-target-distro))
+         (distro (or distro (deb-packaging--effective-distro)))
          (template (cdr (assoc runner deb-packaging-test-runners)))
          (image (when template (format template distro)))
          (exists (when image
@@ -276,8 +285,8 @@ is not registered."
       (let* ((effective-args (or args '()))
              (runner (or (transient-arg-value "--runner=" effective-args)
                          "lxd"))
-             (distro (or (transient-arg-value "--dist=" effective-args)
-                         deb-packaging-target-distro))
+              (distro (or (transient-arg-value "--dist=" effective-args)
+                          (deb-packaging--effective-distro)))
              (image-info (deb-packaging--test-image-info runner distro))
              (image (plist-get image-info :image))
              (image-exists (plist-get image-info :exists))
@@ -314,7 +323,7 @@ The PPA is mandatory; distro defaults to `deb-packaging-target-distro'."
   (let* ((effective-args (or args '()))
          (ppa (transient-arg-value "--ppa=" effective-args))
          (distro (or (transient-arg-value "--dist=" effective-args)
-                     deb-packaging-target-distro)))
+                     (deb-packaging--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA specified — set it with the -p option"))
     (let* ((pkg-dir (deb-packaging--find-package-dir))
@@ -346,7 +355,7 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
   (let* ((effective-args (or args '()))
          (ppa (transient-arg-value "--ppa=" effective-args))
          (distro (or (transient-arg-value "--dist=" effective-args)
-                     deb-packaging-target-distro)))
+                     (deb-packaging--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA specified — set it with the -p option"))
     (let* ((pkg-dir (deb-packaging--find-package-dir))

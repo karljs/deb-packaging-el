@@ -66,6 +66,9 @@
 (require 'deb-packaging-presets)
 (require 'deb-packaging-commands)
 
+(declare-function deb-packaging--effective-distro "deb-packaging-presets")
+(declare-function transient-args "transient")
+
 ;; Transient prefixes opened by RET/mnemonic keys; loaded by deb-packaging.el.
 (declare-function deb-packaging-source-build-transient "deb-packaging-transients")
 (declare-function deb-packaging-binary-build-transient "deb-packaging-transients")
@@ -349,6 +352,12 @@ optional dimmed fragment shown right after the label (e.g. a count)."
             (when (string-match-p "_source\\.buildinfo$" b)
               (deb-packaging-status--insert-file-line b))))))))
 
+(defun deb-packaging-status--transient-flag-p (prefix flag)
+  "Return non-nil if FLAG is present in PREFIX's saved/default transient args."
+  (and (fboundp 'transient-args)
+       (let ((args (ignore-errors (transient-args prefix))))
+         (and args (member flag args) t))))
+
 (defun deb-packaging-status--insert-binary (ctx hide)
   "Insert the Binary phase section from CTX, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
@@ -364,16 +373,21 @@ optional dimmed fragment shown right after the label (e.g. a count)."
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Binary build" 'sbuild detail))
       (magit-insert-section-body
-        (deb-packaging-status--insert-command
-         (format "sbuild -d%s" deb-packaging-target-distro))
-        (cond
+         (deb-packaging-status--insert-command
+          (format "sbuild --dist=%s" (deb-packaging--effective-distro)))
+         (cond
          (done
           (dolist (c bin-changes)
             (deb-packaging-status--insert-file-line c))
           (dolist (d debs)
             (deb-packaging-status--insert-file-line d)))
-         ((not dsc)
-          (deb-packaging-status--insert-note "waiting on source build")))))))
+          ((not dsc)
+           (deb-packaging-status--insert-note "waiting on source build"))))
+        (when (deb-packaging-status--transient-flag-p
+               'deb-packaging-binary-build-transient
+               "--build-failed-commands=%SBUILD_SHELL")
+          (deb-packaging-status--insert-note
+           "Debug shell enabled — will drop into chroot on build failure")))))
 
 (defun deb-packaging-status--insert-lintian-child (section-type key label artifacts)
   "Insert one Lint child section of SECTION-TYPE for run key KEY.
@@ -465,12 +479,17 @@ a waiting note."
                                             'font-lock-face
                                             'deb-packaging-status-failed)))
                 (when-let ((hint (deb-packaging--test-image-build-hint
-                                  runner deb-packaging-target-distro)))
+                                   runner (deb-packaging--effective-distro))))
                   (deb-packaging-status--insert-note
                    (format "Build it with: %s" hint)))))
             ;; Deb inputs that autopkgtest will install.
             (dolist (d debs)
               (deb-packaging-status--insert-file-line d))
+            (when (deb-packaging-status--transient-flag-p
+                   'deb-packaging-test-transient
+                   "--shell-fail")
+              (deb-packaging-status--insert-note
+               "Shell on failure enabled — will drop into testbed on failure"))
             (deb-packaging-status--insert-note
              "RET to open the test transient")))))))
 
@@ -739,7 +758,7 @@ This is the primary entry point for the deb-packaging workflow."
         (deb-packaging-status-mode))
       (deb-packaging-status--render)
       (deb-packaging-status--goto-first-phase))
-    (pop-to-buffer buf)))
+    (switch-to-buffer buf)))
 
 (provide 'deb-packaging-status)
 ;;; deb-packaging-status.el ends here

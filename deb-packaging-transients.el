@@ -32,6 +32,9 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-presets)
 
+;; Forward-declare helper functions to keep the byte-compiler quiet.
+(declare-function deb-packaging--effective-distro "deb-packaging-presets")
+
 ;; Forward-declare command functions to keep the byte-compiler quiet.
 (declare-function deb-packaging-source-build "deb-packaging-commands")
 (declare-function deb-packaging-sbuild "deb-packaging-commands")
@@ -43,21 +46,6 @@
 (declare-function deb-packaging-ppa-tests "deb-packaging-commands")
 (declare-function deb-packaging-clean "deb-packaging-commands")
 (declare-function deb-packaging-infra--list-ppas "deb-packaging-infra")
-
-;;; Known Ubuntu distros (shared completion source)
-
-(defconst deb-packaging-ubuntu-distros
-  '("questing" "plucky" "oracular" "noble" "jammy" "focal"
-    "resolute" "mantic" "lunar" "kinetic" "impish" "hirsute"
-    "groovy" "bionic" "xenial")
-  "Known Ubuntu distribution codenames, newest first.")
-
-(defun deb-packaging--distro-choices ()
-  "Return distro completion list, prepending the changelog distro if unknown."
-  (let ((current deb-packaging-target-distro))
-    (if (member current deb-packaging-ubuntu-distros)
-        deb-packaging-ubuntu-distros
-      (cons current deb-packaging-ubuntu-distros))))
 
 ;;; ── 1. Source build (dpkg-buildpackage) ─────────────────────────────────────
 
@@ -79,9 +67,9 @@
 
 (defun deb-packaging--binary-default-value ()
   "Dynamic default for the binary-build transient.
-Seeds the distro from `deb-packaging-target-distro' so the option reflects
-the current package on each invocation."
-  (list (format "--dist=%s" deb-packaging-target-distro)
+Seeds the distro from the changelog so the option reflects the current
+package on each invocation."
+  (list (format "--dist=%s" (deb-packaging--effective-distro))
         "-A"))
 
 (defclass deb-packaging--extra-repo-argument (transient-option) ()
@@ -115,6 +103,8 @@ substituted) when the command is actually run.")
     :allow-empty nil)
    ("-A" "Build arch-all packages"  "-A")
    ("-v" "Verbose"                  "-v")
+   ("-F" "Shell on build failure"
+    "--build-failed-commands=%SBUILD_SHELL")
    ("-e" "Extra repository"
     "--extra-repository="
     :class deb-packaging--extra-repo-argument
@@ -152,7 +142,7 @@ substituted) when the command is actually run.")
   "Dynamic default for the test transient."
   (list "--apt-upgrade"
         "--runner=lxd"
-        (format "--dist=%s" deb-packaging-target-distro)))
+        (format "--dist=%s" (deb-packaging--effective-distro))))
 
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()
@@ -180,7 +170,7 @@ substituted) when the command is actually run.")
 
 (defun deb-packaging--upload-default-value ()
   "Dynamic default for the upload transient."
-  (list (format "--dist=%s" deb-packaging-target-distro)))
+  (list (format "--dist=%s" (deb-packaging--effective-distro))))
 
 (defun deb-packaging--read-ppa (prompt initial-input _history)
   "Read a PPA name, completing against the user's known PPAs."

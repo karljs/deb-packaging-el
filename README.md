@@ -76,25 +76,80 @@ save permanently, `C-x s` for this session).
 | Transient | Key in dispatch | Arguments |
 |-----------|----------------|-----------|
 | Source build | `s` | `-S`, `-nc`, `-d`, `-sa`, `-I`, `-i` |
-| Binary build | `b` | `--dist=`, `-A`, `-v`, `--extra-repository=` |
+| Binary build | `b` | `--dist=`, `-A`, `-v`, `--build-failed-commands=%SBUILD_SHELL`, `--extra-repository=` |
 | Lintian | `l` | `-i`, `-I`, `--pedantic`, `--tag-display-limit=`, `--color=` |
 | Autopkgtest | `t` | `--apt-upgrade`, `--shell-fail`, `--runner=`, `--dist=` |
-| PPA tests | `p` | `--ppa=`, `--dist=` |
+| PPA upload / tests | `p` | `--ppa=`, `--dist=` |
 | Clean | `c` | `--quilt`, `--sessions`, `--artifacts`, `--stale`, `--pc`, `--files` |
+
+### Distribution defaults and completions
+
+The `--dist=` option is shown in the binary-build, autopkgtest, and PPA
+upload transients.  It defaults to the distribution named at the top of
+`debian/changelog`, falling back to `noble`.  The completion list offers both
+Ubuntu and Debian values (`sid`, `stable`, `testing`, `focal`, `jammy`, `noble`,
+etc.), plus the changelog distro if it is not already known.
+
+### Debug shells on failure
+
+The binary-build and autopkgtest transients can drop you into an interactive
+shell when a build or test fails:
+
+- **sbuild**: enable `--build-failed-commands=%SBUILD_SHELL`.  The comint
+  command buffer becomes the shell; type commands and `exit` when done.
+- **autopkgtest**: enable `--shell-fail` (`-s`).  The same comint buffer
+  becomes the testbed shell.
+
+Because command buffers are `comint`/pty buffers, the interactive shell is
+usable just like a terminal.  The status buffer shows a note in the Binary or
+Test phase body when either shell-debug flag is active.
 
 ### sbuild extra repository
 
 The binary-build transient's `--extra-repository=` option accepts a short name
 from `deb-packaging-sbuild-variants` (default: `rust-ppa`, `proposed`).  The
 full apt repository string (with distro substituted) is expanded at run time.
+You can also type any full repository string directly; it is passed through
+unchanged.
 
 ### PPA workflow
 
 PPA support uses the [`ppa`](https://snapcraft.io/ppa-dev-tools) tool. Set the
 PPA with `--ppa=` inside the upload transient; it is not session-global state.
 
-PPA lifecycle management (create/destroy/set/show/list) lives in the
+PPA lifecycle management (create/delete/set/show/list) lives in the
 Infrastructure menu (`i`), under the "PPA (Launchpad)" section.
+
+### Infrastructure management
+
+Open the infrastructure menu from the status buffer with `i`, then choose:
+
+| Key | Buffer |
+|-----|--------|
+| `s` | Schroots (sbuild) |
+| `l` | LXD images (autopkgtest) |
+| `v` | QEMU images (autopkgtest) |
+| `p` | Launchpad PPAs |
+
+Each infrastructure buffer is a `tabulated-list-mode` table.  Press `S` to sort by
+the current column, `{` and `}` to resize columns, and click a header to sort by
+mouse.
+
+Common keys shared by every infrastructure buffer:
+
+| Key | Action |
+|-----|--------|
+| `c` | Create a new entry |
+| `d` | Delete the entry at point |
+| `g` | Refresh the list |
+| `q` | Quit window |
+
+Buffer-specific keys:
+
+| Buffer | Extra keys |
+|--------|------------|
+| Schroots | `u` update |
+| PPAs | `s` show, `e` edit/set-config |
 
 ## Customization
 
