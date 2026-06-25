@@ -45,6 +45,7 @@
 (declare-function deb-packaging-dput-upload "deb-packaging-commands")
 (declare-function deb-packaging-ppa-tests "deb-packaging-commands")
 (declare-function deb-packaging-clean "deb-packaging-commands")
+(declare-function deb-packaging-reset "deb-packaging-commands")
 (declare-function deb-packaging-infra--list-ppas "deb-packaging-infra")
 
 ;;; ── 1. Source build (dpkg-buildpackage) ─────────────────────────────────────
@@ -201,21 +202,30 @@ substituted) when the command is actually run.")
    ("u" "Upload with dput"     deb-packaging-dput-upload)
    ("p" "Show PPA test results" deb-packaging-ppa-tests)])
 
-;;; ── 6. Clean ──────────────────────────────────────────────────────────────────
+;;; ── 6. Clean artifacts ────────────────────────────────────────────────────────
 
 ;;;###autoload(autoload 'deb-packaging-clean-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-clean-transient ()
-  "Clean build artifacts and working-tree state."
-  :value '("--quilt" "--sessions" "--artifacts" "--pc" "--files")
-  ["What to clean"
-   ("-q" "Pop quilt patches"               "--quilt")
-   ("-s" "End all schroot sessions"        "--sessions")
-   ("-a" "Remove current-version artifacts" "--artifacts")
-   ("-S" "Remove stale artifacts (other versions)" "--stale")
-   ("-p" "Remove .pc/ directory"           "--pc")
-   ("-f" "Remove debian/files"             "--files")]
+  "Remove build artifacts from the output directory."
+  :value '("--stale")
+  ["What to remove"
+   ("-a" "Current-version artifacts" "--artifacts")
+   ("-S" "Stale artifacts (other versions)" "--stale")]
   ["Run"
    ("c" "Clean" deb-packaging-clean)])
+
+;;; ── 7. Reset source tree ──────────────────────────────────────────────────────
+
+;;;###autoload(autoload 'deb-packaging-reset-transient "deb-packaging-transients" nil t)
+(transient-define-prefix deb-packaging-reset-transient ()
+  "Reset the source tree to a pristine state."
+  :value '("--quilt" "--pc" "--files")
+  ["Reset source tree"
+   ("-q" "Pop quilt patches"     "--quilt")
+   ("-p" "Remove .pc/ directory" "--pc")
+   ("-f" "Remove debian/files"   "--files")]
+  ["Run"
+   ("r" "Reset" deb-packaging-reset)])
 
 (provide 'deb-packaging-transients)
 ;;; deb-packaging-transients.el ends here

@@ -26,6 +26,7 @@
 ;;   deb-packaging-test-transient
 ;;   deb-packaging-upload-transient
 ;;   deb-packaging-clean-transient
+;;   deb-packaging-reset-transient
 ;;
 ;; Default keybinding: C-c d  (opens the status buffer)
 
@@ -72,7 +73,8 @@
   ["Publish"
    ("p" "PPA upload..."   deb-packaging-upload-transient)]
   ["Cleanup"
-   ("c" "Clean..."         deb-packaging-clean-transient)]
+   ("c" "Clean artifacts..." deb-packaging-clean-transient)
+   ("r" "Reset source tree..." deb-packaging-reset-transient)]
   ["Other"
    ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
    ("g" "Refresh status"   deb-packaging-refresh)

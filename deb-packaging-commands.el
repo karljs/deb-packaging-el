@@ -41,27 +41,55 @@
 (defvar deb-packaging--run-history nil
   "Alist mapping a command KEY symbol to its most recent run record.
 Each record is a plist: :status (`running', `success' or `failure'),
-:time (HH:MM:SS string), :buffer (comint buffer name).  Session-only.")
+:time (HH:MM:SS string), :buffer (comint buffer name), and optionally
+:summary (a plist of parsed findings for lintian runs, with keys
+:error, :warning, :info).  Session-only.")
 
-(defun deb-packaging--record-run (key status buf-name)
-  "Store a run record for KEY with STATUS and BUF-NAME, timestamped now."
+(defun deb-packaging--record-run (key status buf-name &optional summary)
+  "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY.
+SUMMARY is a plist (e.g. lintian findings) stored verbatim under :summary."
   (when key
-    (setf (alist-get key deb-packaging--run-history)
-          (list :status status
-                :time (format-time-string "%H:%M:%S")
-                :buffer buf-name))))
+    (let ((existing (alist-get key deb-packaging--run-history)))
+      (setf (alist-get key deb-packaging--run-history)
+            (list :status status
+                  :time (or (and existing (plist-get existing :time))
+                            (format-time-string "%H:%M:%S"))
+                  :buffer buf-name
+                  :summary summary)))))
 
 (defun deb-packaging-run-record (key)
   "Return the most recent run record plist for KEY, or nil."
   (alist-get key deb-packaging--run-history))
+
+(defun deb-packaging--run-summary (key)
+  "Return the summary plist for KEY's last run, or nil."
+  (plist-get (deb-packaging-run-record key) :summary))
 
 (defun deb-packaging--notify-status-refresh ()
   "Refresh the status buffer if it is live."
   (when (fboundp 'deb-packaging-status--maybe-refresh)
     (deb-packaging-status--maybe-refresh)))
 
+(defun deb-packaging--parse-lint-summary (buf-name)
+  "Parse lintian findings counts from comint buffer BUF-NAME.
+Returns a plist (:error N :warning N :info N) by counting lines
+matching lintian severity prefixes E:/W:/I: in the buffer output."
+  (when (buffer-live-p (get-buffer buf-name))
+    (with-current-buffer buf-name
+      (let ((errors 0) (warnings 0) (infos 0))
+        (save-excursion
+          (goto-char (point-min))
+          (while (re-search-forward "^\\([EWI]\\):" nil t)
+            (pcase (match-string 1)
+              ("E" (cl-incf errors))
+              ("W" (cl-incf warnings))
+              ("I" (cl-incf infos)))))
+        (list :error errors :warning warnings :info infos)))))
+
 (defun deb-packaging--attach-run-sentinel (proc key buf-name)
-  "Attach a sentinel to PROC that records the run outcome for KEY."
+  "Attach a sentinel to PROC that records the run outcome for KEY.
+For lintian run keys, parses the comint buffer for findings counts and
+stores them as a :summary plist on the run record."
   (let ((old (process-sentinel proc)))
     (set-process-sentinel
      proc
@@ -69,11 +97,13 @@ Each record is a plist: :status (`running', `success' or `failure'),
        (when (functionp old)
          (funcall old p event))
        (when (memq (process-status p) '(exit signal))
-         (let ((status (if (and (eq (process-status p) 'exit)
-                                (zerop (process-exit-status p)))
-                           'success
-                         'failure)))
-           (deb-packaging--record-run key status buf-name)
+         (let* ((status (if (and (eq (process-status p) 'exit)
+                                 (zerop (process-exit-status p)))
+                            'success
+                          'failure))
+                (summary (when (memq key '(lintian-source lintian-binary))
+                           (deb-packaging--parse-lint-summary buf-name))))
+           (deb-packaging--record-run key status buf-name summary)
            (deb-packaging--notify-status-refresh)))))))
 
 (defun deb-packaging--run-command (name args &optional dir key)
@@ -368,52 +398,64 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
                                   (or pkg-dir default-directory)
                                   'ppa-tests))))
 
-;;; Clean
+;;; Clean artifacts
 
 (defun deb-packaging-clean (&optional args)
-  "Clean build artifacts according to ARGS from `deb-packaging-clean-transient'."
+  "Remove build artifacts according to ARGS from `deb-packaging-clean-transient'.
+Moves files to the system trash rather than deleting them permanently.
+Only removes files from the output (parent) directory."
   (interactive (list (transient-args 'deb-packaging-clean-transient)))
   (let ((pkg-dir (deb-packaging--find-package-dir)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((effective-args (or args '()))
-           (do-quilt     (member "--quilt"     effective-args))
-           (do-sessions  (member "--sessions"  effective-args))
            (do-artifacts (member "--artifacts" effective-args))
            (do-stale     (member "--stale"     effective-args))
-           (do-pc        (member "--pc"        effective-args))
-           (do-files     (member "--files"     effective-args))
            (info (deb-packaging--parse-changelog pkg-dir))
            (name (nth 0 info))
            (version (nth 1 info))
            (parent-dir (file-name-directory (directory-file-name pkg-dir)))
            (file-version (deb-packaging--version-to-filename version))
-           (current-pattern (format "%s[_-]*%s*" name file-version))
-           ;; Build a shell pipeline from the selected steps
+           (files nil))
+      (when do-artifacts
+        (let ((pattern (format "%s[_-]*%s"
+                               (regexp-quote name)
+                               (regexp-quote file-version))))
+          (dolist (f (directory-files parent-dir nil pattern))
+            (push (expand-file-name f parent-dir) files))))
+      (when do-stale
+        (let ((stale (deb-packaging--scan-stale-artifacts
+                      name version parent-dir pkg-dir)))
+          (dolist (f stale)
+            (push (expand-file-name f parent-dir) files))))
+      (if (null files)
+          (message "Nothing to clean")
+        (dolist (f files)
+          (when (file-exists-p f)
+            (move-file-to-trash f)))
+        (deb-packaging--record-run 'clean 'success nil)
+        (deb-packaging--notify-status-refresh)
+        (message "Moved %d file(s) to trash" (length files))))))
+
+;;; Reset source tree
+
+(defun deb-packaging-reset (&optional args)
+  "Reset the source tree according to ARGS from `deb-packaging-reset-transient'.
+Restores the working tree to a pristine state by popping quilt patches,
+removing the .pc/ directory, and/or removing debian/files."
+  (interactive (list (transient-args 'deb-packaging-reset-transient)))
+  (let ((pkg-dir (deb-packaging--find-package-dir)))
+    (unless pkg-dir
+      (user-error "Not in a Debian package directory"))
+    (let* ((effective-args (or args '()))
+           (do-quilt (member "--quilt" effective-args))
+           (do-pc    (member "--pc"    effective-args))
+           (do-files (member "--files" effective-args))
            (steps '())
            (desc '()))
       (when do-quilt
         (push "quilt pop -a 2>/dev/null || true" steps)
         (push "pop quilt" desc))
-      (when do-sessions
-        (push "schroot -e --all-sessions 2>/dev/null || true" steps)
-        (push "end schroot sessions" desc))
-      (when do-artifacts
-        (push (format "rm -f %s/%s"
-                      (shell-quote-argument parent-dir)
-                      current-pattern)
-              steps)
-        (push "rm current artifacts" desc))
-      (when do-stale
-        (let ((stale (deb-packaging--scan-stale-artifacts
-                      name version parent-dir)))
-          (when stale
-            (dolist (f stale)
-              (push (format "rm -f %s"
-                            (shell-quote-argument
-                             (expand-file-name f parent-dir)))
-                    steps))
-            (push (format "rm %d stale" (length stale)) desc))))
       (when do-pc
         (push "rm -rf .pc/" steps)
         (push "rm .pc/" desc))
@@ -421,17 +463,17 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
         (push "rm -f debian/files" steps)
         (push "rm debian/files" desc))
       (if (null steps)
-          (message "Nothing selected to clean")
+          (message "Nothing selected to reset")
         (let ((script (concat
                        (format "cd %s && " (shell-quote-argument pkg-dir))
                        (string-join (nreverse steps) " && ")
-                       (format " && echo 'Clean complete (%s)'"
+                       (format " && echo 'Reset complete (%s)'"
                                (string-join (nreverse desc) ", ")))))
           (deb-packaging--run-command
-           "clean"
+           "reset"
            (list "sh" "-c" script)
            pkg-dir
-           'clean))))))
+           'reset))))))
 
 (provide 'deb-packaging-commands)
 ;;; deb-packaging-commands.el ends here

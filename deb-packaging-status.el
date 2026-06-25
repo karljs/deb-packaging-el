@@ -68,6 +68,7 @@
 
 (declare-function deb-packaging--effective-distro "deb-packaging-presets")
 (declare-function transient-args "transient")
+(declare-function transient-arg-value "transient")
 
 ;; Transient prefixes opened by RET/mnemonic keys; loaded by deb-packaging.el.
 (declare-function deb-packaging-source-build-transient "deb-packaging-transients")
@@ -76,7 +77,11 @@
 (declare-function deb-packaging-test-transient "deb-packaging-transients")
 (declare-function deb-packaging-upload-transient "deb-packaging-transients")
 (declare-function deb-packaging-clean-transient "deb-packaging-transients")
+(declare-function deb-packaging-reset-transient "deb-packaging-transients")
 ;; Other cross-file references
+(declare-function deb-packaging--run-summary "deb-packaging-commands")
+(declare-function deb-packaging--schroot-exists-p "deb-packaging-detect")
+(declare-function deb-packaging--filename-version "deb-packaging-detect")
 (declare-function deb-packaging-dispatch "deb-packaging")
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
 
@@ -84,7 +89,8 @@
 
 (defvar-local deb-packaging-status--context nil
   "Buffer-local plist describing the package shown in the status buffer.
-Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale.")
+Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
+:source-format :orig-tarball :arch :maintainer.")
 
 (defun deb-packaging-status--buffer-name (name)
   "Return the status buffer name for package NAME."
@@ -156,6 +162,22 @@ the status buffer shows.  Does not create or refresh a buffer."
   (if-let* ((record (deb-packaging-run-record key))
             (time (plist-get record :time)))
       (propertize (format " %s" time) 'font-lock-face 'shadow)
+    ""))
+
+(defun deb-packaging-status--lint-summary-note (key)
+  "Return a colored findings summary for KEY's lintian run, or empty string.
+Format: \" 2E 5W 12I\" with each count colored by severity."
+  (if-let* ((summary (deb-packaging--run-summary key)))
+      (let* ((errs (plist-get summary :error))
+             (warns (plist-get summary :warning))
+             (infos (plist-get summary :info))
+             (fmt (lambda (n face)
+                    (propertize (format "%d" n) 'font-lock-face face))))
+        (concat
+         "  "
+         (funcall fmt errs 'deb-packaging-status-failed) "E "
+         (funcall fmt warns 'deb-packaging-status-running) "W "
+         (funcall fmt infos 'shadow) "I"))
     ""))
 
 ;;; Phase state and fold decisions
@@ -239,11 +261,6 @@ Expand `failed' and `running' phases and the single next actionable phase
   "Face for a settings value (e.g. the current distro)."
   :group 'deb-packaging)
 
-(defface deb-packaging-status-command
-  '((t :inherit font-lock-comment-face))
-  "Face for the dimmed command-line detail shown in a phase body."
-  :group 'deb-packaging)
-
 (defface deb-packaging-status-done
   '((t :inherit success))
   "Face for the `done' status word."
@@ -278,21 +295,54 @@ Expand `failed' and `running' phases and the single next actionable phase
   "Left-justify TEXT to WIDTH columns (Emacs `format' has no dynamic width)."
   (format (format "%%-%ds" width) text))
 
+(defun deb-packaging-status--file-mtime (path)
+  "Return a formatted \"Jun 24 14:32\" timestamp for PATH, or empty string."
+  (condition-case nil
+      (format-time-string "%b %e %H:%M"
+                          (file-attribute-status-change-time
+                           (file-attributes path)))
+    (error "")))
+
+(defun deb-packaging-status--file-size (path)
+  "Return a human-readable size string for PATH, or empty string."
+  (condition-case nil
+      (file-size-human-readable
+       (file-attribute-size (file-attributes path)))
+    (error "")))
+
 (defun deb-packaging-status--insert-file-line (path)
-  "Insert an indented PATH basename line for an artifact."
-  (insert (format "    %s\n"
-                  (propertize (file-name-nondirectory path)
-                              'font-lock-face 'magit-section-secondary-heading))))
+  "Insert an indented PATH line with size and modification time.
+Aligns the basename to a fixed column, then shows size and date."
+  (let* ((base (file-name-nondirectory path))
+         (size (deb-packaging-status--file-size path))
+         (mtime (deb-packaging-status--file-mtime path)))
+    (insert (format "    %-45s %8s  %s\n"
+                    (propertize base 'font-lock-face
+                                'magit-section-secondary-heading)
+                    (propertize size 'font-lock-face 'shadow)
+                    (propertize mtime 'font-lock-face 'shadow)))))
 
 (defun deb-packaging-status--insert-note (text)
   "Insert an indented, dimmed informational note TEXT inside a body."
   (insert (format "    %s\n" (propertize text 'font-lock-face 'shadow))))
 
-(defun deb-packaging-status--insert-command (command)
-  "Insert a dimmed, indented COMMAND-line detail row inside a phase body."
-  (insert (format "    %s\n"
-                  (propertize (concat "$ " command)
-                              'font-lock-face 'deb-packaging-status-command))))
+(defun deb-packaging-status--insert-state-row (pairs)
+  "Insert a state row from PAIRS, a list of (label . value) cons cells.
+Each pair is rendered as \"Label: value\" with the label dimmed and the
+value in the default face.  Pairs are separated by 4 spaces to use
+horizontal space, wrapping naturally when the frame is narrow."
+  (when pairs
+    (let ((parts (mapcar
+                  (lambda (pair)
+                    (concat
+                     (propertize (car pair) 'font-lock-face 'shadow)
+                     ": "
+                     (propertize (cdr pair) 'font-lock-face 'default)))
+                  pairs)))
+      (insert "    "
+              (mapconcat #'identity parts
+                         (propertize "    " 'font-lock-face 'shadow))
+              "\n"))))
 
 ;;; Section inserters
 
@@ -337,14 +387,28 @@ optional dimmed fragment shown right after the label (e.g. a count)."
          (dsc (alist-get 'dsc arts))
          (src-changes (alist-get 'source-changes arts))
          (buildinfo (alist-get 'buildinfo arts))
+         (source-format (plist-get ctx :source-format))
+         (orig-tarball (plist-get ctx :orig-tarball))
+         (parent-dir (plist-get ctx :parent-dir))
          (done (and dsc src-changes))
-         ;; Source has no upstream prerequisite, so it is always runnable.
          (state (deb-packaging-status--phase-state 'source-build done t)))
     (magit-insert-section (deb-packaging-source nil hide)
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Source build" 'source-build))
       (magit-insert-section-body
-        (deb-packaging-status--insert-command "dpkg-buildpackage")
+        (deb-packaging-status--insert-state-row
+         (delq nil
+               (list
+                (when parent-dir
+                  (cons "Output" (abbreviate-file-name parent-dir)))
+                (cons "Orig tarball"
+                      (if orig-tarball
+                          (propertize (concat "✓ "
+                                  (file-name-nondirectory orig-tarball))
+                                      'font-lock-face 'deb-packaging-status-done)
+                        (propertize "none" 'font-lock-face 'shadow)))
+                (when source-format
+                  (cons "Format" source-format)))))
         (when done
           (when dsc (deb-packaging-status--insert-file-line dsc))
           (when src-changes (deb-packaging-status--insert-file-line src-changes))
@@ -364,6 +428,10 @@ optional dimmed fragment shown right after the label (e.g. a count)."
          (dsc (alist-get 'dsc arts))
          (bin-changes (alist-get 'binary-changes arts))
          (debs (alist-get 'debs arts))
+         (arch (plist-get ctx :arch))
+         (distro (deb-packaging--effective-distro))
+         (schroot (when (and distro arch)
+                    (deb-packaging--schroot-exists-p distro arch)))
          (done (and bin-changes debs))
          (state (deb-packaging-status--phase-state 'sbuild done dsc))
          (detail (when debs
@@ -373,29 +441,43 @@ optional dimmed fragment shown right after the label (e.g. a count)."
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Binary build" 'sbuild detail))
       (magit-insert-section-body
-         (deb-packaging-status--insert-command
-          (format "sbuild --dist=%s" (deb-packaging--effective-distro)))
-         (cond
+        (deb-packaging-status--insert-state-row
+         (delq nil
+               (list
+                (cons "Schroot"
+                      (if schroot
+                          (propertize (concat "✓ " schroot)
+                                      'font-lock-face 'deb-packaging-status-done)
+                        (propertize "none" 'font-lock-face 'shadow)))
+                (when arch (cons "Arch" arch))
+                (cons "Dsc"
+                      (if dsc
+                          (propertize "✓ ready" 'font-lock-face
+                                      'deb-packaging-status-done)
+                        (propertize "none" 'font-lock-face 'shadow))))))
+        (cond
          (done
           (dolist (c bin-changes)
             (deb-packaging-status--insert-file-line c))
           (dolist (d debs)
             (deb-packaging-status--insert-file-line d)))
-          ((not dsc)
-           (deb-packaging-status--insert-note "waiting on source build"))))
+         ((not dsc)
+          (deb-packaging-status--insert-note "waiting on source build")))
         (when (deb-packaging-status--transient-flag-p
                'deb-packaging-binary-build-transient
                "--build-failed-commands=%SBUILD_SHELL")
           (deb-packaging-status--insert-note
-           "Debug shell enabled — will drop into chroot on build failure")))))
+           "Debug shell enabled, drops into chroot on build failure"))))))
 
 (defun deb-packaging-status--insert-lintian-child (section-type key label artifacts)
   "Insert one Lint child section of SECTION-TYPE for run key KEY.
 LABEL is the heading text; ARTIFACTS is the list of files to lint (or nil),
 whose absence makes the child `blocked'.  Lint never reaches `done': a
 successful run returns to `ready' (KEEP-READY) so the user can re-run
-after fixing findings.  SECTION-TYPE must be registered in
-`deb-packaging-status--section-actions' so RET acts on it."
+after fixing findings.  When a lintian run has completed, the heading
+also shows a colored findings summary (e.g. \"2E 5W 12I\").
+SECTION-TYPE must be registered in `deb-packaging-status--section-actions'
+so RET acts on it."
   (let ((state (deb-packaging-status--phase-state key nil (and artifacts t) t)))
     (magit-insert-section ((eval section-type))
       (magit-insert-heading
@@ -404,6 +486,7 @@ after fixing findings.  SECTION-TYPE must be registered in
                              label (- deb-packaging-status--label-width 2))
                             'font-lock-face 'magit-section-secondary-heading)
                 (deb-packaging-status--state-word state)
+                (deb-packaging-status--lint-summary-note key)
                 (deb-packaging-status--run-time-note key)))
       (magit-insert-section-body
         (if artifacts
@@ -444,12 +527,10 @@ Source lint targets the .dsc; binary lint targets the .deb files."
          'deb-packaging-lintian-binary 'lintian-binary "Binary" debs)))))
 
 (defun deb-packaging-status--insert-test (ctx hide)
-  "Insert the Test (autopkgtest) phase section from CTX, collapsed when HIDE.
-When debs exist the body shows a command preview, the test image and its
-availability, the deb inputs, and a run hint.  When blocked it shows only
-a waiting note."
+  "Insert the Test (autopkgtest) phase section from CTX, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
          (debs (alist-get 'debs arts))
+         (arch (plist-get ctx :arch))
          (state (deb-packaging-status--phase-state 'autopkgtest nil debs)))
     (magit-insert-section (deb-packaging-test nil hide)
       (magit-insert-heading
@@ -461,61 +542,79 @@ a waiting note."
                  (runner (plist-get info :runner))
                  (image (plist-get info :image))
                  (exists (plist-get info :exists)))
-            ;; Command preview (best-effort: default runner + target distro).
-            ;; The transient owns the real flags; RET opens it.
-            (deb-packaging-status--insert-command
-             (format "autopkgtest . -- %s %s"
-                     runner (or image "")))
-            ;; Image availability line with colored indicator.
-            (when image
-              (if exists
-                  (insert (format "    Image: %s %s\n"
-                                  (propertize image 'font-lock-face 'shadow)
-                                  (propertize "✓" 'font-lock-face
-                                              'deb-packaging-status-done)))
-                (insert (format "    Image: %s %s\n"
-                                (propertize image 'font-lock-face 'shadow)
-                                (propertize "✗ not found"
+            (deb-packaging-status--insert-state-row
+             (delq nil
+                   (list
+                    (when runner (cons "Runner" runner))
+                    (when arch (cons "Arch" arch))
+                    (when image
+                      (cons "Image"
+                            (if exists
+                                (propertize (concat "✓ " image)
                                             'font-lock-face
-                                            'deb-packaging-status-failed)))
-                (when-let ((hint (deb-packaging--test-image-build-hint
-                                   runner (deb-packaging--effective-distro))))
-                  (deb-packaging-status--insert-note
-                   (format "Build it with: %s" hint)))))
-            ;; Deb inputs that autopkgtest will install.
+                                            'deb-packaging-status-done)
+                              (propertize (concat "✗ " image)
+                                          'font-lock-face
+                                          'deb-packaging-status-running)))))))
+            (when (and image (not exists))
+              (when-let ((hint (deb-packaging--test-image-build-hint
+                                 runner (deb-packaging--effective-distro))))
+                (deb-packaging-status--insert-note
+                 (format "Build it with: %s" hint))))
             (dolist (d debs)
               (deb-packaging-status--insert-file-line d))
             (when (deb-packaging-status--transient-flag-p
                    'deb-packaging-test-transient
                    "--shell-fail")
               (deb-packaging-status--insert-note
-               "Shell on failure enabled — will drop into testbed on failure"))
-            (deb-packaging-status--insert-note
-             "RET to open the test transient")))))))
+               "Shell on failure enabled, drops into testbed on failure"))))))))
+
+(defun deb-packaging-status--transient-arg-value (prefix flag)
+  "Return the value of FLAG from PREFIX's saved/default transient args.
+Returns nil if the flag is not set or transient is unavailable."
+  (and (fboundp 'transient-args)
+       (let ((args (ignore-errors (transient-args prefix))))
+         (when args
+           (transient-arg-value flag args)))))
 
 (defun deb-packaging-status--insert-upload (ctx hide)
-  "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE.
-Upload is always `ready' — the PPA is configured inside the transient.
-The body shows the .changes file to upload (if source build is done) and
-a hint about the available actions (dput upload, view test results)."
+  "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
          (changes (alist-get 'source-changes arts))
+         (ppa (deb-packaging-status--transient-arg-value
+               'deb-packaging-upload-transient "--ppa="))
          (state (deb-packaging-status--phase-state 'ppa-tests nil t)))
     (magit-insert-section (deb-packaging-upload nil hide)
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Upload" 'ppa-tests))
       (magit-insert-section-body
-        (if changes
-            (deb-packaging-status--insert-file-line changes)
-          (deb-packaging-status--insert-note "waiting on source build"))
-        (deb-packaging-status--insert-note
-         "RET to open the upload transient (dput / view tests)")))))
+        (deb-packaging-status--insert-state-row
+         (delq nil
+               (list
+                (cons "PPA"
+                      (or ppa
+                          (propertize "not set" 'font-lock-face 'shadow)))
+                (cons "Changes"
+                      (if changes
+                          (file-name-nondirectory changes)
+                        (propertize "waiting on source build"
+                                    'font-lock-face 'shadow))))))
+        (when changes
+          (deb-packaging-status--insert-file-line changes))))))
+
+(defun deb-packaging-status--group-stale-by-version (stale-files)
+  "Group STALE-FILES by version, returning an alist of (version . files).
+Files whose version cannot be parsed are grouped under \"unknown\"."
+  (let ((groups nil))
+    (dolist (f stale-files)
+      (let ((ver (or (deb-packaging--filename-version f) "unknown")))
+        (setf (alist-get ver groups nil 'remove)
+              (nconc (alist-get ver groups nil 'remove)
+                     (list f)))))
+    (sort groups (lambda (a b) (string< (car a) (car b))))))
 
 (defun deb-packaging-status--insert-stale (ctx hide)
-  "Insert the Stale artifacts section from CTX, collapsed when HIDE.
-Only inserted when there are leftover artifacts from other versions of
-this package in the output directory.  The body lists each stale file;
-RET opens the clean transient so the user can remove them with --stale."
+  "Insert the Stale artifacts section from CTX, collapsed when HIDE."
   (let ((stale (plist-get ctx :stale)))
     (when stale
       (magit-insert-section (deb-packaging-stale nil hide)
@@ -529,10 +628,16 @@ RET opens the clean transient so the user can remove them with --stale."
            (propertize "  from other versions"
                        'font-lock-face 'shadow)))
         (magit-insert-section-body
-          (dolist (f stale)
-            (deb-packaging-status--insert-file-line f))
-          (deb-packaging-status--insert-note
-           "RET to open the clean transient, then toggle --stale"))))))
+          (dolist (group (deb-packaging-status--group-stale-by-version stale))
+            (let ((ver (car group))
+                  (files (cdr group)))
+              (insert (format "    %s:\n"
+                              (propertize ver 'font-lock-face
+                                          'magit-section-secondary-heading)))
+              (dolist (f files)
+                (insert (format "      %s\n"
+                                (propertize f 'font-lock-face
+                                            'magit-section-secondary-heading)))))))))))
 
 ;;; Buffer rendering
 
@@ -606,8 +711,6 @@ is left on the first phase heading."
            ctx (deb-packaging-status--hide-phase-p
                 (deb-packaging-status--phase-state 'ppa-tests nil t)
                                  next 'ppa-tests))
-          ;; Stale artifacts sit at the bottom, collapsed by default; the
-          ;; section is only inserted when there is something to show.
           (deb-packaging-status--insert-stale ctx t))))
      ;; Walk the freshly-built tree once, applying each section's initial
      ;; visibility through the show/hide path.  This is what creates the fold
@@ -710,9 +813,14 @@ in `deb-packaging-status--section-actions'."
   (deb-packaging-status--open #'deb-packaging-test-transient))
 
 (defun deb-packaging-status-clean ()
-  "Open the clean transient."
+  "Open the clean artifacts transient."
   (interactive)
   (deb-packaging-status--open #'deb-packaging-clean-transient))
+
+(defun deb-packaging-status-reset ()
+  "Open the source-tree reset transient."
+  (interactive)
+  (deb-packaging-status--open #'deb-packaging-reset-transient))
 
 ;;; Major mode
 
@@ -728,6 +836,7 @@ folding (TAB, n/p, M-n/M-p) come from `magit-section-mode'."
   "l"   #'deb-packaging-status-lint
   "t"   #'deb-packaging-status-test
   "c"   #'deb-packaging-status-clean
+  "r"   #'deb-packaging-status-reset
   "i"   #'deb-packaging-infra-dispatch
   "?"   #'deb-packaging-dispatch
   "g"   #'deb-packaging-status-refresh

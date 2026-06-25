@@ -102,6 +102,11 @@ prompts for one."
                (completing-read "Schroot to update: " names nil t)))))
   (compile (format "sbuild-update -udcar %s" (shell-quote-argument name))))
 
+(defun deb-packaging-infra-end-sessions ()
+  "End all active schroot sessions."
+  (interactive)
+  (compile "schroot -e --all-sessions"))
+
 (defun deb-packaging-infra-delete-schroot (&optional name)
   "Delete a schroot (config and directory).
 Acts on the schroot at point when in a schroots list buffer; otherwise
@@ -132,6 +137,7 @@ prompts for one."
   :doc "Keymap for the schroots list buffer."
   :parent tabulated-list-mode-map
   "u" #'deb-packaging-infra-update-schroot
+  "e" #'deb-packaging-infra-end-sessions
   "d" #'deb-packaging-infra-delete-schroot
   "c" #'deb-packaging-infra-create-schroot
   "g" #'deb-packaging-infra-refresh-schroots

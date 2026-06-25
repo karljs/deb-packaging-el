@@ -58,7 +58,8 @@ when a build finishes), so it never shows stale state.
 | b | Binary build transient |
 | l | Lintian transient |
 | t | Autopkgtest transient |
-| c | Clean transient |
+| c | Clean artifacts transient |
+| r | Reset source tree transient |
 | i | Infrastructure menu |
 | ? | Top-level dispatch (hub to all transients) |
 | g | Refresh the buffer |
@@ -80,7 +81,8 @@ save permanently, `C-x s` for this session).
 | Lintian | `l` | `-i`, `-I`, `--pedantic`, `--tag-display-limit=`, `--color=` |
 | Autopkgtest | `t` | `--apt-upgrade`, `--shell-fail`, `--runner=`, `--dist=` |
 | PPA upload / tests | `p` | `--ppa=`, `--dist=` |
-| Clean | `c` | `--quilt`, `--sessions`, `--artifacts`, `--stale`, `--pc`, `--files` |
+| Clean artifacts | `c` | `--artifacts`, `--stale` |
+| Reset source tree | `r` | `--quilt`, `--pc`, `--files` |
 
 ### Distribution defaults and completions
 
@@ -148,7 +150,7 @@ Buffer-specific keys:
 
 | Buffer | Extra keys |
 |--------|------------|
-| Schroots | `u` update |
+| Schroots | `u` update, `e` end sessions |
 | PPAs | `s` show, `e` edit/set-config |
 
 ## Customization
