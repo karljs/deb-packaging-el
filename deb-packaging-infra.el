@@ -394,14 +394,58 @@ prompts for one."
 
 ;;; PPA (Launchpad) Management
 
-(defun deb-packaging-infra--list-ppas ()
-  "Return list of the current user's PPA names via the `ppa' tool.
-Each entry is a string of the form \"ppa:owner/name\"."
-  (let ((output (shell-command-to-string "ppa list 2>/dev/null"))
-        result)
+(defcustom deb-packaging-infra-ppa-team-config-dir
+  "~/.config/ppa-dev-tools/teams"
+  "Directory of per-team `ppa' config files for surfacing team PPAs.
+
+Each file is a YAML config consumed by the `ppa' tool, typically
+containing a `list' section with a team's `owner_name', e.g.:
+
+  list:
+    owner_name: gcc-llvm-toolchains
+
+The extension runs `ppa list -C <file>' for each file found here, and
+merges the results with the user's personal PPAs.  Files must end in
+`.yml' or `.yaml'.  If the directory is absent, only personal PPAs are
+listed.
+
+This variable may be set via `setq' in your init file."
+  :type 'directory
+  :group 'deb-packaging)
+
+(defun deb-packaging-infra--team-config-files ()
+  "Return list of per-team `ppa' config files.
+Files under `deb-packaging-infra-ppa-team-config-dir' ending in `.yml'
+or `.yaml'.  Returns nil if the directory is absent or empty."
+  (let ((dir (expand-file-name deb-packaging-infra-ppa-team-config-dir)))
+    (when (file-directory-p dir)
+      (directory-files dir 'full "\\.ya?ml\\'"))))
+
+(defun deb-packaging-infra--parse-ppa-lines (output)
+  "Extract \"ppa:owner/name\" entries from `ppa' command OUTPUT.
+Returns a list of PPA address strings, in the order they appear."
+  (let (result)
     (dolist (line (split-string output "\n" t))
       (when (string-match "\\(ppa:[^ \t]+/[^ \t]+\\)" line)
         (push (match-string 1 line) result)))
+    (nreverse result)))
+
+(defun deb-packaging-infra--list-ppas ()
+  "Return list of PPA names for the user and configured teams.
+Each entry is a string of the form \"ppa:owner/name\".  Personal PPAs
+are listed first, followed by PPAs from each per-team config file in
+`deb-packaging-infra-ppa-team-config-dir'.  Failures for individual
+team configs are warned about and skipped."
+  (let ((result (deb-packaging-infra--parse-ppa-lines
+                 (shell-command-to-string "ppa list 2>/dev/null"))))
+    (dolist (cfg (deb-packaging-infra--team-config-files))
+      (condition-case err
+          (let ((output (shell-command-to-string
+                         (format "ppa list -C %s 2>/dev/null"
+                                 (shell-quote-argument cfg)))))
+            (dolist (line (deb-packaging-infra--parse-ppa-lines output))
+              (cl-pushnew line result :test #'string=)))
+        (error (message "ppa team config %s failed: %s" cfg err))))
     (nreverse result)))
 
 (defun deb-packaging-infra--ppa-owner (ppa)
@@ -486,27 +530,105 @@ Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key nil))
 
+(defun deb-packaging-infra--make-ppa-entry (ppa)
+  "Build a tabulated-list entry for PPA address string PPA."
+  (list ppa
+        (vector
+         (deb-packaging-infra--format-cell
+          (deb-packaging-infra--ppa-owner ppa) 25 'left
+          'magit-section-heading ppa)
+         (deb-packaging-infra--format-cell
+          (deb-packaging-infra--ppa-name ppa) 40 nil nil ppa))))
+
+(defvar-local deb-packaging-infra--ppa-processes nil
+  "List of in-flight async `ppa list' processes for the PPAs buffer.")
+
+(defun deb-packaging-infra--cancel-ppa-processes ()
+  "Cancel any in-flight async PPA listing processes."
+  (dolist (proc deb-packaging-infra--ppa-processes)
+    (when (process-live-p proc)
+      (delete-process proc)))
+  (setq deb-packaging-infra--ppa-processes nil))
+
+(defun deb-packaging-infra--append-ppa (ppa)
+  "Append PPA to `tabulated-list-entries' if not already present."
+  (unless (assoc ppa tabulated-list-entries)
+    (setq tabulated-list-entries
+          (append tabulated-list-entries
+                  (list (deb-packaging-infra--make-ppa-entry ppa))))))
+
+(defun deb-packaging-infra--finalize-ppas (buf)
+  "Reprint the PPAs table in BUF and maybe show empty message.
+Clears any loading message before printing.  When all processes have
+finished and no PPAs were found, shows an empty-state message."
+  (when (buffer-live-p buf)
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer))
+      (tabulated-list-init-header)
+      (tabulated-list-print t)
+      (when (and (null deb-packaging-infra--ppa-processes)
+                 (null tabulated-list-entries))
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (insert (propertize "\nNo PPAs found.\nCreate one with 'c'."
+                              'face 'shadow)))))))
+
+(defun deb-packaging-infra--ppa-list-sentinel (buf temp-buf)
+  "Return a sentinel for an async `ppa list' process.
+BUF is the PPAs list buffer to update.  TEMP-BUF holds the process
+output."
+  (lambda (proc _event)
+    (let ((status (process-status proc)))
+      (when (memq status '(exit failed))
+        (unwind-protect
+            (when (buffer-live-p buf)
+              (with-current-buffer buf
+                (setq deb-packaging-infra--ppa-processes
+                      (delq proc deb-packaging-infra--ppa-processes))
+                (when (eq status 'exit)
+                  (let ((output (with-current-buffer temp-buf
+                                  (buffer-string))))
+                    (dolist (ppa (deb-packaging-infra--parse-ppa-lines output))
+                      (deb-packaging-infra--append-ppa ppa))))
+                (deb-packaging-infra--finalize-ppas buf)))
+          (when (buffer-live-p temp-buf)
+            (kill-buffer temp-buf)))))))
+
+(defun deb-packaging-infra--show-ppas-loading-message ()
+  "Show a loading message in the PPAs list buffer.
+Clears the table and inserts a transient message.  Used while async
+`ppa list' processes are in flight."
+  (setq tabulated-list-entries nil)
+  (tabulated-list-init-header)
+  (tabulated-list-print t)
+  (let ((inhibit-read-only t))
+    (goto-char (point-max))
+    (insert (propertize "\nLoading PPAs..." 'face 'shadow))))
+
 (defun deb-packaging-infra-refresh-ppas ()
-  "Refresh the PPAs list buffer."
+  "Refresh the PPAs list buffer asynchronously.
+All `ppa list' invocations (personal and per-team) are launched as
+background processes.  A \"Loading\" message is shown until results
+arrive, so Emacs does not block on Launchpad queries."
   (interactive)
   (when (derived-mode-p 'deb-packaging-infra-ppas-mode)
-    (setq tabulated-list-entries
-          (mapcar (lambda (ppa)
-                    (list ppa
-                          (vector
-                           (deb-packaging-infra--format-cell
-                            (deb-packaging-infra--ppa-owner ppa) 25 'left
-                            'magit-section-heading ppa)
-                           (deb-packaging-infra--format-cell
-                            (deb-packaging-infra--ppa-name ppa) 40 nil nil ppa))))
-                  (deb-packaging-infra--list-ppas)))
-    (tabulated-list-init-header)
-    (tabulated-list-print t)
-    (when (null tabulated-list-entries)
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (insert (propertize "\nNo PPAs found.\nCreate one with 'c'."
-                            'face 'shadow))))))
+    (deb-packaging-infra--cancel-ppa-processes)
+    (deb-packaging-infra--show-ppas-loading-message)
+    (let ((buf (current-buffer)))
+      (dolist (cfg (cons nil (deb-packaging-infra--team-config-files)))
+        (let* ((args (if cfg
+                         (list "ppa" "list" "-C" cfg)
+                       (list "ppa" "list")))
+               (temp-buf (generate-new-buffer " *ppa-list*"))
+               (proc (make-process
+                      :name "ppa-list"
+                      :buffer temp-buf
+                      :command args
+                      :noquery t
+                      :sentinel (deb-packaging-infra--ppa-list-sentinel
+                                 buf temp-buf))))
+          (push proc deb-packaging-infra--ppa-processes))))))
 
 (defun deb-packaging-infra-ppas ()
   "Open a buffer listing all Launchpad PPAs."

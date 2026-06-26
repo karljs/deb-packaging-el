@@ -130,12 +130,14 @@ the status buffer shows.  Does not create or refresh a buffer."
 (defconst deb-packaging-status--section-actions
   '((deb-packaging-source         . deb-packaging-source-build-transient)
     (deb-packaging-binary         . deb-packaging-binary-build-transient)
-    (deb-packaging-lintian-source . deb-packaging-lint-transient)
-    (deb-packaging-lintian-binary . deb-packaging-lint-transient)
+    (deb-packaging-check          . deb-packaging-lint-transient)
     (deb-packaging-test           . deb-packaging-test-transient)
     (deb-packaging-upload         . deb-packaging-upload-transient)
     (deb-packaging-stale          . deb-packaging-clean-transient))
-  "Map status-buffer section types to the transient `RET' should open.")
+  "Map status-buffer section types to the transient `RET' should open.
+The Lint phase (`deb-packaging-check') is a parent section whose children
+are display-only; RET on the parent opens the lint transient directly,
+so no expand is needed.")
 
 ;;; Status words
 ;;
