@@ -7,16 +7,23 @@
 
 ;;; Commentary:
 
-;; Shared customization variables and distro helpers for Debian/Ubuntu
-;; packaging.  Each tool carries its own flags directly in its own transient
-;; (see deb-packaging-transients.el), with persistence provided by transient's
-;; native save mechanism (C-x C-s).
+;; Shared distro configuration for Debian/Ubuntu packaging.
+;;
+;; This module holds the one piece of state that is genuinely cross-cutting
+;; across the per-tool transients: the target distribution.  Each tool carries
+;; its own flags in its own transient (see deb-packaging-transients.el), with
+;; persistence provided by transient's native save mechanism (C-x C-s), but the
+;; distro is propagated across tools so that building for `jammy' makes testing
+;; and uploading default to `jammy' too.  It is surfaced globally in the
+;; `deb-packaging-dispatch' hub (see deb-packaging.el).
+;;
+;; Tool-specific data tables (sbuild extra-repo variants, autopkgtest runner
+;; image templates and build hints) live with their tools in
+;; deb-packaging-commands.el, not here.
 ;;
 ;; What lives here:
 ;;   - deb-packaging-target-distro  — session distro, seeded once from changelog
-;;   - deb-packaging-sbuild-variants — extra-repo URL templates for sbuild
-;;   - deb-packaging-test-runners   — runner/image config for autopkgtest
-;;   - deb-packaging-test-build-hints — image-build command templates
+;;   - deb-packaging--distro-choices — completion candidates for the distro
 
 ;;; Code:
 
@@ -92,58 +99,6 @@ back to \"noble\" when not inside a package tree."
     (if (member current candidates)
         candidates
       (cons current candidates))))
-
-;;; sbuild variants
-;;
-;; Extra apt-repository strings added to the local sbuild chroot.  These are
-;; completion candidates in the binary-build transient's --extra-repository
-;; option; %s is replaced with the target distro at command-build time.
-
-(defcustom deb-packaging-sbuild-variants
-  '(("rust-ppa"
-     . "deb [trusted=yes] http://ppa.launchpadcontent.net/rust-toolchain/staging/ubuntu/ %s main")
-    ("proposed"
-     . "deb http://archive.ubuntu.com/ubuntu/ %s-proposed main"))
-  "Alist mapping a short name to an extra-repository string for sbuild.
-%s in the value is replaced with the target distro at run time.
-These are offered as completion candidates in the binary-build transient."
-  :type '(alist :key-type string :value-type string)
-  :group 'deb-packaging)
-
-;;; Test runner data
-;;
-;; Image path templates for each runner; %s replaced with distro at run time.
-
-(defcustom deb-packaging-test-runners
-  '(("lxd"  . "autopkgtest/ubuntu/%s/amd64")
-    ("qemu" . "/var/lib/adt-images/autopkgtest-%s-amd64.img"))
-  "Alist mapping runner name (string) to image path template.
-%s is replaced with the target distro at run time.
-
-For Debian, add entries like:
-  (\"lxd\" . \"autopkgtest/debian/%s/amd64\")
-The tooling (autopkgtest, lxc) is the same; only the image naming
-convention differs."
-  :type '(alist :key-type string :value-type string)
-  :group 'deb-packaging)
-
-;;; Test image build hints
-;;
-;; Command templates to build a missing test image, keyed by runner name.
-;; %s is replaced with the target distro.  Both the command layer's
-;; user-error and the status buffer's image-availability hint read from
-;; this, so customizing it for Debian (or any other distro family) is
-;; the only change needed — no code edits.
-
-(defcustom deb-packaging-test-build-hints
-  '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s")
-    ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s"))
-  "Alist mapping runner name (string) to image-build command template.
-%s is replaced with the target distro.  Shown when a test image is
-missing, both in the autopkgtest command's error and in the status
-buffer's Test section body."
-  :type '(alist :key-type string :value-type string)
-  :group 'deb-packaging)
 
 (provide 'deb-packaging-config)
 ;;; deb-packaging-config.el ends here

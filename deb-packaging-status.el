@@ -136,8 +136,9 @@ the status buffer shows.  Does not create or refresh a buffer."
     (deb-packaging-stale          . deb-packaging-clean-transient))
   "Map status-buffer section types to the transient `RET' should open.
 The Lint phase (`deb-packaging-check') is a parent section whose children
-are display-only; RET on the parent opens the lint transient directly,
-so no expand is needed.")
+(lintian source/binary, ubuntu-lint) are display-only; RET on any of them
+walks up to the parent and opens the unified lint transient, from which
+either linter can be dispatched.")
 
 ;;; Status words
 ;;
@@ -167,19 +168,27 @@ so no expand is needed.")
     ""))
 
 (defun deb-packaging-status--lint-summary-note (key)
-  "Return a colored findings summary for KEY's lintian run, or empty string.
-Format: \" 2E 5W 12I\" with each count colored by severity."
+  "Return a colored findings summary for KEY's last lint-style run, or empty.
+For lintian keys the format is \" 2E 5W 12I\" (error/warning/info).
+For the `ubuntu-lint' key the format is \" 1F 2E 3W\" (fail/error/warn),
+the three actionable ubuntu-lint levels.  Each count is coloured by
+severity."
   (if-let* ((summary (deb-packaging--run-summary key)))
-      (let* ((errs (plist-get summary :error))
-             (warns (plist-get summary :warning))
-             (infos (plist-get summary :info))
-             (fmt (lambda (n face)
-                    (propertize (format "%d" n) 'font-lock-face face))))
-        (concat
-         "  "
-         (funcall fmt errs 'deb-packaging-status-failed) "E "
-         (funcall fmt warns 'deb-packaging-status-running) "W "
-         (funcall fmt infos 'shadow) "I"))
+      (let ((fmt (lambda (n face)
+                   (propertize (format "%d" n) 'font-lock-face face))))
+        (pcase key
+          ('ubuntu-lint
+           (concat
+            "  "
+            (funcall fmt (plist-get summary :fail)    'deb-packaging-status-failed) "F "
+            (funcall fmt (plist-get summary :error)   'deb-packaging-status-failed) "E "
+            (funcall fmt (plist-get summary :warn)    'deb-packaging-status-running) "W"))
+          (_
+           (concat
+            "  "
+            (funcall fmt (plist-get summary :error)   'deb-packaging-status-failed) "E "
+            (funcall fmt (plist-get summary :warning) 'deb-packaging-status-running) "W "
+            (funcall fmt (plist-get summary :info)    'shadow) "I"))))
     ""))
 
 ;;; Phase state and fold decisions
@@ -496,48 +505,74 @@ so RET acts on it."
               (deb-packaging-status--insert-file-line a))
           (deb-packaging-status--insert-note "waiting on build"))))))
 
-(defun deb-packaging-status--lint-rollup-state (dsc debs)
-  "Return a single status symbol summarising the two lintian children.
-DSC is the source .dsc (or nil); DEBS is the list of .deb files (or nil).
+(defun deb-packaging-status--lint-rollup-state (ctx)
+  "Return a single status symbol summarising the Lint section's children.
 The worst/most-actionable child wins:
   failed > running > ready > done > blocked.
-Lint children never reach `done'
-\(see `deb-packaging-status--insert-lintian-child')."
-  (let ((states
-         (list (deb-packaging-status--phase-state
-                'lintian-source nil (and dsc t) t)
-               (deb-packaging-status--phase-state
-                'lintian-binary nil (and debs t) t))))
+Children are the two lintian runs (source .dsc, binary .debs) and the
+ubuntu-lint run.  Lint children never reach `done' (KEEP-READY), and
+ubuntu-lint is always ready when inside a package, so the Lint phase is
+never `blocked' in a package tree."
+  (let* ((arts (plist-get ctx :artifacts))
+         (dsc (alist-get 'dsc arts))
+         (debs (alist-get 'debs arts))
+         (states
+          (list (deb-packaging-status--phase-state
+                 'lintian-source nil (and dsc t) t)
+                (deb-packaging-status--phase-state
+                 'lintian-binary nil (and debs t) t)
+                (deb-packaging-status--phase-state
+                 'ubuntu-lint nil t t))))
     (cl-find-if (lambda (s) (memq s states))
                 '(failed running ready done blocked))))
 
 (defun deb-packaging-status--lint-hide-p (ctx)
   "Return non-nil if the Lint section should collapse by default.
-Expands when either child is running or failed; collapses otherwise.
-Mirrors `deb-packaging-status--hide-phase-p' but for the two-child
+Expands when any child is running or failed; collapses otherwise.
+Mirrors `deb-packaging-status--hide-phase-p' but for the multi-child
 Lint group, which has no single phase key."
-  (let* ((arts (plist-get ctx :artifacts))
-         (state (deb-packaging-status--lint-rollup-state
-                 (alist-get 'dsc arts)
-                 (alist-get 'debs arts))))
+  (let ((state (deb-packaging-status--lint-rollup-state ctx)))
     (not (memq state '(failed running)))))
 
+(defun deb-packaging-status--insert-ubuntu-lint-child ()
+  "Insert the Ubuntu lint child section under the Lint phase.
+Unlike the lintian children, ubuntu-lint operates on source-package
+metadata rather than built artifacts, so it is always ready when inside
+a package and its body shows a descriptive note rather than a file list.
+Like lintian, a successful run returns to `ready' (KEEP-READY) so the
+user can re-run after addressing findings."
+  (let ((state (deb-packaging-status--phase-state 'ubuntu-lint nil t t)))
+    (magit-insert-section (deb-packaging-ubuntu-lint)
+      (magit-insert-heading
+        (concat "  "
+                (propertize (deb-packaging-status--pad
+                             "Ubuntu lint" (- deb-packaging-status--label-width 2))
+                            'font-lock-face 'magit-section-secondary-heading)
+                (deb-packaging-status--state-word state)
+                (deb-packaging-status--lint-summary-note 'ubuntu-lint)
+                (deb-packaging-status--run-time-note 'ubuntu-lint)))
+      (magit-insert-section-body
+        (deb-packaging-status--insert-note
+         "Ubuntu upload policy checks (SRU, maintainer, bug references)")))))
+
 (defun deb-packaging-status--insert-check (ctx hide)
-  "Insert the Lint (lintian) phase as two actionable child sections.
-Source lint targets the .dsc; binary lint targets the .deb files."
-  (let* ((arts (plist-get ctx :artifacts))
-         (dsc (alist-get 'dsc arts))
-         (debs (alist-get 'debs arts))
-         (state (deb-packaging-status--lint-rollup-state dsc debs)))
+  "Insert the Lint phase: two lintian children plus the ubuntu-lint child.
+Source lint targets the .dsc; binary lint targets the .deb files; ubuntu-lint
+targets the source package metadata."
+  (let ((state (deb-packaging-status--lint-rollup-state ctx)))
     (magit-insert-section (deb-packaging-check nil hide)
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Lint"))
       (magit-insert-section-body
-        (deb-packaging-status--insert-lintian-child
-         'deb-packaging-lintian-source 'lintian-source "Source"
-         (when dsc (list dsc)))
-        (deb-packaging-status--insert-lintian-child
-         'deb-packaging-lintian-binary 'lintian-binary "Binary" debs)))))
+        (let* ((arts (plist-get ctx :artifacts))
+               (dsc (alist-get 'dsc arts))
+               (debs (alist-get 'debs arts)))
+          (deb-packaging-status--insert-lintian-child
+           'deb-packaging-lintian-source 'lintian-source "Source"
+           (when dsc (list dsc)))
+          (deb-packaging-status--insert-lintian-child
+           'deb-packaging-lintian-binary 'lintian-binary "Binary" debs)
+          (deb-packaging-status--insert-ubuntu-lint-child))))))
 
 (defun deb-packaging-status--insert-test (ctx hide)
   "Insert the Test (autopkgtest) phase section from CTX, collapsed when HIDE."
@@ -813,7 +848,7 @@ in `deb-packaging-status--section-actions'."
   (deb-packaging-status--open #'deb-packaging-binary-build-transient))
 
 (defun deb-packaging-status-lint ()
-  "Open the lintian transient."
+  "Open the lint transient (lintian + ubuntu-lint)."
   (interactive)
   (deb-packaging-status--open #'deb-packaging-lint-transient))
 

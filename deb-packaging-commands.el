@@ -86,24 +86,62 @@ matching lintian severity prefixes E:/W:/I: in the buffer output."
               ("I" (cl-incf infos)))))
         (list :error errors :warning warnings :info infos)))))
 
+(defun deb-packaging--parse-ubuntu-lint-summary (buf-name)
+  "Parse ubuntu-lint result counts from comint buffer BUF-NAME.
+Returns a plist (:ok N :skip N :warn N :error N :fail N) by reading the
+final `Summary: ran N lint checks (...)' line that ubuntu-lint prints."
+  (when (buffer-live-p (get-buffer buf-name))
+    (with-current-buffer buf-name
+      (save-excursion
+        (goto-char (point-min))
+        ;; The summary line lists every level with its count, e.g.:
+        ;;   Summary: ran 12 lint checks (OK: 12, SKIP: 0, WARN: 0, ERROR: 0, FAIL: 0)
+        (when (re-search-forward
+               "^Summary: ran [0-9]+ lint checks (\\([^)]*\\))" nil t)
+          (let ((stats (make-vector 5 0))
+                (order '(("OK" . 0) ("SKIP" . 1) ("WARN" . 2)
+                         ("ERROR" . 3) ("FAIL" . 4))))
+            (dolist (pair (split-string (match-string 1) ", " t))
+              (let ((kv (split-string pair ": " t)))
+                (when (= (length kv) 2)
+                  (let ((idx (cdr (assoc (car kv) order))))
+                    (when idx
+                      (aset stats idx
+                            (string-to-number (cadr kv))))))))
+            (list :ok (aref stats 0)
+                  :skip (aref stats 1)
+                  :warn (aref stats 2)
+                  :error (aref stats 3)
+                  :fail (aref stats 4))))))))
+
+(defun deb-packaging--run-summary-parser (key)
+  "Return the summary parser function for run KEY, or nil.
+Each lint-style tool carries its own summary format; the sentinel uses
+this to pick the right parser instead of hardcoding the key set."
+  (pcase key
+    ((or 'lintian-source 'lintian-binary) #'deb-packaging--parse-lint-summary)
+    ('ubuntu-lint #'deb-packaging--parse-ubuntu-lint-summary)
+    (_ nil)))
+
 (defun deb-packaging--attach-run-sentinel (proc key buf-name)
   "Attach a sentinel to PROC that records the run outcome for KEY.
-For lintian run keys, parses the comint buffer for findings counts and
-stores them as a :summary plist on the run record."
+For lint-style run keys, parses the comint buffer for findings counts via
+`deb-packaging--run-summary-parser' and stores them as a :summary plist
+on the run record."
   (let ((old (process-sentinel proc)))
     (set-process-sentinel
-     proc
-     (lambda (p event)
-       (when (functionp old)
-         (funcall old p event))
-       (when (memq (process-status p) '(exit signal))
-         (let* ((status (if (and (eq (process-status p) 'exit)
-                                 (zerop (process-exit-status p)))
-                            'success
-                          'failure))
-                (summary (when (memq key '(lintian-source lintian-binary))
-                           (deb-packaging--parse-lint-summary buf-name))))
-           (deb-packaging--record-run key status buf-name summary)
+      proc
+      (lambda (p event)
+        (when (functionp old)
+          (funcall old p event))
+        (when (memq (process-status p) '(exit signal))
+          (let* ((status (if (and (eq (process-status p) 'exit)
+                                  (zerop (process-exit-status p)))
+                             'success
+                           'failure))
+                 (parser (deb-packaging--run-summary-parser key))
+                 (summary (when parser (funcall parser buf-name))))
+            (deb-packaging--record-run key status buf-name summary)
            (deb-packaging--notify-status-refresh)))))))
 
 (defun deb-packaging--run-command (name args &optional dir key)
@@ -156,16 +194,51 @@ it is scoped to buffer creation only and never mutates the caller's
 
 ;;; lintian
 
+(defconst deb-packaging--lintian-arg-prefixes
+  '("-i" "-I" "-P" "--pedantic" "--tag-display-limit=" "--color=")
+  "Transient arg prefixes owned by lintian.
+Used by `deb-packaging--filter-args' to keep lintian's command line
+free of ubuntu-lint flags when both are dispatched from the unified
+lint transient.  Entries ending in `=' match by string prefix; bare
+entries match exactly.")
+
+(defconst deb-packaging--ubuntu-lint-arg-prefixes
+  '("--verbose" "--json" "--context=" "--all=")
+  "Transient arg prefixes owned by ubuntu-lint.
+Used by `deb-packaging--filter-args' to keep ubuntu-lint's command line
+free of lintian flags when both are dispatched from the unified lint
+transient.")
+
+(defun deb-packaging--filter-args (args prefixes)
+  "Return the members of ARGS matching any prefix in PREFIXES.
+An entry ending in `=' matches by string prefix (e.g. \"--context=\");
+a bare entry matches exactly (e.g. \"-i\")."
+  (cl-remove-if-not
+   (lambda (a)
+     (cl-some
+      (lambda (p)
+        (if (string-suffix-p "=" p)
+            (string-prefix-p p a)
+          (string= p a)))
+      prefixes))
+   args))
+
 (defun deb-packaging--run-lintian (targets args &optional key)
-  "Run lintian on TARGETS (a list of file paths) with ARGS, tracking under KEY.
-Lintian accepts multiple files on its command line, so TARGETS may contain
-a single .dsc, several .debs, or any mix."
+  "Run lintian on TARGETS (a list of file paths) with ARGS, under KEY.
+ARGS is filtered to lintian's own flags (see
+`deb-packaging--lintian-arg-prefixes') so ubuntu-lint flags set in the
+unified lint transient do not leak onto lintian's command line.  Lintian
+accepts multiple files on its command line, so TARGETS may contain a
+single .dsc, several .debs, or any mix."
   (let ((pkg-dir (deb-packaging--find-package-dir)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let ((parent-dir (file-name-directory (directory-file-name pkg-dir))))
+    (let ((parent-dir (file-name-directory (directory-file-name pkg-dir)))
+          (lint-args (deb-packaging--filter-args
+                      (or args '())
+                      deb-packaging--lintian-arg-prefixes)))
       (deb-packaging--run-command "lintian"
-                                  (append (list "lintian") args targets)
+                                  (append (list "lintian") lint-args targets)
                                   parent-dir
                                   key))))
 
@@ -212,7 +285,74 @@ lintian to process every .deb in a multi-binary package."
          (target (completing-read "Deb to lint: " debs nil t)))
     (deb-packaging--run-lintian (list target) (or args '()) 'lintian-binary)))
 
+;;; ubuntu-lint
+
+(defun deb-packaging--ubuntu-lint-context-args (mode pkg-dir)
+  "Return the ubuntu-lint context flags for MODE rooted at PKG-DIR.
+MODE is one of `changes', `source-dir', or `changelog' (see the
+ubuntu-lint transient's --context= option).  The default `changes' mode
+passes --source-dir plus --changes-file when a source .changes is
+present, which enables the full set of checks (some require a changes
+file, others a changelog, and --source-dir supplies both).  The other
+modes pass only the named context source, useful for running a narrower
+check before a source build exists."
+  (pcase mode
+    ("source-dir" (list "--source-dir" pkg-dir))
+    ("changelog" (list "--changelog"
+                       (expand-file-name "debian/changelog" pkg-dir)))
+    (_
+     (let* ((info (deb-packaging--parse-changelog pkg-dir))
+            (name (nth 0 info))
+            (version (nth 1 info))
+            (parent-dir (file-name-directory (directory-file-name pkg-dir)))
+            (artifacts (when info
+                         (deb-packaging--scan-artifacts name version parent-dir)))
+            (changes (alist-get 'source-changes artifacts)))
+       (if changes
+           (list "--source-dir" pkg-dir "--changes-file" changes)
+         (list "--source-dir" pkg-dir))))))
+
+(defun deb-packaging-ubuntu-lint (&optional args)
+  "Run ubuntu-lint with ARGS from the lint transient.
+ARGS is filtered to ubuntu-lint's own flags (see
+`deb-packaging--ubuntu-lint-arg-prefixes') so lintian flags set in the
+unified lint transient do not leak onto ubuntu-lint's command line.
+The `--context=MODE' meta-flag selects the context source (`changes' by
+default, or `source-dir' / `changelog'); the remaining flags are passed
+through to ubuntu-lint verbatim.  Run from the package directory, tracked
+under the `ubuntu-lint' run key."
+  (interactive (list (transient-args 'deb-packaging-lint-transient)))
+  (let ((pkg-dir (deb-packaging--find-package-dir)))
+    (unless pkg-dir
+      (user-error "Not in a Debian package directory"))
+    (let* ((effective-args (or args '()))
+           (mode (or (transient-arg-value "--context=" effective-args) "changes"))
+           (ubuntu-args (deb-packaging--filter-args
+                         effective-args
+                         deb-packaging--ubuntu-lint-arg-prefixes))
+           (passthrough (cl-remove-if
+                         (lambda (a) (string-prefix-p "--context=" a))
+                         ubuntu-args))
+           (context-args (deb-packaging--ubuntu-lint-context-args mode pkg-dir)))
+      (deb-packaging--run-command
+       "ubuntu-lint"
+       (append (list "ubuntu-lint") passthrough context-args)
+       pkg-dir
+       'ubuntu-lint))))
+
 ;;; sbuild
+
+(defcustom deb-packaging-sbuild-variants
+  '(("rust-ppa"
+     . "deb [trusted=yes] http://ppa.launchpadcontent.net/rust-toolchain/staging/ubuntu/ %s main")
+    ("proposed"
+     . "deb http://archive.ubuntu.com/ubuntu/ %s-proposed main"))
+  "Alist mapping a short name to an extra-repository string for sbuild.
+%s in the value is replaced with the target distro at run time.
+These are offered as completion candidates in the binary-build
+transient's --extra-repository option (see deb-packaging-transients.el)."
+  :type '(alist :key-type string :value-type string)
+  :group 'deb-packaging)
 
 (defun deb-packaging--expand-extra-repo (value distro)
   "Expand VALUE into a full extra-repository string for DISTRO.
@@ -265,6 +405,36 @@ be passed through directly."
          'sbuild)))))
 
 ;;; autopkgtest
+
+(defcustom deb-packaging-test-runners
+  '(("lxd"  . "autopkgtest/ubuntu/%s/amd64")
+    ("qemu" . "/var/lib/adt-images/autopkgtest-%s-amd64.img"))
+  "Alist mapping runner name (string) to image path template.
+%s is replaced with the target distro at run time.
+
+For Debian, add entries like:
+  \(\"lxd\" . \"autopkgtest/debian/%s/amd64\")
+The tooling (autopkgtest, lxc) is the same; only the image naming
+convention differs.  Adding a runner here also surfaces it in the
+test transient's --runner completion (see `deb-packaging--runner-choices')."
+  :type '(alist :key-type string :value-type string)
+  :group 'deb-packaging)
+
+(defcustom deb-packaging-test-build-hints
+  '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s")
+    ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s"))
+  "Alist mapping runner name (string) to image-build command template.
+%s is replaced with the target distro.  Shown when a test image is
+missing, both in the autopkgtest command's error and in the status
+buffer's Test section body."
+  :type '(alist :key-type string :value-type string)
+  :group 'deb-packaging)
+
+(defun deb-packaging--runner-choices ()
+  "Return the list of configured autopkgtest runner names.
+Derived from `deb-packaging-test-runners' so customizing that defcustom
+is the single source of truth for the test transient's --runner option."
+  (mapcar #'car deb-packaging-test-runners))
 
 (defun deb-packaging--lxd-image-exists-p (image)
   "Return non-nil if LXD IMAGE exists locally."

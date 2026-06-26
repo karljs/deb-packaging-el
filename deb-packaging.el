@@ -42,13 +42,38 @@
 
 ;;; Top-level dispatch hub
 
+(defun deb-packaging--dispatch-header ()
+  "Header for the dispatch transient, surfacing the global target distro."
+  (format "Debian Packaging\nTarget distro: %s"
+          (deb-packaging--effective-distro)))
+
+;;;###autoload
+(defun deb-packaging-set-distro (distro)
+  "Set the global target distro for deb-packaging to DISTRO.
+Interactively, prompt with completion against known distros, defaulting
+to the current effective distro.  The chosen value is propagated to every
+per-tool transient (build, test, upload) and to the status buffer, since
+they all read `deb-packaging-target-distro' as their default."
+  (interactive
+   (list (completing-read
+          "Target distro: "
+          (deb-packaging--distro-choices)
+          nil t (deb-packaging--effective-distro))))
+  (deb-packaging--set-distro distro)
+  (message "Target distro set to %s" distro))
+
 (transient-define-prefix deb-packaging-dispatch ()
-  "Debian packaging commands."
+  "Debian packaging commands.
+The target distro is the one piece of genuinely global state; set it
+here with `d' and every per-tool transient inherits it."
+  [:description deb-packaging--dispatch-header]
+  ["Config"
+   ("d" "Set target distro..." deb-packaging-set-distro)]
   ["Build"
    ("s" "Source build..."  deb-packaging-source-build-transient)
    ("b" "Binary build..."  deb-packaging-binary-build-transient)]
   ["Check & Test"
-   ("l" "Lintian..."       deb-packaging-lint-transient)
+   ("l" "Lint..."           deb-packaging-lint-transient)
    ("t" "Autopkgtest..."   deb-packaging-test-transient)]
   ["Publish"
    ("p" "PPA upload..."   deb-packaging-upload-transient)]

@@ -11,7 +11,7 @@
 ;;
 ;;   deb-packaging-source-build-transient  — dpkg-buildpackage
 ;;   deb-packaging-binary-build-transient  — sbuild
-;;   deb-packaging-lint-transient          — lintian (source + binary)
+;;   deb-packaging-lint-transient          — lintian + ubuntu-lint
 ;;   deb-packaging-test-transient          — autopkgtest
 ;;   deb-packaging-upload-transient        — ppa tests
 ;;   deb-packaging-clean-transient         — clean artifacts
@@ -34,6 +34,11 @@
 
 ;; Forward-declare helper functions to keep the byte-compiler quiet.
 (declare-function deb-packaging--effective-distro "deb-packaging-config")
+(declare-function deb-packaging--runner-choices "deb-packaging-commands")
+
+;; Tool-specific defcustoms live in deb-packaging-commands.el; declare them
+;; here so this file (which does not require commands.el) byte-compiles clean.
+(defvar deb-packaging-sbuild-variants)
 
 ;; Forward-declare command functions to keep the byte-compiler quiet.
 (declare-function deb-packaging-source-build "deb-packaging-commands")
@@ -41,6 +46,7 @@
 (declare-function deb-packaging-lintian-source "deb-packaging-commands")
 (declare-function deb-packaging-lintian-binary "deb-packaging-commands")
 (declare-function deb-packaging-lintian-binary-one "deb-packaging-commands")
+(declare-function deb-packaging-ubuntu-lint "deb-packaging-commands")
 (declare-function deb-packaging-autopkgtest "deb-packaging-commands")
 (declare-function deb-packaging-dput-upload "deb-packaging-commands")
 (declare-function deb-packaging-ppa-tests "deb-packaging-commands")
@@ -113,13 +119,23 @@ substituted) when the command is actually run.")
   ["Build"
    ("b" "Build binary" deb-packaging-sbuild)])
 
-;;; ── 3. Lintian ────────────────────────────────────────────────────────────────
+;;; ── 3. Lint (lintian + ubuntu-lint) ───────────────────────────────────────────
 
 ;;;###autoload(autoload 'deb-packaging-lint-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-lint-transient ()
-  "Run lintian on the source .dsc or binary .deb files."
-  :value '("-i" "--tag-display-limit=0")
-  ["Arguments"
+  "Run a linter against the current package.
+Two linters are dispatched from here:
+
+  - lintian inspects built artifacts (.dsc / .deb files).
+  - ubuntu-lint checks Ubuntu upload policy (SRU references, maintainer
+    presence, version conventions) against source metadata and can run
+    before any build.
+
+Each tool's flags live in its own group; each action reads only the
+flags it recognises (via `deb-packaging--filter-args'), so toggling a
+lintian flag never reaches ubuntu-lint and vice versa."
+  :value '("-i" "--tag-display-limit=0" "--context=changes" "--all=warn")
+  ["Lintian arguments"
    ("-i"  "Show informational tags"   "-i")
    ("-I"  "Pedantic (info+)"          "-I")
    ("-P"  "--pedantic"                "--pedantic")
@@ -132,10 +148,25 @@ substituted) when the command is actually run.")
     :class transient-option
     :choices ("auto" "never" "always" "html")
     :always-read t)]
+  ["Ubuntu-lint arguments"
+   ("-v"  "Verbose"                "--verbose")
+   ("-j"  "JSON output"            "--json")
+   ("-C"  "Context source"
+    "--context="
+    :class transient-option
+    :choices ("changes" "source-dir" "changelog")
+    :always-read t
+    :allow-empty nil)
+   ("-a"  "Set level for all checks"
+    "--all="
+    :class transient-option
+    :choices ("auto" "off" "warn" "fail")
+    :prompt "Level for all checks: ")]
   ["Run"
-   ("l" "Lint source"        deb-packaging-lintian-source)
-   ("L" "Lint binary (all)"  deb-packaging-lintian-binary)
-   ("o" "Lint one binary..." deb-packaging-lintian-binary-one)])
+   ("l" "Lintian source"        deb-packaging-lintian-source)
+   ("L" "Lintian binary (all)"  deb-packaging-lintian-binary)
+   ("o" "Lintian one binary..." deb-packaging-lintian-binary-one)
+   ("u" "Ubuntu-lint"           deb-packaging-ubuntu-lint)])
 
 ;;; ── 4. Autopkgtest ────────────────────────────────────────────────────────────
 
@@ -152,12 +183,12 @@ substituted) when the command is actually run.")
   ["Arguments"
    ("-u"  "Upgrade packages before test"  "--apt-upgrade")
    ("-f"  "Drop to shell on failure"      "--shell-fail")
-   ("-r"  "Test runner"
-    "--runner="
-    :class transient-option
-    :choices ("lxd" "qemu")
-    :always-read t
-    :allow-empty nil)
+    ("-r"  "Test runner"
+     "--runner="
+     :class transient-option
+     :choices deb-packaging--runner-choices
+     :always-read t
+     :allow-empty nil)
    ("-d"  "Distribution (image)"
     "--dist="
     :class transient-option
