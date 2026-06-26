@@ -1,4 +1,4 @@
-;;; deb-packaging-presets.el --- Preset system for deb-packaging -*- lexical-binding: t -*-
+;;; deb-packaging-config.el --- Shared configuration for deb-packaging -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
@@ -7,17 +7,16 @@
 
 ;;; Commentary:
 
-;; Shared customization variables for Debian/Ubuntu packaging.
+;; Shared customization variables and distro helpers for Debian/Ubuntu
+;; packaging.  Each tool carries its own flags directly in its own transient
+;; (see deb-packaging-transients.el), with persistence provided by transient's
+;; native save mechanism (C-x C-s).
 ;;
-;; The global "mode" concept (default/debug/upload) and its cross-cutting
-;; preset bundles have been removed.  Each tool now carries its own flags
-;; directly in its own transient (see deb-packaging-transients.el), with
-;; persistence provided by transient's native save mechanism (C-x C-s).
-;;
-;; What remains here:
+;; What lives here:
 ;;   - deb-packaging-target-distro  — session distro, seeded once from changelog
 ;;   - deb-packaging-sbuild-variants — extra-repo URL templates for sbuild
 ;;   - deb-packaging-test-runners   — runner/image config for autopkgtest
+;;   - deb-packaging-test-build-hints — image-build command templates
 
 ;;; Code:
 
@@ -53,8 +52,17 @@ Returns the resulting `deb-packaging-target-distro'."
   (when (and distro
              (not (string-empty-p distro))
              (not deb-packaging--distro-user-set))
-    (setq deb-packaging-target-distro distro
-          deb-packaging--distro-user-set t))
+  (setq deb-packaging-target-distro distro
+        deb-packaging--distro-user-set t)
+  deb-packaging-target-distro))
+
+(defun deb-packaging--set-distro (distro)
+  "Set `deb-packaging-target-distro' to DISTRO as a deliberate choice.
+Unlike `deb-packaging--maybe-seed-distro', this always overwrites,
+reflecting an explicit selection from a transient.  Returns the
+resulting distro."
+  (setq deb-packaging-target-distro distro
+        deb-packaging--distro-user-set t)
   deb-packaging-target-distro)
 
 (defun deb-packaging--effective-distro ()
@@ -137,5 +145,5 @@ buffer's Test section body."
   :type '(alist :key-type string :value-type string)
   :group 'deb-packaging)
 
-(provide 'deb-packaging-presets)
-;;; deb-packaging-presets.el ends here
+(provide 'deb-packaging-config)
+;;; deb-packaging-config.el ends here

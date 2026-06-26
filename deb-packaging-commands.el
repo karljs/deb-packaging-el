@@ -24,9 +24,9 @@
 (require 'ansi-color)
 (require 'transient)
 (require 'deb-packaging-detect)
-(require 'deb-packaging-presets)
+(require 'deb-packaging-config)
 
-(declare-function deb-packaging--effective-distro "deb-packaging-presets")
+(declare-function deb-packaging--effective-distro "deb-packaging-config")
 
 ;;; Core Execution
 
@@ -254,8 +254,7 @@ be passed through directly."
         (unless (transient-arg-value "--dist=" passthrough)
           (setq passthrough (cons (format "--dist=%s" distro) passthrough)))
         ;; Update the global so the status buffer stays in sync.
-        (setq deb-packaging-target-distro distro
-              deb-packaging--distro-user-set t)
+        (deb-packaging--set-distro distro)
         (deb-packaging--run-command
          "sbuild"
          (append (list "sbuild")
@@ -370,8 +369,7 @@ The PPA is mandatory; distro defaults to `deb-packaging-target-distro'."
         (user-error "No source .changes file found — run source build first"))
       (let* ((changes-file (if (consp changes) (car changes) changes))
              (cmd-args (list "dput" ppa changes-file)))
-        (setq deb-packaging-target-distro distro
-              deb-packaging--distro-user-set t)
+        (deb-packaging--set-distro distro)
         (deb-packaging--run-command "dput" cmd-args
                                     (or parent-dir default-directory)
                                     'dput)))))
@@ -418,10 +416,14 @@ Only removes files from the output (parent) directory."
            (file-version (deb-packaging--version-to-filename version))
            (files nil))
       (when do-artifacts
-        (let ((pattern (format "%s[_-]*%s"
-                               (regexp-quote name)
-                               (regexp-quote file-version))))
-          (dolist (f (directory-files parent-dir nil pattern))
+        (let* ((prefixes (or (deb-packaging--owned-package-prefixes pkg-dir)
+                             (list name)))
+               (prefix-regex
+                (mapconcat (lambda (p)
+                             (concat "^" (regexp-quote p) "_"
+                                     (regexp-quote file-version)))
+                           prefixes "\\|")))
+          (dolist (f (directory-files parent-dir nil prefix-regex))
             (push (expand-file-name f parent-dir) files))))
       (when do-stale
         (let ((stale (deb-packaging--scan-stale-artifacts

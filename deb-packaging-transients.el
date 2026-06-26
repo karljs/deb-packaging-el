@@ -30,10 +30,10 @@
 
 (require 'transient)
 (require 'deb-packaging-detect)
-(require 'deb-packaging-presets)
+(require 'deb-packaging-config)
 
 ;; Forward-declare helper functions to keep the byte-compiler quiet.
-(declare-function deb-packaging--effective-distro "deb-packaging-presets")
+(declare-function deb-packaging--effective-distro "deb-packaging-config")
 
 ;; Forward-declare command functions to keep the byte-compiler quiet.
 (declare-function deb-packaging-source-build "deb-packaging-commands")

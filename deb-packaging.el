@@ -34,31 +34,11 @@
 
 (require 'transient)
 (require 'deb-packaging-detect)
-(require 'deb-packaging-presets)
+(require 'deb-packaging-config)
 (require 'deb-packaging-commands)
 (require 'deb-packaging-transients)
 (require 'deb-packaging-infra)
 (require 'deb-packaging-status)
-
-;;; Project Root Detection
-
-(defun deb-packaging--project-root ()
-  "Get project root, preferring projectile if available."
-  (or (and (bound-and-true-p projectile-mode)
-           (projectile-project-root))
-      (and (fboundp 'project-current)
-           (when-let ((proj (project-current)))
-             (project-root proj)))
-      default-directory))
-
-;;; Refresh
-
-(defun deb-packaging-refresh ()
-  "Refresh any live status buffer."
-  (interactive)
-  (when (fboundp 'deb-packaging-status--maybe-refresh)
-    (deb-packaging-status--maybe-refresh))
-  (message "Refreshed"))
 
 ;;; Top-level dispatch hub
 
@@ -77,7 +57,6 @@
    ("r" "Reset source tree..." deb-packaging-reset-transient)]
   ["Other"
    ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
-   ("g" "Refresh status"   deb-packaging-refresh)
    ("q" "Quit"             transient-quit-one)])
 
 ;;; Keybinding

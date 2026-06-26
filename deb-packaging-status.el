@@ -63,10 +63,10 @@
 (require 'cl-lib)
 (require 'magit-section)
 (require 'deb-packaging-detect)
-(require 'deb-packaging-presets)
+(require 'deb-packaging-config)
 (require 'deb-packaging-commands)
 
-(declare-function deb-packaging--effective-distro "deb-packaging-presets")
+(declare-function deb-packaging--effective-distro "deb-packaging-config")
 (declare-function transient-args "transient")
 (declare-function transient-arg-value "transient")
 
@@ -511,6 +511,17 @@ Lint children never reach `done'
     (cl-find-if (lambda (s) (memq s states))
                 '(failed running ready done blocked))))
 
+(defun deb-packaging-status--lint-hide-p (ctx)
+  "Return non-nil if the Lint section should collapse by default.
+Expands when either child is running or failed; collapses otherwise.
+Mirrors `deb-packaging-status--hide-phase-p' but for the two-child
+Lint group, which has no single phase key."
+  (let* ((arts (plist-get ctx :artifacts))
+         (state (deb-packaging-status--lint-rollup-state
+                 (alist-get 'dsc arts)
+                 (alist-get 'debs arts))))
+    (not (memq state '(failed running)))))
+
 (defun deb-packaging-status--insert-check (ctx hide)
   "Insert the Lint (lintian) phase as two actionable child sections.
 Source lint targets the .dsc; binary lint targets the .deb files."
@@ -701,10 +712,7 @@ is left on the first phase heading."
           ;; Lint groups two children; expand when either child is live or
           ;; failed (there is no single phase state for the group).
           (deb-packaging-status--insert-check
-           ctx (not (or (memq (plist-get (deb-packaging-run-record 'lintian-source) :status)
-                              '(running failure))
-                        (memq (plist-get (deb-packaging-run-record 'lintian-binary) :status)
-                              '(running failure)))))
+           ctx (deb-packaging-status--lint-hide-p ctx))
           (deb-packaging-status--insert-test
            ctx (deb-packaging-status--hide-phase-p
                 (deb-packaging-status--phase-state 'autopkgtest nil debs)

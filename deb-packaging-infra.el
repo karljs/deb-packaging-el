@@ -19,7 +19,7 @@
 (require 'cl-lib)
 (require 'tabulated-list)
 (require 'transient)
-(require 'deb-packaging-presets)
+(require 'deb-packaging-config)
 
 ;;; Shared table helpers
 
