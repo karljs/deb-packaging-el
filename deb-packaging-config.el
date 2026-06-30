@@ -31,21 +31,13 @@
 (require 'subr-x)
 (require 'deb-packaging-detect)
 
-(defgroup deb-packaging nil
-  "Debian/Ubuntu packaging tools."
-  :group 'tools)
-
 ;;; Target distribution
 
-(defcustom deb-packaging-target-distro "noble"
+(defvar deb-packaging-target-distro "noble"
   "Target distribution for builds and tests.
-
-Seeded once from the changelog the first time a package is visited
-\(see `deb-packaging--maybe-seed-distro') and never silently overwritten
-thereafter, so a value you choose interactively or via .dir-locals.el is
-respected."
-  :type 'string
-  :group 'deb-packaging)
+Seeded once from the changelog (see `deb-packaging--maybe-seed-distro')
+and never silently overwritten, so a value set interactively or via
+.dir-locals.el is respected.")
 
 (defvar deb-packaging--distro-user-set nil
   "Non-nil once `deb-packaging-target-distro' reflects a deliberate choice.

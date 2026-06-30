@@ -244,60 +244,49 @@ Expand `failed' and `running' phases and the single next actionable phase
 
 (defface deb-packaging-status-title
   '((t :inherit magit-section-heading :weight bold :height 1.2))
-  "Face for the package name in the title line."
-  :group 'deb-packaging)
+  "Face for the package name in the title line.")
 
 (defface deb-packaging-status-version
   '((t :inherit magit-section-secondary-heading :weight normal))
-  "Face for the version in the title line."
-  :group 'deb-packaging)
+  "Face for the version in the title line.")
 
 (defface deb-packaging-status-distro
   '((t :inherit success))
-  "Face for the target distribution in the title line."
-  :group 'deb-packaging)
+  "Face for the target distribution in the title line.")
 
 (defface deb-packaging-status-path
   '((t :inherit shadow))
-  "Face for the repository path line under the title."
-  :group 'deb-packaging)
+  "Face for the repository path line under the title.")
 
 (defface deb-packaging-status-key
   '((t :inherit shadow))
-  "Face for a settings key label (e.g. \"Mode\")."
-  :group 'deb-packaging)
+  "Face for a settings key label (e.g. \"Mode\").")
 
 (defface deb-packaging-status-value
   '((t :inherit default))
-  "Face for a settings value (e.g. the current distro)."
-  :group 'deb-packaging)
+  "Face for a settings value (e.g. the current distro).")
 
 (defface deb-packaging-status-done
   '((t :inherit success))
-  "Face for the `done' status word."
-  :group 'deb-packaging)
+  "Face for the `done' status word.")
 
 (defface deb-packaging-status-failed
   '((t :inherit error :weight bold))
-  "Face for the `failed' status word."
-  :group 'deb-packaging)
+  "Face for the `failed' status word.")
 
 (defface deb-packaging-status-running
   '((t :inherit warning :weight bold))
-  "Face for the `running' status word."
-  :group 'deb-packaging)
+  "Face for the `running' status word.")
 
 (defface deb-packaging-status-ready
   '((((class color) (background light)) :foreground "DodgerBlue4" :weight bold)
     (((class color) (background dark))  :foreground "DeepSkyBlue1" :weight bold)
     (t :weight bold))
-  "Face for the `ready' status word — the actionable next step."
-  :group 'deb-packaging)
+  "Face for the `ready' status word — the actionable next step.")
 
 (defface deb-packaging-status-blocked
   '((t :inherit shadow))
-  "Face for the `blocked' status word."
-  :group 'deb-packaging)
+  "Face for the `blocked' status word.")
 
 (defconst deb-packaging-status--label-width 16
   "Column width for phase labels, so trailing status words align.")
@@ -889,7 +878,6 @@ folding (TAB, n/p, M-n/M-p) come from `magit-section-mode'."
 
 (define-derived-mode deb-packaging-status-mode magit-section-mode "Deb-Status"
   "Major mode for the Debian packaging status landing page."
-  :group 'deb-packaging
   :interactive nil
   ;; Re-scan when the user returns to the buffer.  Buffer-local so it only
   ;; fires for status buffers and is torn down with the buffer.

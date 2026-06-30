@@ -342,17 +342,14 @@ under the `ubuntu-lint' run key."
 
 ;;; sbuild
 
-(defcustom deb-packaging-sbuild-variants
+(defvar deb-packaging-sbuild-variants
   '(("rust-ppa"
      . "deb [trusted=yes] http://ppa.launchpadcontent.net/rust-toolchain/staging/ubuntu/ %s main")
     ("proposed"
      . "deb http://archive.ubuntu.com/ubuntu/ %s-proposed main"))
-  "Alist mapping a short name to an extra-repository string for sbuild.
-%s in the value is replaced with the target distro at run time.
-These are offered as completion candidates in the binary-build
-transient's --extra-repository option (see deb-packaging-transients.el)."
-  :type '(alist :key-type string :value-type string)
-  :group 'deb-packaging)
+  "Alist of short name to extra-repository string for sbuild.
+%s is replaced with the target distro at run time.  Offered as completion
+candidates in the binary-build transient's --extra-repository option.")
 
 (defun deb-packaging--expand-extra-repo (value distro)
   "Expand VALUE into a full extra-repository string for DISTRO.
@@ -406,34 +403,25 @@ be passed through directly."
 
 ;;; autopkgtest
 
-(defcustom deb-packaging-test-runners
+(defvar deb-packaging-test-runners
   '(("lxd"  . "autopkgtest/ubuntu/%s/amd64")
     ("qemu" . "/var/lib/adt-images/autopkgtest-%s-amd64.img"))
-  "Alist mapping runner name (string) to image path template.
-%s is replaced with the target distro at run time.
-
+  "Alist of runner name to image path template.  %s is the target distro.
 For Debian, add entries like:
   \(\"lxd\" . \"autopkgtest/debian/%s/amd64\")
-The tooling (autopkgtest, lxc) is the same; only the image naming
-convention differs.  Adding a runner here also surfaces it in the
-test transient's --runner completion (see `deb-packaging--runner-choices')."
-  :type '(alist :key-type string :value-type string)
-  :group 'deb-packaging)
+Adding a runner here also surfaces it in the test transient's --runner
+completion (see `deb-packaging--runner-choices').")
 
-(defcustom deb-packaging-test-build-hints
+(defvar deb-packaging-test-build-hints
   '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s")
     ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s"))
-  "Alist mapping runner name (string) to image-build command template.
-%s is replaced with the target distro.  Shown when a test image is
-missing, both in the autopkgtest command's error and in the status
-buffer's Test section body."
-  :type '(alist :key-type string :value-type string)
-  :group 'deb-packaging)
+  "Alist of runner name to image-build command template.  %s is the distro.
+Shown when a test image is missing.")
 
 (defun deb-packaging--runner-choices ()
   "Return the list of configured autopkgtest runner names.
-Derived from `deb-packaging-test-runners' so customizing that defcustom
-is the single source of truth for the test transient's --runner option."
+Derived from `deb-packaging-test-runners' so that variable is the single
+source of truth for the test transient's --runner option."
   (mapcar #'car deb-packaging-test-runners))
 
 (defun deb-packaging--lxd-image-exists-p (image)

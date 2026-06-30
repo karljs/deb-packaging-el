@@ -36,7 +36,7 @@
 (declare-function deb-packaging--effective-distro "deb-packaging-config")
 (declare-function deb-packaging--runner-choices "deb-packaging-commands")
 
-;; Tool-specific defcustoms live in deb-packaging-commands.el; declare them
+;; Tool-specific variables live in deb-packaging-commands.el; declare them
 ;; here so this file (which does not require commands.el) byte-compiles clean.
 (defvar deb-packaging-sbuild-variants)
 

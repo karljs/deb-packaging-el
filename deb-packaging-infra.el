@@ -145,7 +145,6 @@ prompts for one."
 
 (define-derived-mode deb-packaging-infra-schroots-mode tabulated-list-mode "Infra-Schroots"
   "Major mode for listing and managing schroots."
-  :group 'deb-packaging
   (setq tabulated-list-format
         [("Name" 25 t)
          ("Description" 25 t)
@@ -246,7 +245,6 @@ prompts for one."
 
 (define-derived-mode deb-packaging-infra-lxd-images-mode tabulated-list-mode "Infra-LXD"
   "Major mode for listing and managing LXD autopkgtest images."
-  :group 'deb-packaging
   (setq tabulated-list-format
         [("Alias" 40 t)
          ("Arch" 8 t)
@@ -348,7 +346,6 @@ prompts for one."
 
 (define-derived-mode deb-packaging-infra-qemu-images-mode tabulated-list-mode "Infra-QEMU"
   "Major mode for listing and managing QEMU autopkgtest images."
-  :group 'deb-packaging
   (setq tabulated-list-format
         [("Name" 45 t)
          ("Size" 12 t :right-align t)
@@ -394,24 +391,15 @@ prompts for one."
 
 ;;; PPA (Launchpad) Management
 
-(defcustom deb-packaging-infra-ppa-team-config-dir
+(defvar deb-packaging-infra-ppa-team-config-dir
   "~/.config/ppa-dev-tools/teams"
-  "Directory of per-team `ppa' config files for surfacing team PPAs.
-
-Each file is a YAML config consumed by the `ppa' tool, typically
-containing a `list' section with a team's `owner_name', e.g.:
-
+  "Directory of per-team `ppa' config files (YAML).
+Each file has a `list' section with a team's `owner_name', e.g.:
   list:
     owner_name: gcc-llvm-toolchains
-
-The extension runs `ppa list -C <file>' for each file found here, and
-merges the results with the user's personal PPAs.  Files must end in
-`.yml' or `.yaml'.  If the directory is absent, only personal PPAs are
-listed.
-
-This variable may be set via `setq' in your init file."
-  :type 'directory
-  :group 'deb-packaging)
+We run `ppa list -C <file>' for each and merge with personal PPAs.
+Files must end in `.yml' or `.yaml'.  Absent dir means personal PPAs only.
+Set via `setq' in your init file.")
 
 (defun deb-packaging-infra--team-config-files ()
   "Return list of per-team `ppa' config files.
@@ -523,7 +511,6 @@ Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
 
 (define-derived-mode deb-packaging-infra-ppas-mode tabulated-list-mode "Infra-PPAs"
   "Major mode for listing and managing Launchpad PPAs."
-  :group 'deb-packaging
   (setq tabulated-list-format
         [("Owner" 25 t)
          ("Name" 40 t)])
