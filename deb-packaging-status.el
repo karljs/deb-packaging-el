@@ -78,6 +78,7 @@
 (declare-function deb-packaging-upload-transient "deb-packaging-transients")
 (declare-function deb-packaging-clean-transient "deb-packaging-transients")
 (declare-function deb-packaging-reset-transient "deb-packaging-transients")
+(declare-function deb-packaging-dev-transient "deb-packaging-transients")
 ;; Other cross-file references
 (declare-function deb-packaging--run-summary "deb-packaging-commands")
 (declare-function deb-packaging--schroot-exists-p "deb-packaging-detect")
@@ -85,6 +86,7 @@
 (declare-function deb-packaging-dispatch "deb-packaging")
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
 (declare-function deb-packaging-dev--list-containers "deb-packaging-dev")
+(declare-function deb-packaging-dev-transient "deb-packaging-transients")
 
 ;;; Buffer-local context
 
@@ -134,10 +136,11 @@ the status buffer shows.  Does not create or refresh a buffer."
     (deb-packaging-check          . deb-packaging-lint-transient)
     (deb-packaging-test           . deb-packaging-test-transient)
     (deb-packaging-upload         . deb-packaging-upload-transient)
-    (deb-packaging-stale          . deb-packaging-clean-transient))
+    (deb-packaging-stale          . deb-packaging-clean-transient)
+    (deb-packaging-dev            . deb-packaging-dev-transient))
   "Map status-buffer section types to the transient `RET' should open.
 The Lint phase (`deb-packaging-check') is a parent section whose children
-(lintian source/binary, ubuntu-lint) are display-only; RET on any of them
+\(lintian source/binary, ubuntu-lint) are display-only; RET on any of them
 walks up to the parent and opens the unified lint transient, from which
 either linter can be dispatched.")
 
@@ -912,6 +915,11 @@ in `deb-packaging-status--section-actions'."
   (interactive)
   (deb-packaging-status--open #'deb-packaging-reset-transient))
 
+(defun deb-packaging-status-dev ()
+  "Open the dev shell transient."
+  (interactive)
+  (deb-packaging-status--open #'deb-packaging-dev-transient))
+
 ;;; Major mode
 
 (defvar-keymap deb-packaging-status-mode-map
@@ -927,6 +935,7 @@ folding (TAB, n/p, M-n/M-p) come from `magit-section-mode'."
   "t"   #'deb-packaging-status-test
   "c"   #'deb-packaging-status-clean
   "r"   #'deb-packaging-status-reset
+  "e"   #'deb-packaging-status-dev
   "i"   #'deb-packaging-infra-dispatch
   "?"   #'deb-packaging-dispatch
   "g"   #'deb-packaging-status-refresh
@@ -945,7 +954,7 @@ folding (TAB, n/p, M-n/M-p) come from `magit-section-mode'."
   "Open the Debian packaging status buffer for the current package.
 This is the primary entry point for the deb-packaging workflow."
   (interactive)
-  (let* ((pkg-dir (deb-packaging--find-package-dir))
+  (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
          (info (and pkg-dir (deb-packaging--parse-changelog pkg-dir)))
          (name (nth 0 info))
          (buf (get-buffer-create (deb-packaging-status--buffer-name name))))

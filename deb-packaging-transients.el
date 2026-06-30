@@ -53,6 +53,12 @@
 (declare-function deb-packaging-clean "deb-packaging-commands")
 (declare-function deb-packaging-reset "deb-packaging-commands")
 (declare-function deb-packaging-infra--list-ppas "deb-packaging-infra")
+(declare-function deb-packaging-dev-shell "deb-packaging-dev")
+(declare-function deb-packaging-dev-eglot "deb-packaging-dev")
+(declare-function deb-packaging-dev-compile-db "deb-packaging-dev")
+(declare-function deb-packaging-dev-destroy "deb-packaging-dev")
+(declare-function deb-packaging-dev-open "deb-packaging-dev")
+(declare-function deb-packaging-dev-project "deb-packaging-dev")
 
 ;;; ── 1. Source build (dpkg-buildpackage) ─────────────────────────────────────
 
@@ -256,7 +262,23 @@ lintian flag never reaches ubuntu-lint and vice versa."
    ("-p" "Remove .pc/ directory" "--pc")
    ("-f" "Remove debian/files"   "--files")]
   ["Run"
-   ("r" "Reset" deb-packaging-reset)])
+    ("r" "Reset" deb-packaging-reset)])
+
+;;; ── 8. Dev shell (LXD) ────────────────────────────────────────────────────────
+
+;;;###autoload(autoload 'deb-packaging-dev-transient "deb-packaging-transients" nil t)
+(transient-define-prefix deb-packaging-dev-transient ()
+  "Develop upstream source in an LXD container with LSP."
+  ["Dev shell"
+   ("e" "Dev shell (C-u=reprovision)" deb-packaging-dev-shell)
+   ("o" "Open existing container (dired)" deb-packaging-dev-open)
+   ("p" "Open project (find file)" deb-packaging-dev-project)
+   ("B" "Generate compile_commands.json" deb-packaging-dev-compile-db)
+   ("E" "Start eglot" deb-packaging-dev-eglot)]
+  ["Manage"
+   ("k" "Destroy dev container" deb-packaging-dev-destroy)]
+  ["Navigation"
+   ("q" "Back" transient-quit-one)])
 
 (provide 'deb-packaging-transients)
 ;;; deb-packaging-transients.el ends here

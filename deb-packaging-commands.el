@@ -184,7 +184,7 @@ it is scoped to buffer creation only and never mutates the caller's
 (defun deb-packaging-source-build (&optional args)
   "Run dpkg-buildpackage with ARGS from the source-build transient."
   (interactive (list (transient-args 'deb-packaging-source-build-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir)))
+  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (deb-packaging--run-command "source-build"
@@ -230,7 +230,7 @@ ARGS is filtered to lintian's own flags (see
 unified lint transient do not leak onto lintian's command line.  Lintian
 accepts multiple files on its command line, so TARGETS may contain a
 single .dsc, several .debs, or any mix."
-  (let ((pkg-dir (deb-packaging--find-package-dir)))
+  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let ((parent-dir (file-name-directory (directory-file-name pkg-dir)))
@@ -245,7 +245,7 @@ single .dsc, several .debs, or any mix."
 (defun deb-packaging-lintian-source (&optional args)
   "Run lintian on the source .dsc file with ARGS."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
-  (let* ((pkg-dir (deb-packaging--find-package-dir))
+  (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
          (info (deb-packaging--parse-changelog pkg-dir))
          (parent-dir (file-name-directory (directory-file-name pkg-dir)))
          (artifacts (deb-packaging--scan-artifacts
@@ -258,7 +258,7 @@ single .dsc, several .debs, or any mix."
 (defun deb-packaging--lintian-binary-artifacts ()
   "Return the list of .deb files for the current package.
 Signals `user-error' when no .debs have been built."
-  (let* ((pkg-dir (deb-packaging--find-package-dir))
+  (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
          (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
          (parent-dir (when pkg-dir
                        (file-name-directory (directory-file-name pkg-dir))))
@@ -322,7 +322,7 @@ default, or `source-dir' / `changelog'); the remaining flags are passed
 through to ubuntu-lint verbatim.  Run from the package directory, tracked
 under the `ubuntu-lint' run key."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir)))
+  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((effective-args (or args '()))
@@ -363,7 +363,7 @@ be passed through directly."
 (defun deb-packaging-sbuild (&optional args)
   "Run sbuild with ARGS from the binary-build transient."
   (interactive (list (transient-args 'deb-packaging-binary-build-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir)))
+  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((info (deb-packaging--parse-changelog pkg-dir))
@@ -458,7 +458,7 @@ is not registered."
 (defun deb-packaging-autopkgtest (&optional args)
   "Run autopkgtest with ARGS from the test transient."
   (interactive (list (transient-args 'deb-packaging-test-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir)))
+  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((info (deb-packaging--parse-changelog pkg-dir))
@@ -513,7 +513,7 @@ The PPA is mandatory; distro defaults to `deb-packaging-target-distro'."
                      (deb-packaging--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA specified — set it with the -p option"))
-    (let* ((pkg-dir (deb-packaging--find-package-dir))
+    (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
            (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
            (name (nth 0 info))
            (version (nth 1 info))
@@ -544,7 +544,7 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
                      (deb-packaging--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA specified — set it with the -p option"))
-    (let* ((pkg-dir (deb-packaging--find-package-dir))
+    (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
            (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
            (name (nth 0 info))
            (cmd-args (append (list "ppa" "tests" ppa)
@@ -561,7 +561,7 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
 Moves files to the system trash rather than deleting them permanently.
 Only removes files from the output (parent) directory."
   (interactive (list (transient-args 'deb-packaging-clean-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir)))
+  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((effective-args (or args '()))
@@ -604,7 +604,7 @@ Only removes files from the output (parent) directory."
 Restores the working tree to a pristine state by popping quilt patches,
 removing the .pc/ directory, and/or removing debian/files."
   (interactive (list (transient-args 'deb-packaging-reset-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir)))
+  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((effective-args (or args '()))

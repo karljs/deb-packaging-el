@@ -20,6 +20,7 @@
 (require 'tabulated-list)
 (require 'transient)
 (require 'deb-packaging-config)
+(require 'deb-packaging-dev)
 
 ;;; Shared table helpers
 
@@ -186,21 +187,17 @@ prompts for one."
       (deb-packaging-infra-refresh-schroots))
     (switch-to-buffer buf)))
 
-;;; LXD Management
+;;; LXD Management (unified: autopkgtest images + dev containers)
 
 (defun deb-packaging-infra--list-lxd-images ()
   "Return list of autopkgtest LXD image plists.
 Each plist has keys: :alias, :fingerprint, :description, :arch, :size.
-Parses `lxc image list --format=csv' output, which is:
-  ALIAS,FINGERPRINT,PUBLIC,DESCRIPTION,ARCH,TYPE,SIZE,UPLOAD_DATE"
+Parses `lxc image list' CSV output."
   (let ((output (shell-command-to-string "lxc image list --format=csv 2>/dev/null")))
     (when (and output (not (string-empty-p output)))
       (let (result)
         (dolist (line (split-string output "\n" t))
           (let ((fields (split-string line ",")))
-            ;; CSV: ALIAS,FINGERPRINT,PUBLIC,DESCRIPTION,ARCH,TYPE,SIZE,...
-            ;; The last field (upload date) may contain a comma inside quotes,
-            ;; but we only read indices 0-6 which are before it.
             (when (>= (length fields) 2)
               (let ((alias (nth 0 fields)))
                 (when (and alias (string-match-p "autopkgtest" alias))
@@ -212,6 +209,32 @@ Parses `lxc image list --format=csv' output, which is:
                         result))))))
         (nreverse result)))))
 
+(defun deb-packaging-infra--list-lxd-all ()
+  "Return a combined list of LXD images and dev containers as plists.
+Each plist has :name, :type (`image' or `container'), :status, and
+type-specific keys.  Images have :arch and :size; containers have
+:package and :release."
+  (append
+   (mapcar (lambda (img)
+             (list :name (plist-get img :alias)
+                   :type 'image
+                   :status (plist-get img :arch)
+                   :detail (plist-get img :size)
+                   :raw img))
+           (deb-packaging-infra--list-lxd-images))
+   (mapcar (lambda (c)
+             (let* ((name (plist-get c :name))
+                    (rest (replace-regexp-in-string "^deb-dev-" "" name))
+                    (parts (split-string rest "-"))
+                    (release (car (last parts)))
+                    (pkg (mapconcat #'identity (butlast parts) "-")))
+               (list :name name
+                     :type 'container
+                     :status (plist-get c :status)
+                     :detail (format "%s / %s" pkg release)
+                     :raw c)))
+           (deb-packaging-dev--list-containers))))
+
 (defun deb-packaging-infra-create-lxd ()
   "Create an LXD image for autopkgtest."
   (interactive)
@@ -221,72 +244,114 @@ Parses `lxc image list --format=csv' output, which is:
     (when (yes-or-no-p (format "Run: %s? " cmd))
       (compile cmd))))
 
-(defun deb-packaging-infra-delete-lxd (&optional alias)
-  "Delete an LXD autopkgtest image.
-Acts on the image at point when in an LXD images list buffer; otherwise
-prompts for one."
+(defun deb-packaging-infra-delete-lxd-entry (&optional entry)
+  "Delete the LXD image or container at point (or prompted).
+ENTRY is a plist from `deb-packaging-infra--list-lxd-all'."
   (interactive
-   (list (or (plist-get (tabulated-list-get-id) :alias)
-             (let* ((images (deb-packaging-infra--list-lxd-images))
-                    (aliases (mapcar (lambda (i) (plist-get i :alias)) images)))
-               (completing-read "Image to delete: " aliases nil t)))))
-  (when (yes-or-no-p (format "Delete LXD image %s?" alias))
-    (compile (format "lxc image delete %s" (shell-quote-argument alias)))))
+   (list (or (tabulated-list-get-id)
+             (let* ((all (deb-packaging-infra--list-lxd-all))
+                    (names (mapcar (lambda (e) (plist-get e :name)) all)))
+               (when (null names)
+                 (user-error "No LXD images or containers found"))
+               (let ((name (completing-read "Delete: " names nil t)))
+                 (cl-find name all
+                          :key (lambda (e) (plist-get e :name))
+                          :test #'equal))))))
+  (let ((name (plist-get entry :name))
+        (type (plist-get entry :type)))
+    (when (yes-or-no-p
+           (format "Delete %s %s? "
+                   (if (eq type 'image) "image" "container") name))
+      (compile
+       (if (eq type 'image)
+           (format "lxc image delete %s" (shell-quote-argument name))
+         (format "lxc delete --force %s" (shell-quote-argument name)))))))
+
+(defun deb-packaging-infra-visit-lxd-entry (&optional entry)
+  "Visit the LXD container at point (opens dired at its TRAMP path).
+Only works for containers; images are a no-op."
+  (interactive
+   (list (or (tabulated-list-get-id)
+             (let* ((all (deb-packaging-infra--list-lxd-all))
+                    (containers (cl-remove-if-not
+                                 (lambda (e) (eq (plist-get e :type) 'container))
+                                 all))
+                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
+               (when (null names)
+                 (user-error "No dev containers found"))
+               (let ((name (completing-read "Visit container: " names nil t)))
+                 (cl-find name all
+                          :key (lambda (e) (plist-get e :name))
+                          :test #'equal))))))
+  (if (not (eq (plist-get entry :type) 'container))
+      (message "Only dev containers can be visited")
+    (let* ((raw (plist-get entry :raw))
+           (source (plist-get raw :source))
+           (name (plist-get entry :name))
+           (mount (or source "/root/work"))
+           (tramp-path (format "/lxc:%s:%s" name mount)))
+      (deb-packaging-dev--ensure-tramp-method)
+      (dired tramp-path))))
 
 ;;; LXD list buffer
 
-(defvar-keymap deb-packaging-infra-lxd-images-mode-map
-  :doc "Keymap for the LXD images list buffer."
+(defvar-keymap deb-packaging-infra-lxd-mode-map
+  :doc "Keymap for the unified LXD list buffer."
   :parent tabulated-list-mode-map
-  "d" #'deb-packaging-infra-delete-lxd
+  "d" #'deb-packaging-infra-delete-lxd-entry
+  "RET" #'deb-packaging-infra-visit-lxd-entry
   "c" #'deb-packaging-infra-create-lxd
-  "g" #'deb-packaging-infra-refresh-lxd-images
+  "g" #'deb-packaging-infra-refresh-lxd
   "q" #'quit-window)
 
-(define-derived-mode deb-packaging-infra-lxd-images-mode tabulated-list-mode "Infra-LXD"
-  "Major mode for listing and managing LXD autopkgtest images."
+(define-derived-mode deb-packaging-infra-lxd-mode tabulated-list-mode "Infra-LXD"
+  "Major mode for listing and managing LXD images and dev containers."
   (setq tabulated-list-format
-        [("Alias" 40 t)
-         ("Arch" 8 t)
-         ("Size" 12 t :right-align t)
-         ("Fingerprint" 30 t)])
+        [("Name" 35 t)
+         ("Type" 12 t)
+         ("Status" 10 t)
+         ("Details" 25 t)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key nil))
 
-(defun deb-packaging-infra-refresh-lxd-images ()
-  "Refresh the LXD images list buffer."
+(defun deb-packaging-infra-refresh-lxd ()
+  "Refresh the unified LXD list buffer."
   (interactive)
-  (when (derived-mode-p 'deb-packaging-infra-lxd-images-mode)
+  (when (derived-mode-p 'deb-packaging-infra-lxd-mode)
     (setq tabulated-list-entries
-          (mapcar (lambda (img)
-                    (list img
-                          (vector
-                           (deb-packaging-infra--format-cell
-                            (plist-get img :alias) 40 'left
-                            'magit-section-heading)
-                           (deb-packaging-infra--format-cell
-                            (plist-get img :arch) 8)
-                           (deb-packaging-infra--format-cell
-                            (plist-get img :size) 12 'right)
-                           (deb-packaging-infra--format-cell
-                            (plist-get img :fingerprint) 30 nil 'shadow t))))
-                  (deb-packaging-infra--list-lxd-images)))
+          (mapcar (lambda (e)
+                    (let ((type-str (if (eq (plist-get e :type) 'image)
+                                        "Image"
+                                      "Container")))
+                      (list e
+                            (vector
+                             (deb-packaging-infra--format-cell
+                              (plist-get e :name) 35 'left
+                              'magit-section-heading)
+                             (deb-packaging-infra--format-cell
+                              type-str 12)
+                             (deb-packaging-infra--format-cell
+                              (or (plist-get e :status) "") 10)
+                             (deb-packaging-infra--format-cell
+                              (or (plist-get e :detail) "") 25 nil 'shadow t)))))
+                  (deb-packaging-infra--list-lxd-all)))
     (tabulated-list-init-header)
     (tabulated-list-print t)
     (when (null tabulated-list-entries)
       (let ((inhibit-read-only t))
         (goto-char (point-max))
-        (insert (propertize "\nNo autopkgtest LXD images found.\nCreate one with 'c'."
-                            'face 'shadow))))))
+        (insert (propertize
+                 "\nNo LXD images or dev containers found.\nCreate an image with 'c'."
+                 'face 'shadow))))))
 
-(defun deb-packaging-infra-lxd-images ()
-  "Open a buffer listing all LXD autopkgtest images."
+(defun deb-packaging-infra-lxd ()
+  "Open a buffer listing all LXD images and dev containers."
   (interactive)
-  (let ((buf (get-buffer-create "*deb-packaging infra: LXD images*")))
+  (let ((buf (get-buffer-create "*deb-packaging infra: LXD*")))
     (with-current-buffer buf
-      (unless (derived-mode-p 'deb-packaging-infra-lxd-images-mode)
-        (deb-packaging-infra-lxd-images-mode))
-      (deb-packaging-infra-refresh-lxd-images))
+      (unless (derived-mode-p 'deb-packaging-infra-lxd-mode)
+        (deb-packaging-infra-lxd-mode))
+      (deb-packaging-infra-refresh-lxd))
     (switch-to-buffer buf)))
 
 ;;; QEMU Management
@@ -638,7 +703,7 @@ arrive, so Emacs does not block on Launchpad queries."
   [:description deb-packaging-infra--header]
   ["Infrastructure"
    ("s" "Schroots (sbuild)..."          deb-packaging-infra-schroots)
-   ("l" "LXD images (autopkgtest)..."   deb-packaging-infra-lxd-images)
+   ("l" "LXD (images + dev containers)..." deb-packaging-infra-lxd)
    ("v" "QEMU images (autopkgtest)..."  deb-packaging-infra-qemu-images)
    ("p" "PPAs (Launchpad)..."           deb-packaging-infra-ppas)]
   ["Navigation"

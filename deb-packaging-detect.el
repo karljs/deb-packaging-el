@@ -18,12 +18,19 @@
 
 ;;; Package Directory Detection
 
-(defun deb-packaging--find-package-dir (&optional start-dir)
-  "Find directory containing debian/changelog, walking up from START-DIR."
+(defun deb-packaging--find-package-dir (&optional start-dir host-only)
+  "Find directory containing debian/changelog, walking up from START-DIR.
+When HOST-ONLY is non-nil, reject TRAMP paths (e.g. /lxc: container
+paths) so host-side commands don't accidentally run inside a dev
+container.  Signals `user-error' in that case."
   (let ((dir (locate-dominating-file (or start-dir default-directory)
                                      "debian/changelog")))
     (when dir
-      (expand-file-name dir))))
+      (let ((expanded (expand-file-name dir)))
+        (when (and host-only (file-remote-p expanded))
+          (user-error
+           "This command runs on the host, but the current file is inside a dev container.  Run it from the status buffer (M-x deb-packaging-status) or a host file."))
+        expanded))))
 
 ;;; Changelog Parsing
 
