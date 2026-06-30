@@ -293,12 +293,88 @@ Only works for containers; images are a no-op."
       (deb-packaging-dev--ensure-tramp-method)
       (dired tramp-path))))
 
+(defun deb-packaging-infra-stop-lxd-entry (&optional entry)
+  "Stop the LXD container at point.
+No-op for images or already-stopped containers."
+  (interactive
+   (list (or (tabulated-list-get-id)
+             (let* ((all (deb-packaging-infra--list-lxd-all))
+                    (containers (cl-remove-if-not
+                                 (lambda (e) (eq (plist-get e :type) 'container))
+                                 all))
+                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
+               (when (null names)
+                 (user-error "No dev containers found"))
+               (let ((name (completing-read "Stop container: " names nil t)))
+                 (cl-find name all
+                          :key (lambda (e) (plist-get e :name))
+                          :test #'equal))))))
+  (if (not (eq (plist-get entry :type) 'container))
+      (message "Cannot stop an image")
+    (let ((name (plist-get entry :name)))
+      (message "Stopping %s..." name)
+      (call-process "lxc" nil nil nil "stop" name)
+      (message "Stopped %s" name)
+      (deb-packaging-infra-refresh-lxd))))
+
+(defun deb-packaging-infra-start-lxd-entry (&optional entry)
+  "Start the LXD container at point.
+No-op for images or already-running containers."
+  (interactive
+   (list (or (tabulated-list-get-id)
+             (let* ((all (deb-packaging-infra--list-lxd-all))
+                    (containers (cl-remove-if-not
+                                 (lambda (e) (eq (plist-get e :type) 'container))
+                                 all))
+                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
+               (when (null names)
+                 (user-error "No dev containers found"))
+               (let ((name (completing-read "Start container: " names nil t)))
+                 (cl-find name all
+                          :key (lambda (e) (plist-get e :name))
+                          :test #'equal))))))
+  (if (not (eq (plist-get entry :type) 'container))
+      (message "Cannot start an image")
+    (let ((name (plist-get entry :name)))
+      (message "Starting %s..." name)
+      (call-process "lxc" nil nil nil "start" name)
+      (message "Started %s" name)
+      (deb-packaging-infra-refresh-lxd))))
+
+(defun deb-packaging-infra-shell-lxd-entry (&optional entry)
+  "Open a shell in the LXD container at point.
+Uses `lxc exec NAME -- bash -l' in a comint buffer."
+  (interactive
+   (list (or (tabulated-list-get-id)
+             (let* ((all (deb-packaging-infra--list-lxd-all))
+                    (containers (cl-remove-if-not
+                                 (lambda (e) (eq (plist-get e :type) 'container))
+                                 all))
+                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
+               (when (null names)
+                 (user-error "No dev containers found"))
+               (let ((name (completing-read "Shell into container: " names nil t)))
+                 (cl-find name all
+                          :key (lambda (e) (plist-get e :name))
+                          :test #'equal))))))
+  (if (not (eq (plist-get entry :type) 'container))
+      (message "Cannot shell into an image")
+    (let ((name (plist-get entry :name)))
+      (call-process "lxc" nil nil nil "start" name)
+      (deb-packaging-dev--ensure-tramp-method)
+      (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
+                              "exec" name "--" "bash" "-l")))
+        (switch-to-buffer buf)))))
+
 ;;; LXD list buffer
 
 (defvar-keymap deb-packaging-infra-lxd-mode-map
   :doc "Keymap for the unified LXD list buffer."
   :parent tabulated-list-mode-map
   "d" #'deb-packaging-infra-delete-lxd-entry
+  "s" #'deb-packaging-infra-stop-lxd-entry
+  "S" #'deb-packaging-infra-start-lxd-entry
+  "x" #'deb-packaging-infra-shell-lxd-entry
   "RET" #'deb-packaging-infra-visit-lxd-entry
   "c" #'deb-packaging-infra-create-lxd
   "g" #'deb-packaging-infra-refresh-lxd

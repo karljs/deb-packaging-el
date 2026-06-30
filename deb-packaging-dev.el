@@ -23,17 +23,18 @@
 ;; One container per package per release (deb-dev-<pkg>-<release>), so the
 ;; TRAMP path, LSP index and build-deps survive across sessions.
 ;;
-;; Provisioning installs four layers:
-;;   1. Core build helpers (devscripts, equivs) - mandatory
-;;   2. Language servers - prompted on provision, picked from
-;;      `deb-packaging-dev-language-profiles'
-;;   3. Extra dev tools (`deb-packaging-dev-extra-packages') - best-effort
-;;   4. Build-deps from `mk-build-deps' reading debian/control - mandatory
+;; Provisioning installs four layers, each independently idempotent:
+;;   1. Core build helpers (devscripts, equivs) - installed if missing
+;;   2. Build-deps from `mk-build-deps' reading debian/control - marker: control hash
+;;   3. Language servers - prompted when needed, picked from
+;;      `deb-packaging-dev-language-profiles'.  Selection cached per package
+;;      in ~/.cache/deb-packaging-dev/.  Marker: profiles hash.
+;;   4. Extra dev tools (`deb-packaging-dev-extra-packages') - marker: tools hash
 ;;
-;; Provisioning is idempotent: a fingerprint of the selected language
-;; profiles and debian/control is stored in the container; a match skips the
-;; install block.  C-u on `deb-packaging-dev-shell' forces re-provisioning
-;; (and re-prompts for languages).
+;; Each layer has its own marker file in the container.  Only the layer
+;; whose fingerprint changed re-runs.  Editing debian/control doesn't
+;; re-install language servers; adding a dev tool doesn't re-run
+;; mk-build-deps.  C-u forces all layers.
 ;;
 ;; Ownership: `raw.idmap "both UID 0"' maps container root to the host user,
 ;; so files written inside are host-owned and host files look root-owned
@@ -128,44 +129,101 @@ Models the built-in `docker' method on `lxc exec'."
   "Return the :setup command for profile ENTRY, or nil."
   (plist-get (cddr entry) :setup))
 
-(defun deb-packaging-dev--select-profiles ()
+(defun deb-packaging-dev--langs-cache-file (pkg distro)
+  "Return the cache file path for PKG/DISTRO language selection.
+Returns nil if the cache directory can't be created."
+  (condition-case nil
+      (let ((dir (expand-file-name
+                  (format "deb-packaging-dev")
+                  (or (getenv "XDG_CACHE_HOME")
+                      (expand-file-name "~/.cache")))))
+        (unless (file-directory-p dir)
+          (make-directory dir t))
+        (expand-file-name (format "%s-%s-langs" pkg distro) dir))
+    (error nil)))
+
+(defun deb-packaging-dev--read-langs-cache (pkg distro)
+  "Return cached language profile keys for PKG/DISTRO, or nil.
+Never signals; returns nil on any error (missing file, corrupt data, etc)."
+  (condition-case nil
+      (let ((file (deb-packaging-dev--langs-cache-file pkg distro)))
+        (when (and file (file-readable-p file))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (let ((keys nil))
+              (dolist (line (split-string (buffer-string) "\n" t))
+                (let ((sym (intern-soft (string-trim line))))
+                  (when sym (push sym keys))))
+              (nreverse keys)))))
+    (error nil)))
+
+(defun deb-packaging-dev--write-langs-cache (pkg distro keys)
+  "Write language profile KEYS for PKG/DISTRO to the cache file.
+Never signals; silently skips on any error."
+  (condition-case nil
+      (let ((file (deb-packaging-dev--langs-cache-file pkg distro)))
+        (when file
+          (with-temp-file file
+            (dolist (key keys)
+              (insert (format "%s\n" key))))))
+    (error nil)))
+
+(defun deb-packaging-dev--select-profiles (pkg distro)
   "Prompt for language profiles via `completing-read-multiple'.
-Returns a list of profile entry lists (as in
-`deb-packaging-dev-language-profiles').  Nothing is pre-selected."
-  (let* ((labels (mapcar #'cadr deb-packaging-dev-language-profiles))
+Returns a list of profile entry lists.  Pre-selects from the cache file
+if one exists for PKG/DISTRO; on any cache error, nothing is pre-selected.
+Writes the selection back to the cache."
+  (let* ((cached-keys (deb-packaging-dev--read-langs-cache pkg distro))
+         (labels (mapcar #'cadr deb-packaging-dev-language-profiles))
+         (initial (when cached-keys
+                    (mapconcat #'identity
+                               (delq nil
+                                     (mapcar (lambda (key)
+                                               (let ((entry (deb-packaging-dev--profile-lookup key)))
+                                                 (when entry (cadr entry))))
+                                             cached-keys))
+                               ",")))
          (chosen (completing-read-multiple
                   "Language servers (comma-separated, empty for none): "
-                  labels nil nil nil))
+                  labels nil nil initial))
          (keys (mapcar (lambda (label)
                          (car (cl-find label
                                        deb-packaging-dev-language-profiles
                                        :key #'cadr :test #'equal)))
                        (cl-remove-if #'string-empty-p
-                                     (mapcar #'string-trim chosen)))))
-    (delq nil (mapcar #'deb-packaging-dev--profile-lookup keys))))
+                                     (mapcar #'string-trim chosen))))
+         (entries (delq nil (mapcar #'deb-packaging-dev--profile-lookup keys))))
+    (deb-packaging-dev--write-langs-cache pkg distro keys)
+    entries))
 
-(defun deb-packaging-dev--provision-fingerprint (pkg-dir profiles)
-  "SHA256 of selected PROFILES, extra packages, and debian/control.
-Stored in the container; a mismatch triggers re-provisioning.  Hashing the
-full profile entries (not just keys) means changing a profile's :apt or
-:setup string triggers re-provisioning too."
+(defun deb-packaging-dev--control-fingerprint (pkg-dir)
+  "SHA256 of debian/control contents in PKG-DIR."
   (let ((control-file (expand-file-name "debian/control" pkg-dir)))
     (secure-hash
      'sha256
-     (concat (format "%S" profiles)
-             (format "%S" deb-packaging-dev-extra-packages)
-             (if (file-readable-p control-file)
-                 (with-temp-buffer
-                   (insert-file-contents control-file)
-                   (buffer-string))
-               "")))))
+     (if (file-readable-p control-file)
+         (with-temp-buffer
+           (insert-file-contents control-file)
+           (buffer-string))
+       ""))))
 
-(defun deb-packaging-dev--provision-script (name distro pkg-dir mount pkg fingerprint force profiles)
+(defun deb-packaging-dev--langs-fingerprint (profiles)
+  "SHA256 of selected PROFILES (full definitions)."
+  (secure-hash 'sha256 (format "%S" profiles)))
+
+(defun deb-packaging-dev--tools-fingerprint ()
+  "SHA256 of `deb-packaging-dev-extra-packages'."
+  (secure-hash 'sha256 (format "%S" deb-packaging-dev-extra-packages)))
+
+(defun deb-packaging-dev--provision-script (name distro pkg-dir mount pkg
+                                                control-fp langs-fp tools-fp
+                                                force profiles)
   "Build the /bin/sh provision script for container NAME.
-Creates from DISTRO if missing, bind-mounts PKG-DIR at MOUNT, and installs
-tooling + build-deps unless FINGERPRINT matches the stored marker.
-FORCE re-provisions regardless.  PROFILES is the list of selected
-language profile entries."
+Creates from DISTRO if missing, bind-mounts PKG-DIR at MOUNT.
+Provisioning is split into three independent layers, each with its own
+marker: build-deps (CONTROL-FP), language servers (LANGS-FP), and extra
+dev tools (TOOLS-FP).  Only the layer whose fingerprint changed re-runs.
+FORCE re-provisions all layers regardless."
   (let ((qname (shell-quote-argument name))
         (qpkg-dir (shell-quote-argument pkg-dir))
         (qmount (shell-quote-argument mount))
@@ -177,31 +235,24 @@ language profile entries."
                             (mapcar #'deb-packaging-dev--profile-apt profiles)))
         (profile-setups (delq nil
                               (mapcar #'deb-packaging-dev--profile-setup profiles)))
-        (device (format "work-%s" pkg))
-        (marker "/root/.deb-packaging-dev-provisioned"))
+        (device (format "work-%s" pkg)))
     (string-join
      (append
       (list
        "set -e"
-       ;; Create on first use; map container root to host user for ownership.
        (format "if ! lxc info %s >/dev/null 2>&1; then" qname)
        (format "  lxc launch %s %s" (shell-quote-argument image) qname)
        (format "  lxc config set %s raw.idmap \"both %s 0\"" qname uid)
        (format "  lxc restart %s" qname)
        "fi"
        (format "lxc start %s >/dev/null 2>&1 || true" qname)
-       ;; Wait for the container agent.
        "i=0"
        "while [ $i -lt 90 ]; do"
        (format "  lxc exec %s -- true >/dev/null 2>&1 && break" qname)
        "  sleep 1; i=$((i+1))"
        "done"
-       ;; Cloud-init must finish so the archive is reachable.
        (format "lxc exec %s -- cloud-init status --wait >/dev/null 2>&1 || true"
                qname)
-       ;; Point the bind mount at the current package.  Remove+add on a
-       ;; running container usually applies live; if add fails, restart
-       ;; the container and retry so a stale device state doesn't block.
        (format "lxc config device remove %s %s >/dev/null 2>&1 || true"
                qname (shell-quote-argument device))
        (format "if ! lxc config device add %s %s disk source=%s path=%s 2>/dev/null; then"
@@ -210,27 +261,49 @@ language profile entries."
        (format "  lxc config device add %s %s disk source=%s path=%s"
                qname (shell-quote-argument device) qpkg-dir qmount)
        "fi"
-       ;; Skip install when the fingerprint matches, unless forced.
-       (format "FP=%s" (shell-quote-argument fingerprint))
-       (format "FORCE=%s" (if force "1" ""))
-       (format "MARKER=%s" (shell-quote-argument marker))
-       "if [ -z \"$FORCE\" ] && [ -f \"$MARKER\" ] && [ \"$(cat \"$MARKER\")\" = \"$FP\" ]; then"
-       "  echo \"Already provisioned (fingerprint matches), skipping install\""
-       "else"
-       "  if [ -n \"$FORCE\" ]; then echo \"Force re-provisioning\"; else echo \"Provisioning (fingerprint changed or first run)\"; fi"
-       ;; Layer 1: core build helpers (mandatory).
+       (format "FORCE=%s" (if force "1" "")))
+      ;; Core helpers: install if missing (no marker, these are static).
+      (list
+       (format "if ! lxc exec %s -- dpkg -s devscripts >/dev/null 2>&1; then"
+               qname)
+       "  echo 'Installing core build helpers...'"
        (format "  lxc exec %s -- sh -c %s"
                qname
                (shell-quote-argument
                 "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y --no-install-recommends devscripts equivs"))
-       ;; Layer 2a: language server apt packages (best-effort).
+       "fi")
+      ;; Build-deps layer: marker = control fingerprint.
+      (list
+       (format "FP_CONTROL=%s" (shell-quote-argument control-fp))
+       "MARKER_CONTROL=/root/.deb-dev-marker-control"
+       "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_CONTROL\" ] && [ \"$(cat \"$MARKER_CONTROL\")\" = \"$FP_CONTROL\" ]; then"
+       "  echo 'Build-deps up to date, skipping mk-build-deps'"
+       "else"
+       "  echo 'Installing build-deps from debian/control...'"
+       (format "  lxc exec %s -- sh -c %s || { echo 'mk-build-deps failed: build-deps could not be satisfied' >&2; exit 1; }"
+               qname
+               (shell-quote-argument
+                (format "cd %s && DEBIAN_FRONTEND=noninteractive mk-build-deps -i -t \"apt-get -y --no-install-recommends\" debian/control" mount)))
+       (format "  lxc exec %s -- sh -c %s"
+               qname
+               (shell-quote-argument
+                (format "echo %s > /root/.deb-dev-marker-control" control-fp)))
+       "fi")
+      ;; Language servers layer: marker = langs fingerprint.
+      (list
+       (format "FP_LANGS=%s" (shell-quote-argument langs-fp))
+       "MARKER_LANGS=/root/.deb-dev-marker-langs"
+       "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_LANGS\" ] && [ \"$(cat \"$MARKER_LANGS\")\" = \"$FP_LANGS\" ]; then"
+       "  echo 'Language servers up to date, skipping'"
+       "else"
        (when profile-apts
-         (format "  lxc exec %s -- sh -c %s || true"
-                 qname
-                 (shell-quote-argument
-                  (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some language servers unavailable on this release)'"
-                          (mapconcat #'shell-quote-argument profile-apts " ")))))
-       ;; Layer 2b: language server setup commands (non-apt servers).
+         (list
+          "  echo 'Installing language servers...'"
+          (format "  lxc exec %s -- sh -c %s || true"
+                  qname
+                  (shell-quote-argument
+                   (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some unavailable on this release)'"
+                           (mapconcat #'shell-quote-argument profile-apts " "))))))
        (mapcar
         (lambda (cmd)
           (format "  lxc exec %s -- sh -c %s"
@@ -238,28 +311,33 @@ language profile entries."
                   (shell-quote-argument
                    (format "export DEBIAN_FRONTEND=noninteractive; %s" cmd))))
         profile-setups)
-       ;; Layer 3: extra dev tools (best-effort).
-       (when (and deb-packaging-dev-extra-packages
-                  (not (string-empty-p extra-apt)))
-         (format "  lxc exec %s -- sh -c %s || true"
-                 qname
-                 (shell-quote-argument
-                  (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some dev tools unavailable on this release)'"
-                          extra-apt))))
-       ;; Layer 4: build-deps from debian/control (mandatory).  No -r: keep
-       ;; the package installed so re-provisions are no-ops.
-       (format "  lxc exec %s -- sh -c %s || { echo 'mk-build-deps failed: build-deps could not be satisfied' >&2; exit 1; }"
-               qname
-               (shell-quote-argument
-                (format "cd %s && DEBIAN_FRONTEND=noninteractive mk-build-deps -i -t \"apt-get -y --no-install-recommends\" debian/control" mount))))
-      (list
-       ;; Write the fingerprint (hex) to the marker path.
        (format "  lxc exec %s -- sh -c %s"
                qname
                (shell-quote-argument
-                (format "echo %s > %s" fingerprint marker)))
-       "fi"
-       (format "echo READY: /lxc:%s:%s" name mount)))
+                (format "echo %s > /root/.deb-dev-marker-langs" langs-fp)))
+       "fi")
+      ;; Extra dev tools layer: marker = tools fingerprint.
+      (list
+       (format "FP_TOOLS=%s" (shell-quote-argument tools-fp))
+       "MARKER_TOOLS=/root/.deb-dev-marker-tools"
+       "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_TOOLS\" ] && [ \"$(cat \"$MARKER_TOOLS\")\" = \"$FP_TOOLS\" ]; then"
+       "  echo 'Dev tools up to date, skipping'"
+       "else"
+       (when (and deb-packaging-dev-extra-packages
+                  (not (string-empty-p extra-apt)))
+         (list
+          "  echo 'Installing dev tools...'"
+          (format "  lxc exec %s -- sh -c %s || true"
+                  qname
+                  (shell-quote-argument
+                   (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some unavailable on this release)'"
+                           extra-apt)))))
+       (format "  lxc exec %s -- sh -c %s"
+               qname
+               (shell-quote-argument
+                (format "echo %s > /root/.deb-dev-marker-tools" tools-fp)))
+       "fi")
+      (list (format "echo READY: /lxc:%s:%s" name mount)))
      "\n")))
 
 (defun deb-packaging-dev--open-on-success (proc tramp-path)
@@ -381,6 +459,25 @@ Starts it if stopped."
   (interactive)
   (dired (deb-packaging-dev--tramp-path-for-current)))
 
+(defun deb-packaging-dev-exec ()
+  "Open an interactive shell in the dev container.
+Runs `lxc exec NAME -- bash -l' in a comint buffer.  The container must
+already exist; starts it if stopped."
+  (interactive)
+  (let* ((pkg-dir (or (deb-packaging--find-package-dir)
+                      (user-error "Not in a Debian package directory")))
+         (info (deb-packaging--parse-changelog pkg-dir))
+         (pkg (nth 0 info))
+         (distro (deb-packaging--effective-distro))
+         (name (deb-packaging-dev--container-name pkg distro)))
+    (unless (zerop (call-process "lxc" nil nil nil "info" name))
+      (user-error "Container %s doesn't exist. Run `deb-packaging-dev-shell' first."
+                  name))
+    (call-process "lxc" nil nil nil "start" name)
+    (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
+                            "exec" name "--" "bash" "-l")))
+      (switch-to-buffer buf))))
+
 (defun deb-packaging-dev-project ()
   "Open the dev container's project for file navigation.
 Uses projectile if loaded, otherwise the built-in `project' package.
@@ -443,12 +540,11 @@ and :fingerprint (stored provision marker, or nil).  Returns nil if
 Creates or reuses a container, bind-mounts the package dir, installs
 tooling and build-deps, then opens dired at the container's TRAMP path.
 
-When provisioning is needed (first run, changed debian/control, or changed
-language selection), prompts for language servers via
-`completing-read-multiple' over `deb-packaging-dev-language-profiles'.
-
-Provisioning is idempotent: skips the install block when the fingerprint
-matches.  C-u (FORCE) re-provisions and re-prompts regardless."
+Prompts for language servers when the langs layer needs provisioning
+(first run or changed selection).  Pre-selects from the last selection
+for this package.  Provisioning is split into independent layers
+(build-deps, languages, dev tools); only the layer whose fingerprint
+changed re-runs.  C-u (FORCE) re-provisions all layers."
   (interactive "P")
   (deb-packaging-dev--ensure-tramp-method)
   (let* ((pkg-dir (or (deb-packaging--find-package-dir)
@@ -458,16 +554,46 @@ matches.  C-u (FORCE) re-provisions and re-prompts regardless."
          (distro (deb-packaging--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg))
-         (profiles (deb-packaging-dev--select-profiles))
-         (fingerprint (deb-packaging-dev--provision-fingerprint pkg-dir profiles))
-         (script (deb-packaging-dev--provision-script
-                  name distro pkg-dir mount pkg fingerprint force profiles))
-         (buf (deb-packaging--run-command
-               "dev-shell" (list "sh" "-c" script) pkg-dir 'dev-shell))
-         (tramp-path (format "/lxc:%s:%s" name mount)))
-    (when-let ((proc (get-buffer-process buf)))
-      (deb-packaging-dev--open-on-success proc tramp-path))
-    buf))
+         (control-fp (deb-packaging-dev--control-fingerprint pkg-dir))
+         (tools-fp (deb-packaging-dev--tools-fingerprint))
+         ;; Only prompt for languages if the langs layer will actually run.
+         ;; Check the stored marker vs the new langs fingerprint.
+         (langs-fp (secure-hash 'sha256 ""))
+         (profiles nil))
+    ;; Compute langs fingerprint and decide whether to prompt.
+    ;; We need profiles for the fingerprint, but we don't want to prompt
+    ;; if the marker matches.  So: compute a tentative fingerprint from
+    ;; the cache, check the marker, and only prompt if it mismatches.
+    (let* ((cached-keys (deb-packaging-dev--read-langs-cache pkg distro))
+           (cached-profiles (delq nil
+                                  (mapcar #'deb-packaging-dev--profile-lookup
+                                          cached-keys)))
+           (cached-fp (when cached-profiles
+                        (deb-packaging-dev--langs-fingerprint cached-profiles)))
+           (marker-val (when (zerop (call-process "lxc" nil nil nil "info" name))
+                         (with-output-to-string
+                           (with-current-buffer standard-output
+                             (ignore-errors
+                              (call-process "lxc" nil t nil "exec" name "--"
+                                            "cat" "/root/.deb-dev-marker-langs"))))))
+           (marker-val (string-trim (or marker-val "")))
+           (need-prompt (or force
+                            (null cached-fp)
+                            (not (string= marker-val cached-fp)))))
+      (if need-prompt
+          (setq profiles (deb-packaging-dev--select-profiles pkg distro)
+                langs-fp (deb-packaging-dev--langs-fingerprint profiles))
+        (setq profiles cached-profiles
+              langs-fp cached-fp)))
+    (let* ((script (deb-packaging-dev--provision-script
+                    name distro pkg-dir mount pkg
+                    control-fp langs-fp tools-fp force profiles))
+           (buf (deb-packaging--run-command
+                 "dev-shell" (list "sh" "-c" script) pkg-dir 'dev-shell))
+           (tramp-path (format "/lxc:%s:%s" name mount)))
+      (when-let ((proc (get-buffer-process buf)))
+        (deb-packaging-dev--open-on-success proc tramp-path))
+      buf)))
 
 ;;;###autoload
 (defun deb-packaging-dev-destroy (&optional arg)

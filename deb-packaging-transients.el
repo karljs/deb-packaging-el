@@ -59,6 +59,7 @@
 (declare-function deb-packaging-dev-destroy "deb-packaging-dev")
 (declare-function deb-packaging-dev-open "deb-packaging-dev")
 (declare-function deb-packaging-dev-project "deb-packaging-dev")
+(declare-function deb-packaging-dev-exec "deb-packaging-dev")
 
 ;;; ── 1. Source build (dpkg-buildpackage) ─────────────────────────────────────
 
@@ -273,6 +274,7 @@ lintian flag never reaches ubuntu-lint and vice versa."
    ("e" "Dev shell (C-u=reprovision)" deb-packaging-dev-shell)
    ("o" "Open existing container (dired)" deb-packaging-dev-open)
    ("p" "Open project (find file)" deb-packaging-dev-project)
+   ("x" "Shell into container" deb-packaging-dev-exec)
    ("B" "Generate compile_commands.json" deb-packaging-dev-compile-db)
    ("E" "Start eglot" deb-packaging-dev-eglot)]
   ["Manage"
