@@ -8,11 +8,8 @@
 ;;; Commentary:
 
 ;; Manage schroots, LXD containers, QEMU images, and Launchpad PPAs.
-;;
-;; Each infrastructure type has its own dedicated `tabulated-list-mode'
-;; buffer where entries are shown as sortable, aligned columns.  Each
-;; buffer gives a consistent set of keys (c/d/g/q) plus a few
-;; type-specific actions.
+;; Each type has its own `tabulated-list-mode' buffer with sortable
+;; columns and a common key set (c/d/g/q).
 
 ;;; Code:
 
@@ -27,9 +24,8 @@
 (defun deb-packaging-infra--format-cell (value width &optional align face help-echo)
   "Format VALUE as a table cell of display WIDTH.
 ALIGN is `left' or `right' (default `left').  FACE is applied to the
-visible text.  If HELP-ECHO is non-nil and VALUE must be truncated,
-attach HELP-ECHO as `help-echo'.  If HELP-ECHO is t, use VALUE itself
-as the tooltip."
+visible text.  If HELP-ECHO is non-nil and VALUE is truncated, use it
+as `help-echo'; t means use VALUE."
   (let* ((str (if value (format "%s" value) ""))
          (sw (string-width str))
          (cell (if (eq align 'right)
@@ -84,7 +80,7 @@ Each plist has keys: :name, :config-file, :description, :directory."
     (nreverse result))))
 
 (defun deb-packaging-infra-create-schroot ()
-  "Create a new schroot using mk-sbuild."
+  "Create a schroot with mk-sbuild."
   (interactive)
   (let* ((distro (read-string "Distro: " deb-packaging-target-distro))
          (arch (completing-read "Arch: " '("amd64" "i386" "arm64" "armhf") nil t "amd64"))
@@ -93,9 +89,8 @@ Each plist has keys: :name, :config-file, :description, :directory."
       (compile cmd))))
 
 (defun deb-packaging-infra-update-schroot (&optional name)
-  "Update a schroot using sbuild-update.
-Acts on the schroot at point when in a schroots list buffer; otherwise
-prompts for one."
+  "Update a schroot with sbuild-update.
+Use schroot at point, or prompt."
   (interactive
    (list (or (plist-get (tabulated-list-get-id) :name)
              (let* ((schroots (deb-packaging-infra--list-schroots))
@@ -110,8 +105,7 @@ prompts for one."
 
 (defun deb-packaging-infra-delete-schroot (&optional name)
   "Delete a schroot (config and directory).
-Acts on the schroot at point when in a schroots list buffer; otherwise
-prompts for one."
+Use schroot at point, or prompt."
   (interactive
    (list (or (plist-get (tabulated-list-get-id) :name)
              (let* ((schroots (deb-packaging-infra--list-schroots))
@@ -187,12 +181,11 @@ prompts for one."
       (deb-packaging-infra-refresh-schroots))
     (switch-to-buffer buf)))
 
-;;; LXD Management (unified: autopkgtest images + dev containers)
+;;; LXD Management (autopkgtest images and dev containers)
 
 (defun deb-packaging-infra--list-lxd-images ()
-  "Return list of autopkgtest LXD image plists.
-Each plist has keys: :alias, :fingerprint, :description, :arch, :size.
-Parses `lxc image list' CSV output."
+  "Return autopkgtest LXD image plists from `lxc image list'.
+Keys: :alias, :fingerprint, :description, :arch, :size."
   (let ((output (shell-command-to-string "lxc image list --format=csv 2>/dev/null")))
     (when (and output (not (string-empty-p output)))
       (let (result)
@@ -210,10 +203,8 @@ Parses `lxc image list' CSV output."
         (nreverse result)))))
 
 (defun deb-packaging-infra--list-lxd-all ()
-  "Return a combined list of LXD images and dev containers as plists.
-Each plist has :name, :type (`image' or `container'), :status, and
-type-specific keys.  Images have :arch and :size; containers have
-:package and :release."
+  "Return LXD images and dev containers as plists.
+Each plist has :name, :type, :status, and type-specific keys."
   (append
    (mapcar (lambda (img)
              (list :name (plist-get img :alias)
@@ -236,7 +227,7 @@ type-specific keys.  Images have :arch and :size; containers have
            (deb-packaging-dev--list-containers))))
 
 (defun deb-packaging-infra-create-lxd ()
-  "Create an LXD image for autopkgtest."
+  "Create an autopkgtest LXD image."
   (interactive)
   (let* ((distro (read-string "Distro: " deb-packaging-target-distro))
          (arch (completing-read "Arch: " '("amd64" "arm64") nil t "amd64"))
@@ -245,7 +236,7 @@ type-specific keys.  Images have :arch and :size; containers have
       (compile cmd))))
 
 (defun deb-packaging-infra-delete-lxd-entry (&optional entry)
-  "Delete the LXD image or container at point (or prompted).
+  "Delete the LXD image or container at point.
 ENTRY is a plist from `deb-packaging-infra--list-lxd-all'."
   (interactive
    (list (or (tabulated-list-get-id)
@@ -268,8 +259,8 @@ ENTRY is a plist from `deb-packaging-infra--list-lxd-all'."
          (format "lxc delete --force %s" (shell-quote-argument name)))))))
 
 (defun deb-packaging-infra-visit-lxd-entry (&optional entry)
-  "Visit the LXD container at point (opens dired at its TRAMP path).
-Only works for containers; images are a no-op."
+  "Open dired for the LXD container at point.
+Images are ignored."
   (interactive
    (list (or (tabulated-list-get-id)
              (let* ((all (deb-packaging-infra--list-lxd-all))
@@ -295,7 +286,7 @@ Only works for containers; images are a no-op."
 
 (defun deb-packaging-infra-stop-lxd-entry (&optional entry)
   "Stop the LXD container at point.
-No-op for images or already-stopped containers."
+No-op for images."
   (interactive
    (list (or (tabulated-list-get-id)
              (let* ((all (deb-packaging-infra--list-lxd-all))
@@ -319,7 +310,7 @@ No-op for images or already-stopped containers."
 
 (defun deb-packaging-infra-start-lxd-entry (&optional entry)
   "Start the LXD container at point.
-No-op for images or already-running containers."
+No-op for images."
   (interactive
    (list (or (tabulated-list-get-id)
              (let* ((all (deb-packaging-infra--list-lxd-all))
@@ -343,7 +334,7 @@ No-op for images or already-running containers."
 
 (defun deb-packaging-infra-shell-lxd-entry (&optional entry)
   "Open a shell in the LXD container at point.
-Uses `lxc exec NAME -- bash -l' in a comint buffer."
+Runs `lxc exec NAME -- bash -l' in a comint buffer."
   (interactive
    (list (or (tabulated-list-get-id)
              (let* ((all (deb-packaging-infra--list-lxd-all))
@@ -369,7 +360,7 @@ Uses `lxc exec NAME -- bash -l' in a comint buffer."
 ;;; LXD list buffer
 
 (defvar-keymap deb-packaging-infra-lxd-mode-map
-  :doc "Keymap for the unified LXD list buffer."
+  :doc "Keymap for the LXD list buffer."
   :parent tabulated-list-mode-map
   "d" #'deb-packaging-infra-delete-lxd-entry
   "s" #'deb-packaging-infra-stop-lxd-entry
@@ -381,7 +372,7 @@ Uses `lxc exec NAME -- bash -l' in a comint buffer."
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-lxd-mode tabulated-list-mode "Infra-LXD"
-  "Major mode for listing and managing LXD images and dev containers."
+  "Major mode for listing LXD images and dev containers."
   (setq tabulated-list-format
         [("Name" 35 t)
          ("Type" 12 t)
@@ -391,7 +382,7 @@ Uses `lxc exec NAME -- bash -l' in a comint buffer."
   (setq tabulated-list-sort-key nil))
 
 (defun deb-packaging-infra-refresh-lxd ()
-  "Refresh the unified LXD list buffer."
+  "Refresh the LXD list buffer."
   (interactive)
   (when (derived-mode-p 'deb-packaging-infra-lxd-mode)
     (setq tabulated-list-entries
@@ -461,8 +452,7 @@ Each plist has keys: :name, :path, :size."
 
 (defun deb-packaging-infra-delete-qemu (&optional name)
   "Delete a QEMU autopkgtest image.
-Acts on the image at point when in a QEMU images list buffer; otherwise
-prompts for one."
+Use image at point, or prompt."
   (interactive
    (list (or (plist-get (tabulated-list-get-id) :name)
              (let* ((images (deb-packaging-infra--list-qemu-images))
@@ -486,7 +476,7 @@ prompts for one."
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-qemu-images-mode tabulated-list-mode "Infra-QEMU"
-  "Major mode for listing and managing QEMU autopkgtest images."
+  "Major mode for listing QEMU autopkgtest images."
   (setq tabulated-list-format
         [("Name" 45 t)
          ("Size" 12 t :right-align t)
@@ -534,25 +524,22 @@ prompts for one."
 
 (defvar deb-packaging-infra-ppa-team-config-dir
   "~/.config/ppa-dev-tools/teams"
-  "Directory of per-team `ppa' config files (YAML).
-Each file has a `list' section with a team's `owner_name', e.g.:
-  list:
-    owner_name: gcc-llvm-toolchains
-We run `ppa list -C <file>' for each and merge with personal PPAs.
-Files must end in `.yml' or `.yaml'.  Absent dir means personal PPAs only.
-Set via `setq' in your init file.")
+  "Directory of per-team `ppa' config files.
+YAML files with a `list' section containing `owner_name'.  Used to run
+`ppa list -C <file>' and merge results with personal PPAs.  Files must
+end in `.yml' or `.yaml'.  Set in your init file.")
 
 (defun deb-packaging-infra--team-config-files ()
-  "Return list of per-team `ppa' config files.
-Files under `deb-packaging-infra-ppa-team-config-dir' ending in `.yml'
-or `.yaml'.  Returns nil if the directory is absent or empty."
+  "Return per-team `ppa' config files.
+Files in `deb-packaging-infra-ppa-team-config-dir' matching `.yml' or
+`.yaml'.  Nil if the directory is missing or empty."
   (let ((dir (expand-file-name deb-packaging-infra-ppa-team-config-dir)))
     (when (file-directory-p dir)
       (directory-files dir 'full "\\.ya?ml\\'"))))
 
 (defun deb-packaging-infra--parse-ppa-lines (output)
-  "Extract \"ppa:owner/name\" entries from `ppa' command OUTPUT.
-Returns a list of PPA address strings, in the order they appear."
+  "Extract \"ppa:owner/name\" entries from `ppa' OUTPUT.
+Return PPA address strings in order."
   (let (result)
     (dolist (line (split-string output "\n" t))
       (when (string-match "\\(ppa:[^ \t]+/[^ \t]+\\)" line)
@@ -560,11 +547,9 @@ Returns a list of PPA address strings, in the order they appear."
     (nreverse result)))
 
 (defun deb-packaging-infra--list-ppas ()
-  "Return list of PPA names for the user and configured teams.
-Each entry is a string of the form \"ppa:owner/name\".  Personal PPAs
-are listed first, followed by PPAs from each per-team config file in
-`deb-packaging-infra-ppa-team-config-dir'.  Failures for individual
-team configs are warned about and skipped."
+  "Return PPA names for the user and configured teams.
+Each entry is \"ppa:owner/name\".  Personal PPAs come first, then
+team-config PPAs.  Team config failures are warned and skipped."
   (let ((result (deb-packaging-infra--parse-ppa-lines
                  (shell-command-to-string "ppa list 2>/dev/null"))))
     (dolist (cfg (deb-packaging-infra--team-config-files))
@@ -578,17 +563,17 @@ team configs are warned about and skipped."
     (nreverse result)))
 
 (defun deb-packaging-infra--ppa-owner (ppa)
-  "Return the owner portion of PPA string PPA."
+  "Return the owner part of PPA string PPA."
   (when (string-match "\\`ppa:\\([^/]+\\)" ppa)
     (match-string 1 ppa)))
 
 (defun deb-packaging-infra--ppa-name (ppa)
-  "Return the name portion of PPA string PPA."
+  "Return the name part of PPA string PPA."
   (when (string-match "\\`ppa:[^/]+/\\(.+\\)" ppa)
     (match-string 1 ppa)))
 
 (defun deb-packaging-infra-create-ppa ()
-  "Create a new Launchpad PPA via `ppa create'."
+  "Create a Launchpad PPA via `ppa create'."
   (interactive)
   (let* ((name (read-string "PPA name to create: "))
          (cmd (format "ppa create %s" (shell-quote-argument name))))
@@ -598,7 +583,7 @@ team configs are warned about and skipped."
 
 (defun deb-packaging-infra-delete-ppa (&optional name)
   "Delete a Launchpad PPA via `ppa destroy'.
-Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
+Use PPA at point, or prompt."
   (interactive
    (list (or (tabulated-list-get-id)
              (let ((ppas (deb-packaging-infra--list-ppas)))
@@ -608,9 +593,8 @@ Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
     (compile (format "ppa destroy %s" (shell-quote-argument name)))))
 
 (defun deb-packaging-infra-set-ppa-config (&optional name)
-  "Apply configuration to a Launchpad PPA via `ppa set'.
-Acts on the PPA at point when in a PPAs list buffer; otherwise prompts.
-Prompts for an optional display name and description."
+  "Configure a Launchpad PPA via `ppa set'.
+Use PPA at point, or prompt.  Prompts for display name and description."
   (interactive
    (list (or (tabulated-list-get-id)
              (let ((ppas (deb-packaging-infra--list-ppas)))
@@ -629,8 +613,8 @@ Prompts for an optional display name and description."
           (compile cmd))))))
 
 (defun deb-packaging-infra-show-ppa (&optional name)
-  "Show configuration info for a Launchpad PPA via `ppa show'.
-Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
+  "Show Launchpad PPA info via `ppa show'.
+Use PPA at point, or prompt."
   (interactive
    (list (or (tabulated-list-get-id)
              (let ((ppas (deb-packaging-infra--list-ppas)))
@@ -651,7 +635,7 @@ Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-ppas-mode tabulated-list-mode "Infra-PPAs"
-  "Major mode for listing and managing Launchpad PPAs."
+  "Major mode for listing Launchpad PPAs."
   (setq tabulated-list-format
         [("Owner" 25 t)
          ("Name" 40 t)])
@@ -659,7 +643,7 @@ Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
   (setq tabulated-list-sort-key nil))
 
 (defun deb-packaging-infra--make-ppa-entry (ppa)
-  "Build a tabulated-list entry for PPA address string PPA."
+  "Build a tabulated-list entry for PPA address PPA."
   (list ppa
         (vector
          (deb-packaging-infra--format-cell
@@ -669,10 +653,10 @@ Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
           (deb-packaging-infra--ppa-name ppa) 40 nil nil ppa))))
 
 (defvar-local deb-packaging-infra--ppa-processes nil
-  "List of in-flight async `ppa list' processes for the PPAs buffer.")
+  "In-flight async `ppa list' processes for the PPAs buffer.")
 
 (defun deb-packaging-infra--cancel-ppa-processes ()
-  "Cancel any in-flight async PPA listing processes."
+  "Cancel in-flight async PPA listing processes."
   (dolist (proc deb-packaging-infra--ppa-processes)
     (when (process-live-p proc)
       (delete-process proc)))
@@ -686,9 +670,9 @@ Acts on the PPA at point when in a PPAs list buffer; otherwise prompts."
                   (list (deb-packaging-infra--make-ppa-entry ppa))))))
 
 (defun deb-packaging-infra--finalize-ppas (buf)
-  "Reprint the PPAs table in BUF and maybe show empty message.
-Clears any loading message before printing.  When all processes have
-finished and no PPAs were found, shows an empty-state message."
+  "Reprint the PPAs table in BUF.
+Show an empty-state message if all processes finished and no PPAs were
+found."
   (when (buffer-live-p buf)
     (with-current-buffer buf
       (let ((inhibit-read-only t))
@@ -704,8 +688,7 @@ finished and no PPAs were found, shows an empty-state message."
 
 (defun deb-packaging-infra--ppa-list-sentinel (buf temp-buf)
   "Return a sentinel for an async `ppa list' process.
-BUF is the PPAs list buffer to update.  TEMP-BUF holds the process
-output."
+BUF is the PPAs list buffer; TEMP-BUF holds output."
   (lambda (proc _event)
     (let ((status (process-status proc)))
       (when (memq status '(exit failed))
@@ -725,8 +708,8 @@ output."
 
 (defun deb-packaging-infra--show-ppas-loading-message ()
   "Show a loading message in the PPAs list buffer.
-Clears the table and inserts a transient message.  Used while async
-`ppa list' processes are in flight."
+Clears the table and inserts a transient message while async `ppa list'
+processes run."
   (setq tabulated-list-entries nil)
   (tabulated-list-init-header)
   (tabulated-list-print t)
@@ -736,9 +719,8 @@ Clears the table and inserts a transient message.  Used while async
 
 (defun deb-packaging-infra-refresh-ppas ()
   "Refresh the PPAs list buffer asynchronously.
-All `ppa list' invocations (personal and per-team) are launched as
-background processes.  A \"Loading\" message is shown until results
-arrive, so Emacs does not block on Launchpad queries."
+Launches all `ppa list' invocations as background processes and shows a
+loading message so Emacs does not block."
   (interactive)
   (when (derived-mode-p 'deb-packaging-infra-ppas-mode)
     (deb-packaging-infra--cancel-ppa-processes)

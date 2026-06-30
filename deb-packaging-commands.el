@@ -11,11 +11,9 @@
 
 ;; Build and execute commands for Debian packaging tools.
 ;;
-;; Each public runner function accepts an ARGS list as produced by
-;; (transient-args 'PREFIX), extracts what it needs via
-;; `transient-arg-value', and passes the remainder straight through to
-;; the underlying tool.  There is no global preset/mode system; all
-;; per-invocation flags come from the calling transient.
+;; Each public runner takes an ARGS list from (transient-args 'PREFIX),
+;; pulls values with `transient-arg-value', and passes the rest to the
+;; tool.  No global presets; flags come from the calling transient.
 
 ;;; Code:
 
@@ -39,15 +37,14 @@
 ;;; Run-outcome tracking
 
 (defvar deb-packaging--run-history nil
-  "Alist mapping a command KEY symbol to its most recent run record.
-Each record is a plist: :status (`running', `success' or `failure'),
-:time (HH:MM:SS string), :buffer (comint buffer name), and optionally
-:summary (a plist of parsed findings for lintian runs, with keys
-:error, :warning, :info).  Session-only.")
+  "Alist mapping run KEY to its most recent record.
+Record is a plist: :status (`running', `success' or `failure'),
+:time (HH:MM:SS string), :buffer (comint buffer name), and optional
+:summary (lint findings with :error/:warning/:info keys).  Session-only.")
 
 (defun deb-packaging--record-run (key status buf-name &optional summary)
   "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY.
-SUMMARY is a plist (e.g. lintian findings) stored verbatim under :summary."
+SUMMARY is a plist of findings stored under :summary."
   (when key
     (let ((existing (alist-get key deb-packaging--run-history)))
       (setf (alist-get key deb-packaging--run-history)
@@ -71,9 +68,9 @@ SUMMARY is a plist (e.g. lintian findings) stored verbatim under :summary."
     (deb-packaging-status--maybe-refresh)))
 
 (defun deb-packaging--parse-lint-summary (buf-name)
-  "Parse lintian findings counts from comint buffer BUF-NAME.
-Returns a plist (:error N :warning N :info N) by counting lines
-matching lintian severity prefixes E:/W:/I: in the buffer output."
+  "Parse lintian counts from comint buffer BUF-NAME.
+Return plist (:error N :warning N :info N) by counting lines matching
+E:/W:/I: prefixes."
   (when (buffer-live-p (get-buffer buf-name))
     (with-current-buffer buf-name
       (let ((errors 0) (warnings 0) (infos 0))
@@ -87,15 +84,15 @@ matching lintian severity prefixes E:/W:/I: in the buffer output."
         (list :error errors :warning warnings :info infos)))))
 
 (defun deb-packaging--parse-ubuntu-lint-summary (buf-name)
-  "Parse ubuntu-lint result counts from comint buffer BUF-NAME.
-Returns a plist (:ok N :skip N :warn N :error N :fail N) by reading the
-final `Summary: ran N lint checks (...)' line that ubuntu-lint prints."
+  "Parse ubuntu-lint counts from comint buffer BUF-NAME.
+Return plist (:ok N :skip N :warn N :error N :fail N) from the final
+`Summary: ran N lint checks (...)' line."
   (when (buffer-live-p (get-buffer buf-name))
     (with-current-buffer buf-name
       (save-excursion
         (goto-char (point-min))
-        ;; The summary line lists every level with its count, e.g.:
-        ;;   Summary: ran 12 lint checks (OK: 12, SKIP: 0, WARN: 0, ERROR: 0, FAIL: 0)
+        ;; Summary line lists counts, e.g.:
+        ;;   Summary: ran 12 lint checks (OK: 12, SKIP: 0, ...)
         (when (re-search-forward
                "^Summary: ran [0-9]+ lint checks (\\([^)]*\\))" nil t)
           (let ((stats (make-vector 5 0))
@@ -115,19 +112,17 @@ final `Summary: ran N lint checks (...)' line that ubuntu-lint prints."
                   :fail (aref stats 4))))))))
 
 (defun deb-packaging--run-summary-parser (key)
-  "Return the summary parser function for run KEY, or nil.
-Each lint-style tool carries its own summary format; the sentinel uses
-this to pick the right parser instead of hardcoding the key set."
+  "Return the summary parser for run KEY, or nil.
+Each lint-style tool has its own format; the sentinel uses this to pick
+the parser."
   (pcase key
     ((or 'lintian-source 'lintian-binary) #'deb-packaging--parse-lint-summary)
     ('ubuntu-lint #'deb-packaging--parse-ubuntu-lint-summary)
     (_ nil)))
 
 (defun deb-packaging--attach-run-sentinel (proc key buf-name)
-  "Attach a sentinel to PROC that records the run outcome for KEY.
-For lint-style run keys, parses the comint buffer for findings counts via
-`deb-packaging--run-summary-parser' and stores them as a :summary plist
-on the run record."
+  "Attach a sentinel to PROC that records the outcome for KEY.
+For lint-style keys, parse findings counts and store them as :summary."
   (let ((old (process-sentinel proc)))
     (set-process-sentinel
       proc
@@ -146,18 +141,16 @@ on the run record."
 
 (defun deb-packaging--run-command (name args &optional dir key)
   "Run command in a comint buffer.
-NAME is used to form the buffer name; ARGS is the full command list.
-DIR sets the comint process's `default-directory' (working directory);
-it is scoped to buffer creation only and never mutates the caller's
-`default-directory'.  KEY (a symbol) enables run tracking."
+NAME forms the buffer name; ARGS is the full command list.
+DIR sets the process's working directory without mutating the caller's.
+KEY (a symbol) enables run tracking."
   (let* ((timestamp (format-time-string "%H:%M:%S"))
          (buf-name (format "*deb-%s-%s*" name timestamp))
          (cmd (mapconcat #'shell-quote-argument args " ")))
-    ;; Scope the cwd binding to comint creation only: `make-comint-in-buffer'
-    ;; starts the process in the current buffer's `default-directory', and we
-    ;; must not let it leak into the run-tracking/refresh below — otherwise, when
-    ;; called from the status buffer with DIR=parent-dir, the synchronous status
-    ;; refresh would scan from parent-dir and report "not in a package".
+    ;; Bind `default-directory' only while creating the comint buffer.
+    ;; `make-comint-in-buffer' uses the current buffer's default-directory,
+    ;; so a leaked binding would make the status refresh scan from parent-dir
+    ;; and report "not in a package".
     (if dir
         (let ((default-directory dir))
           (make-comint-in-buffer name buf-name shell-file-name nil
@@ -196,18 +189,16 @@ it is scoped to buffer creation only and never mutates the caller's
 
 (defconst deb-packaging--lintian-arg-prefixes
   '("-i" "-I" "-P" "--pedantic" "--tag-display-limit=" "--color=")
-  "Transient arg prefixes owned by lintian.
-Used by `deb-packaging--filter-args' to keep lintian's command line
-free of ubuntu-lint flags when both are dispatched from the unified
-lint transient.  Entries ending in `=' match by string prefix; bare
-entries match exactly.")
+  "Lintian arg prefixes.
+Used by `deb-packaging--filter-args' to keep lintian's command line clean
+when both tools share the lint transient.  Entries ending in `=' match by
+prefix; bare entries match exactly.")
 
 (defconst deb-packaging--ubuntu-lint-arg-prefixes
   '("--verbose" "--json" "--context=" "--all=")
-  "Transient arg prefixes owned by ubuntu-lint.
+  "ubuntu-lint arg prefixes.
 Used by `deb-packaging--filter-args' to keep ubuntu-lint's command line
-free of lintian flags when both are dispatched from the unified lint
-transient.")
+clean when both tools share the lint transient.")
 
 (defun deb-packaging--filter-args (args prefixes)
   "Return the members of ARGS matching any prefix in PREFIXES.
@@ -224,12 +215,10 @@ a bare entry matches exactly (e.g. \"-i\")."
    args))
 
 (defun deb-packaging--run-lintian (targets args &optional key)
-  "Run lintian on TARGETS (a list of file paths) with ARGS, under KEY.
-ARGS is filtered to lintian's own flags (see
-`deb-packaging--lintian-arg-prefixes') so ubuntu-lint flags set in the
-unified lint transient do not leak onto lintian's command line.  Lintian
-accepts multiple files on its command line, so TARGETS may contain a
-single .dsc, several .debs, or any mix."
+  "Run lintian on TARGETS (file paths) with ARGS, tracked as KEY.
+ARGS is filtered to lintian's own flags so ubuntu-lint flags do not leak
+onto lintian's command line.  TARGETS may contain one .dsc, several
+.debs, or a mix."
   (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
@@ -252,12 +241,12 @@ single .dsc, several .debs, or any mix."
                      (nth 0 info) (nth 1 info) parent-dir))
          (dsc (alist-get 'dsc artifacts)))
     (unless dsc
-      (user-error "No .dsc file found — run source build first"))
+      (user-error "No .dsc file found -- run source build first"))
     (deb-packaging--run-lintian (list dsc) (or args '()) 'lintian-source)))
 
 (defun deb-packaging--lintian-binary-artifacts ()
-  "Return the list of .deb files for the current package.
-Signals `user-error' when no .debs have been built."
+  "Return the .deb files for the current package.
+Signal `user-error' if none exist."
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
          (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
          (parent-dir (when pkg-dir
@@ -267,7 +256,7 @@ Signals `user-error' when no .debs have been built."
                        (nth 0 info) (nth 1 info) parent-dir)))
          (debs (alist-get 'debs artifacts)))
     (unless debs
-      (user-error "No .deb files found — run binary build first"))
+      (user-error "No .deb files found -- run binary build first"))
     debs))
 
 (defun deb-packaging-lintian-binary (&optional args)
@@ -277,9 +266,8 @@ Signals `user-error' when no .debs have been built."
     (deb-packaging--run-lintian debs (or args '()) 'lintian-binary)))
 
 (defun deb-packaging-lintian-binary-one (&optional args)
-  "Run lintian on a single .deb with ARGS, prompting for which one.
-Useful when iterating on one binary's lint findings without waiting for
-lintian to process every .deb in a multi-binary package."
+  "Run lintian on one .deb with ARGS, prompting for which.
+Useful for iterating on a single binary in multi-binary packages."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
   (let* ((debs (deb-packaging--lintian-binary-artifacts))
          (target (completing-read "Deb to lint: " debs nil t)))
@@ -288,14 +276,10 @@ lintian to process every .deb in a multi-binary package."
 ;;; ubuntu-lint
 
 (defun deb-packaging--ubuntu-lint-context-args (mode pkg-dir)
-  "Return the ubuntu-lint context flags for MODE rooted at PKG-DIR.
-MODE is one of `changes', `source-dir', or `changelog' (see the
-ubuntu-lint transient's --context= option).  The default `changes' mode
-passes --source-dir plus --changes-file when a source .changes is
-present, which enables the full set of checks (some require a changes
-file, others a changelog, and --source-dir supplies both).  The other
-modes pass only the named context source, useful for running a narrower
-check before a source build exists."
+  "Return ubuntu-lint context flags for MODE rooted at PKG-DIR.
+MODE is `changes', `source-dir', or `changelog'.  Default `changes' adds
+--source-dir and --changes-file when a source .changes exists.  Other
+modes pass only the named context."
   (pcase mode
     ("source-dir" (list "--source-dir" pkg-dir))
     ("changelog" (list "--changelog"
@@ -314,13 +298,10 @@ check before a source build exists."
 
 (defun deb-packaging-ubuntu-lint (&optional args)
   "Run ubuntu-lint with ARGS from the lint transient.
-ARGS is filtered to ubuntu-lint's own flags (see
-`deb-packaging--ubuntu-lint-arg-prefixes') so lintian flags set in the
-unified lint transient do not leak onto ubuntu-lint's command line.
-The `--context=MODE' meta-flag selects the context source (`changes' by
-default, or `source-dir' / `changelog'); the remaining flags are passed
-through to ubuntu-lint verbatim.  Run from the package directory, tracked
-under the `ubuntu-lint' run key."
+ARGS is filtered to ubuntu-lint's own flags so lintian flags do not leak.
+`--context=MODE' selects the context source (`changes' by default, or
+`source-dir' / `changelog'); remaining flags pass through.  Run from the
+package directory under the `ubuntu-lint' key."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
   (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
@@ -348,14 +329,13 @@ under the `ubuntu-lint' run key."
     ("proposed"
      . "deb http://archive.ubuntu.com/ubuntu/ %s-proposed main"))
   "Alist of short name to extra-repository string for sbuild.
-%s is replaced with the target distro at run time.  Offered as completion
-candidates in the binary-build transient's --extra-repository option.")
+%s is replaced with the target distro.  Used as completion candidates in
+the binary-build transient's --extra-repository option.")
 
 (defun deb-packaging--expand-extra-repo (value distro)
-  "Expand VALUE into a full extra-repository string for DISTRO.
+  "Expand VALUE into an extra-repository string for DISTRO.
 If VALUE matches a key in `deb-packaging-sbuild-variants', substitute the
-template; otherwise return VALUE unchanged so custom repository strings can
-be passed through directly."
+template; otherwise return VALUE unchanged for custom repos."
   (if-let ((template (cdr (assoc value deb-packaging-sbuild-variants))))
       (format template distro)
     value))
@@ -373,7 +353,7 @@ be passed through directly."
                          (nth 0 info) (nth 1 info) parent-dir)))
            (dsc-file (alist-get 'dsc artifacts)))
       (unless dsc-file
-        (user-error "No .dsc file found — run source build first"))
+        (user-error "No .dsc file found -- run source build first"))
       (let* ((effective-args (or args '()))
              (distro (or (transient-arg-value "--dist=" effective-args)
                          (deb-packaging--effective-distro)))
@@ -407,10 +387,8 @@ be passed through directly."
   '(("lxd"  . "autopkgtest/ubuntu/%s/amd64")
     ("qemu" . "/var/lib/adt-images/autopkgtest-%s-amd64.img"))
   "Alist of runner name to image path template.  %s is the target distro.
-For Debian, add entries like:
-  \(\"lxd\" . \"autopkgtest/debian/%s/amd64\")
-Adding a runner here also surfaces it in the test transient's --runner
-completion (see `deb-packaging--runner-choices').")
+For Debian, add entries like (lxd . autopkgtest/debian/%s/amd64).
+Also used for --runner completion.")
 
 (defvar deb-packaging-test-build-hints
   '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s")
@@ -431,9 +409,7 @@ source of truth for the test transient's --runner option."
 (defun deb-packaging--test-image-info (&optional runner distro)
   "Return a plist describing the test image for RUNNER and DISTRO.
 RUNNER defaults to \"lxd\", DISTRO to `deb-packaging--effective-distro'.
-The plist keys are :runner, :image (the expanded path/alias, or nil),
-and :exists (non-nil if the image is available locally, or nil when
-the runner or template is unknown)."
+Plist keys are :runner, :image, and :exists."
   (let* ((runner (or runner "lxd"))
          (distro (or distro (deb-packaging--effective-distro)))
          (template (cdr (assoc runner deb-packaging-test-runners)))
@@ -449,9 +425,8 @@ the runner or template is unknown)."
 
 (defun deb-packaging--test-image-build-hint (runner distro)
   "Return the command string to build a missing test image.
-RUNNER is the runner name (e.g. \"lxd\"), DISTRO is the target distro.
-Reads from `deb-packaging-test-build-hints'; returns nil if RUNNER
-is not registered."
+RUNNER is the runner name (e.g. \"lxd\"), DISTRO the target distro.
+Returns nil if RUNNER has no registered hint."
   (when-let ((template (cdr (assoc runner deb-packaging-test-build-hints))))
     (format template distro)))
 
@@ -468,7 +443,7 @@ is not registered."
                          (nth 0 info) (nth 1 info) parent-dir)))
            (debs (alist-get 'debs artifacts)))
       (unless debs
-        (user-error "No .deb files found — run binary build first"))
+        (user-error "No .deb files found -- run binary build first"))
       (let* ((effective-args (or args '()))
              (runner (or (transient-arg-value "--runner=" effective-args)
                          "lxd"))
@@ -489,7 +464,7 @@ is not registered."
                       (capitalize runner)
                       image
                       (or (deb-packaging--test-image-build-hint runner distro)
-                          "(unknown — add an entry to deb-packaging-test-build-hints)")))
+                          "(unknown -- add an entry to deb-packaging-test-build-hints)")))
         (deb-packaging--run-command
          "autopkgtest"
          (append (list "autopkgtest")
@@ -504,15 +479,15 @@ is not registered."
 
 (defun deb-packaging-dput-upload (&optional args)
   "Upload source .changes to a PPA with dput.
-ARGS is the argument list from `deb-packaging-upload-transient'.
-The PPA is mandatory; distro defaults to `deb-packaging-target-distro'."
+ARGS comes from `deb-packaging-upload-transient'.  PPA is mandatory;
+distro defaults to `deb-packaging-target-distro'."
   (interactive (list (transient-args 'deb-packaging-upload-transient)))
   (let* ((effective-args (or args '()))
          (ppa (transient-arg-value "--ppa=" effective-args))
          (distro (or (transient-arg-value "--dist=" effective-args)
                      (deb-packaging--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
-      (user-error "No PPA specified — set it with the -p option"))
+      (user-error "No PPA specified -- set it with the -p option"))
     (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
            (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
            (name (nth 0 info))
@@ -524,7 +499,7 @@ The PPA is mandatory; distro defaults to `deb-packaging-target-distro'."
                          name version parent-dir)))
            (changes (alist-get 'source-changes artifacts)))
       (unless changes
-        (user-error "No source .changes file found — run source build first"))
+        (user-error "No source .changes file found -- run source build first"))
       (let* ((changes-file (if (consp changes) (car changes) changes))
              (cmd-args (list "dput" ppa changes-file)))
         (deb-packaging--set-distro distro)
@@ -543,7 +518,7 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
          (distro (or (transient-arg-value "--dist=" effective-args)
                      (deb-packaging--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
-      (user-error "No PPA specified — set it with the -p option"))
+      (user-error "No PPA specified -- set it with the -p option"))
     (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
            (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
            (name (nth 0 info))
@@ -557,9 +532,9 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
 ;;; Clean artifacts
 
 (defun deb-packaging-clean (&optional args)
-  "Remove build artifacts according to ARGS from `deb-packaging-clean-transient'.
-Moves files to the system trash rather than deleting them permanently.
-Only removes files from the output (parent) directory."
+  "Remove build artifacts with ARGS from `deb-packaging-clean-transient'.
+Moves files to trash, not permanently.  Only removes files from the
+output (parent) directory."
   (interactive (list (transient-args 'deb-packaging-clean-transient)))
   (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
@@ -600,9 +575,8 @@ Only removes files from the output (parent) directory."
 ;;; Reset source tree
 
 (defun deb-packaging-reset (&optional args)
-  "Reset the source tree according to ARGS from `deb-packaging-reset-transient'.
-Restores the working tree to a pristine state by popping quilt patches,
-removing the .pc/ directory, and/or removing debian/files."
+  "Reset the source tree with ARGS from `deb-packaging-reset-transient'.
+Pops quilt patches, removes .pc/, and/or removes debian/files."
   (interactive (list (transient-args 'deb-packaging-reset-transient)))
   (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir

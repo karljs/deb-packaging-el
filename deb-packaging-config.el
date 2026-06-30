@@ -1,4 +1,4 @@
-;;; deb-packaging-config.el --- Shared configuration for deb-packaging -*- lexical-binding: t -*-
+;;; deb-packaging-config.el --- Shared configuration -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
@@ -8,22 +8,15 @@
 ;;; Commentary:
 
 ;; Shared distro configuration for Debian/Ubuntu packaging.
+;; The target distribution is the one state shared across tools.  Each tool
+;; keeps its own flags in its transient, but the distro propagates so
+;; build/test/upload default to the same value.
 ;;
-;; This module holds the one piece of state that is genuinely cross-cutting
-;; across the per-tool transients: the target distribution.  Each tool carries
-;; its own flags in its own transient (see deb-packaging-transients.el), with
-;; persistence provided by transient's native save mechanism (C-x C-s), but the
-;; distro is propagated across tools so that building for `jammy' makes testing
-;; and uploading default to `jammy' too.  It is surfaced globally in the
-;; `deb-packaging-dispatch' hub (see deb-packaging.el).
+;; Tool-specific data lives in deb-packaging-commands.el.
 ;;
-;; Tool-specific data tables (sbuild extra-repo variants, autopkgtest runner
-;; image templates and build hints) live with their tools in
-;; deb-packaging-commands.el, not here.
-;;
-;; What lives here:
-;;   - deb-packaging-target-distro  — session distro, seeded once from changelog
-;;   - deb-packaging--distro-choices — completion candidates for the distro
+;; Here:
+;;   - deb-packaging-target-distro   session distro, seeded from changelog
+;;   - deb-packaging--distro-choices completion candidates
 
 ;;; Code:
 
@@ -35,19 +28,16 @@
 
 (defvar deb-packaging-target-distro "noble"
   "Target distribution for builds and tests.
-Seeded once from the changelog (see `deb-packaging--maybe-seed-distro')
-and never silently overwritten, so a value set interactively or via
-.dir-locals.el is respected.")
+Seeded from the changelog once; not overwritten silently.")
 
 (defvar deb-packaging--distro-user-set nil
-  "Non-nil once `deb-packaging-target-distro' reflects a deliberate choice.
-Set when the user picks a distro interactively, or after the one-time seed
-from a package's changelog.")
+  "Non-nil when `deb-packaging-target-distro' was set deliberately.
+Set by interactive choice or one-time changelog seed.")
 
 (defun deb-packaging--maybe-seed-distro (distro)
-  "Seed `deb-packaging-target-distro' from DISTRO once, if appropriate.
-Only takes effect when the user has not already set the distro this session.
-Returns the resulting `deb-packaging-target-distro'."
+  "Seed `deb-packaging-target-distro' from DISTRO once.
+Only when the user has not set it this session.
+Returns `deb-packaging-target-distro'."
   (when (and distro
              (not (string-empty-p distro))
              (not deb-packaging--distro-user-set))
@@ -56,19 +46,17 @@ Returns the resulting `deb-packaging-target-distro'."
   deb-packaging-target-distro))
 
 (defun deb-packaging--set-distro (distro)
-  "Set `deb-packaging-target-distro' to DISTRO as a deliberate choice.
-Unlike `deb-packaging--maybe-seed-distro', this always overwrites,
-reflecting an explicit selection from a transient.  Returns the
-resulting distro."
+  "Set `deb-packaging-target-distro' to DISTRO deliberately.
+Always overwrites, unlike `deb-packaging--maybe-seed-distro'.
+Returns DISTRO."
   (setq deb-packaging-target-distro distro
         deb-packaging--distro-user-set t)
   deb-packaging-target-distro)
 
 (defun deb-packaging--effective-distro ()
   "Return the target distro, seeding from the changelog if needed.
-Uses `deb-packaging-target-distro' if the user has already chosen one;
-otherwise seeds it once from the current package's changelog and falls
-back to \"noble\" when not inside a package tree."
+Uses the current value if already chosen; otherwise seeds once from the
+changelog, falling back to \"noble\"."
   (when-let ((distro (plist-get (deb-packaging--scan-context) :distro)))
     (deb-packaging--maybe-seed-distro distro))
   deb-packaging-target-distro)

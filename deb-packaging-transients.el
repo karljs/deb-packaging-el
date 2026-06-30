@@ -1,4 +1,4 @@
-;;; deb-packaging-transients.el --- Per-tool transients for deb-packaging -*- lexical-binding: t; -*-
+;;; deb-packaging-transients.el --- Tool transients -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
@@ -7,24 +7,18 @@
 
 ;;; Commentary:
 
-;; Six per-tool transients, one per major packaging action:
+;; Six per-tool transients:
 ;;
-;;   deb-packaging-source-build-transient  — dpkg-buildpackage
-;;   deb-packaging-binary-build-transient  — sbuild
-;;   deb-packaging-lint-transient          — lintian + ubuntu-lint
-;;   deb-packaging-test-transient          — autopkgtest
-;;   deb-packaging-upload-transient        — ppa tests
-;;   deb-packaging-clean-transient         — clean artifacts
+;;   deb-packaging-source-build-transient  dpkg-buildpackage
+;;   deb-packaging-binary-build-transient  sbuild
+;;   deb-packaging-lint-transient          lintian + ubuntu-lint
+;;   deb-packaging-test-transient          autopkgtest
+;;   deb-packaging-upload-transient        ppa tests
+;;   deb-packaging-clean-transient         clean artifacts
 ;;
-;; Each transient lists its own flags in an ["Arguments"] group and has an
-;; action group that reads (transient-args 'PREFIX) and forwards them to the
-;; appropriate runner in deb-packaging-commands.el.
-;;
-;; Flags are persisted per-prefix by transient's native mechanism (C-x C-s
-;; saves, C-x s sets for this session), replacing the old global-mode
-;; (default/debug/upload) system.  Default values are seeded from sensible
-;; defaults at definition time, with distro-bearing options seeded dynamically
-;; from `deb-packaging-target-distro' via :default-value functions.
+;; Each lists its own flags and forwards them to the runner in
+;; deb-packaging-commands.el.  Flags persist per-prefix via transient.
+;; Distro-bearing options seed dynamically from `deb-packaging-target-distro'.
 
 ;;; Code:
 
@@ -32,15 +26,14 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 
-;; Forward-declare helper functions to keep the byte-compiler quiet.
+;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging--effective-distro "deb-packaging-config")
 (declare-function deb-packaging--runner-choices "deb-packaging-commands")
 
-;; Tool-specific variables live in deb-packaging-commands.el; declare them
-;; here so this file (which does not require commands.el) byte-compiles clean.
+;; Tool-specific variables live in deb-packaging-commands.el.
 (defvar deb-packaging-sbuild-variants)
 
-;; Forward-declare command functions to keep the byte-compiler quiet.
+;; Forward-declare command functions.
 (declare-function deb-packaging-source-build "deb-packaging-commands")
 (declare-function deb-packaging-sbuild "deb-packaging-commands")
 (declare-function deb-packaging-lintian-source "deb-packaging-commands")
@@ -61,7 +54,7 @@
 (declare-function deb-packaging-dev-project "deb-packaging-dev")
 (declare-function deb-packaging-dev-exec "deb-packaging-dev")
 
-;;; ── 1. Source build (dpkg-buildpackage) ─────────────────────────────────────
+;;; 1. Source build (dpkg-buildpackage)
 
 ;;;###autoload(autoload 'deb-packaging-source-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-source-build-transient ()
@@ -77,20 +70,18 @@
   ["Build"
    ("s" "Build source" deb-packaging-source-build)])
 
-;;; ── 2. Binary build (sbuild) ─────────────────────────────────────────────────
+;;; 2. Binary build (sbuild)
 
 (defun deb-packaging--binary-default-value ()
   "Dynamic default for the binary-build transient.
-Seeds the distro from the changelog so the option reflects the current
-package on each invocation."
+Seeds the distro from the changelog."
   (list (format "--dist=%s" (deb-packaging--effective-distro))
         "-A"))
 
 (defclass deb-packaging--extra-repo-argument (transient-option) ()
-  "Transient option class for sbuild --extra-repository= values.
-Completes against `deb-packaging-sbuild-variants' short names and
-expands the chosen name to the full repository string (with distro
-substituted) when the command is actually run.")
+  "Transient option for sbuild --extra-repository= values.
+Completes against variant short names and expands to the full repo
+string at runtime.")
 
 (cl-defmethod transient-infix-read ((obj deb-packaging--extra-repo-argument))
   "Read a variant short-name and store it."
@@ -126,21 +117,14 @@ substituted) when the command is actually run.")
   ["Build"
    ("b" "Build binary" deb-packaging-sbuild)])
 
-;;; ── 3. Lint (lintian + ubuntu-lint) ───────────────────────────────────────────
+;;; 3. Lint (lintian + ubuntu-lint)
 
 ;;;###autoload(autoload 'deb-packaging-lint-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-lint-transient ()
   "Run a linter against the current package.
-Two linters are dispatched from here:
-
-  - lintian inspects built artifacts (.dsc / .deb files).
-  - ubuntu-lint checks Ubuntu upload policy (SRU references, maintainer
-    presence, version conventions) against source metadata and can run
-    before any build.
-
-Each tool's flags live in its own group; each action reads only the
-flags it recognises (via `deb-packaging--filter-args'), so toggling a
-lintian flag never reaches ubuntu-lint and vice versa."
+lintian inspects built artifacts; ubuntu-lint checks Ubuntu policy.
+Each action reads only its own flags, so lintian and ubuntu-lint flags
+stay separate."
   :value '("-i" "--tag-display-limit=0" "--context=changes" "--all=warn")
   ["Lintian arguments"
    ("-i"  "Show informational tags"   "-i")
@@ -175,7 +159,7 @@ lintian flag never reaches ubuntu-lint and vice versa."
    ("o" "Lintian one binary..." deb-packaging-lintian-binary-one)
    ("u" "Ubuntu-lint"           deb-packaging-ubuntu-lint)])
 
-;;; ── 4. Autopkgtest ────────────────────────────────────────────────────────────
+;;; 4. Autopkgtest
 
 (defun deb-packaging--test-default-value ()
   "Dynamic default for the test transient."
@@ -205,7 +189,7 @@ lintian flag never reaches ubuntu-lint and vice versa."
   ["Run"
    ("t" "Run autopkgtest" deb-packaging-autopkgtest)])
 
-;;; ── 5. Upload / PPA ───────────────────────────────────────────────────────────
+;;; 5. Upload / PPA
 
 (defun deb-packaging--upload-default-value ()
   "Dynamic default for the upload transient."
@@ -240,7 +224,7 @@ lintian flag never reaches ubuntu-lint and vice versa."
    ("u" "Upload with dput"     deb-packaging-dput-upload)
    ("p" "Show PPA test results" deb-packaging-ppa-tests)])
 
-;;; ── 6. Clean artifacts ────────────────────────────────────────────────────────
+;;; 6. Clean artifacts
 
 ;;;###autoload(autoload 'deb-packaging-clean-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-clean-transient ()
@@ -252,7 +236,7 @@ lintian flag never reaches ubuntu-lint and vice versa."
   ["Run"
    ("c" "Clean" deb-packaging-clean)])
 
-;;; ── 7. Reset source tree ──────────────────────────────────────────────────────
+;;; 7. Reset source tree
 
 ;;;###autoload(autoload 'deb-packaging-reset-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-reset-transient ()
@@ -265,7 +249,7 @@ lintian flag never reaches ubuntu-lint and vice versa."
   ["Run"
     ("r" "Reset" deb-packaging-reset)])
 
-;;; ── 8. Dev shell (LXD) ────────────────────────────────────────────────────────
+;;; 8. Dev shell (LXD)
 
 ;;;###autoload(autoload 'deb-packaging-dev-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-dev-transient ()

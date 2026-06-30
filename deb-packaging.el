@@ -1,4 +1,4 @@
-;;; deb-packaging.el --- Context-aware Debian packaging interface -*- lexical-binding: t; -*-
+;;; deb-packaging.el --- Packaging interface -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
@@ -10,25 +10,13 @@
 ;;; Commentary:
 
 ;; A context-aware interface for Debian/Ubuntu packaging.
-;; Detects package context and provides per-tool transients for each action.
+;; Detects package context and provides per-tool transients.
 ;;
-;; Primary entry point: `deb-packaging-status' — a Magit-style landing page
-;; (see deb-packaging-status.el) that shows the package moving through its
-;; phases and opens the appropriate transient on RET.
+;; Primary entry point: `deb-packaging-status' (Magit-style status buffer).
+;; Secondary entry point: `deb-packaging-dispatch' (hub from `?').
+;; Per-tool transients are defined in deb-packaging-transients.el.
 ;;
-;; Secondary entry point: `deb-packaging-dispatch' — a top-level hub that
-;; lists all per-tool transients, reachable from the status buffer via `?'.
-;;
-;; Per-tool transients (defined in deb-packaging-transients.el):
-;;   deb-packaging-source-build-transient
-;;   deb-packaging-binary-build-transient
-;;   deb-packaging-lint-transient
-;;   deb-packaging-test-transient
-;;   deb-packaging-upload-transient
-;;   deb-packaging-clean-transient
-;;   deb-packaging-reset-transient
-;;
-;; Default keybinding: C-c d  (opens the status buffer)
+;; Default keybinding: C-c d
 
 ;;; Code:
 
@@ -44,17 +32,15 @@
 ;;; Top-level dispatch hub
 
 (defun deb-packaging--dispatch-header ()
-  "Header for the dispatch transient, surfacing the global target distro."
+  "Header for the dispatch transient, showing the target distro."
   (format "Debian Packaging\nTarget distro: %s"
           (deb-packaging--effective-distro)))
 
 ;;;###autoload
 (defun deb-packaging-set-distro (distro)
-  "Set the global target distro for deb-packaging to DISTRO.
-Interactively, prompt with completion against known distros, defaulting
-to the current effective distro.  The chosen value is propagated to every
-per-tool transient (build, test, upload) and to the status buffer, since
-they all read `deb-packaging-target-distro' as their default."
+  "Set the global target distro to DISTRO.
+Interactively, prompt with completion against known distros.  Propagated
+to all per-tool transients and the status buffer."
   (interactive
    (list (completing-read
           "Target distro: "
@@ -65,8 +51,7 @@ they all read `deb-packaging-target-distro' as their default."
 
 (transient-define-prefix deb-packaging-dispatch ()
   "Debian packaging commands.
-The target distro is the one piece of genuinely global state; set it
-here with `d' and every per-tool transient inherits it."
+Set the target distro with `d'; other transients inherit it."
   [:description deb-packaging--dispatch-header]
   ["Config"
    ("d" "Set target distro..." deb-packaging-set-distro)]
@@ -92,7 +77,7 @@ here with `d' and every per-tool transient inherits it."
 ;;;###autoload
 (defun deb-packaging-setup-keys ()
   "Set up default keybindings for deb-packaging.
-Binds C-c d to the status landing page, the primary entry point."
+Binds C-c d to `deb-packaging-status'."
   (global-set-key (kbd "C-c d") #'deb-packaging-status))
 
 ;;;###autoload
