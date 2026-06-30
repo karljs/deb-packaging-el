@@ -76,9 +76,10 @@ here with `d' and every per-tool transient inherits it."
   ["Check & Test"
    ("l" "Lint..."           deb-packaging-lint-transient)
    ("t" "Autopkgtest..."   deb-packaging-test-transient)]
-  ["Patch / Develop"
-   ("e" "Edit upstream (dev shell, C-u=reprovision)" deb-packaging-dev-shell)
-   ("k" "Destroy dev container" deb-packaging-dev-destroy)]
+   ["Patch / Develop"
+    ("e" "Edit upstream (dev shell, C-u=reprovision)" deb-packaging-dev-shell)
+    ("E" "Start eglot in dev shell" deb-packaging-dev-eglot)
+    ("k" "Destroy dev container" deb-packaging-dev-destroy)]
   ["Publish"
    ("p" "PPA upload..."   deb-packaging-upload-transient)]
   ["Cleanup"

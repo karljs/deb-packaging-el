@@ -84,6 +84,7 @@
 (declare-function deb-packaging--filename-version "deb-packaging-detect")
 (declare-function deb-packaging-dispatch "deb-packaging")
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
+(declare-function deb-packaging-dev--list-containers "deb-packaging-dev")
 
 ;;; Buffer-local context
 
@@ -678,6 +679,60 @@ Files whose version cannot be parsed are grouped under \"unknown\"."
 
 ;;; Buffer rendering
 
+(defun deb-packaging-status--insert-dev (ctx hide)
+  "Insert a Dev section showing LXD dev containers for CTX's package.
+Collapsed when HIDE.  Calls `deb-packaging-dev--list-containers' to find
+matching containers by name prefix."
+  (when (fboundp 'deb-packaging-dev--list-containers)
+    (let* ((name (plist-get ctx :name))
+           (distro (plist-get ctx :distro))
+           (containers (deb-packaging-dev--list-containers
+                        (when name (format "deb-dev-%s-" name))))
+           (target (when (and name distro)
+                     (format "deb-dev-%s-%s" name distro))))
+      (when containers
+        (magit-insert-section (deb-packaging-dev nil hide)
+          (magit-insert-heading
+            (concat
+             (propertize (deb-packaging-status--pad
+                          "Dev shell" deb-packaging-status--label-width)
+                         'font-lock-face 'magit-section-heading)
+             (propertize
+              (if target
+                  (if (cl-find target containers
+                               :key (lambda (c) (plist-get c :name))
+                               :test #'equal)
+                      "ready"
+                    "none")
+                (format "%d" (length containers)))
+              'font-lock-face
+              (if (and target
+                       (cl-find target containers
+                                :key (lambda (c) (plist-get c :name))
+                                :test #'equal))
+                  'deb-packaging-status-done
+                'shadow))))
+          (magit-insert-section-body
+            (dolist (c containers)
+              (let* ((cname (plist-get c :name))
+                     (status (plist-get c :status))
+                     (source (plist-get c :source))
+                     (currentp (equal cname target)))
+                (insert
+                 (format "    %s %s %s\n"
+                         (propertize cname 'font-lock-face
+                                     (if currentp
+                                         'magit-section-secondary-heading
+                                       'shadow))
+                         (propertize (downcase status) 'font-lock-face
+                                     (if (string= status "RUNNING")
+                                         'deb-packaging-status-done
+                                       'shadow))
+                         (if source
+                             (propertize (concat "  " source)
+                                         'font-lock-face 'shadow)
+                           "")))))))))))
+
 (defun deb-packaging-status--next-actionable-key (ctx)
   "Return the run-history key of the first `ready' phase in CTX, or nil.
 Walks the phases in flow order; the result is the phase the smart-fold
@@ -745,7 +800,8 @@ is left on the first phase heading."
            ctx (deb-packaging-status--hide-phase-p
                 (deb-packaging-status--phase-state 'ppa-tests nil t)
                                  next 'ppa-tests))
-          (deb-packaging-status--insert-stale ctx t))))
+           (deb-packaging-status--insert-stale ctx t)
+           (deb-packaging-status--insert-dev ctx t))))
      ;; Walk the freshly-built tree once, applying each section's initial
      ;; visibility through the show/hide path.  This is what creates the fold
      ;; indicators; without it the `>'/`v' cue is missing until the first manual

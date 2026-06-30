@@ -38,6 +38,7 @@
 (require 'cl-lib)
 (require 'tramp)
 (require 'dired)
+(require 'json)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-commands)
@@ -67,8 +68,7 @@ Non-apt servers (gopls, bash-language-server, ...) go in
   '("apt-get install -y --no-install-recommends npm && npm install -g bash-language-server")
   "Shell commands run in the container after apt setup.
 For non-packaged language servers.  Each entry is a /bin/sh command
-line.  Don't use single quotes (see the sh -c wrapping in
-`deb-packaging-dev--provision-script').
+line, passed to `sh -c' inside the container (single quotes are fine).
 Examples:
   Go: \"... && go install golang.org/x/tools/gopls@latest\"
   TS: \"... && npm install -g typescript typescript-language-server\"")
@@ -154,11 +154,17 @@ FORCE re-provisions regardless."
        ;; Cloud-init must finish so the archive is reachable.
        (format "lxc exec %s -- cloud-init status --wait >/dev/null 2>&1 || true"
                qname)
-       ;; Point the bind mount at the current package.
+       ;; Point the bind mount at the current package.  Remove+add on a
+       ;; running container usually applies live; if add fails, restart
+       ;; the container and retry so a stale device state doesn't block.
        (format "lxc config device remove %s %s >/dev/null 2>&1 || true"
                qname (shell-quote-argument device))
-       (format "lxc config device add %s %s disk source=%s path=%s"
+       (format "if ! lxc config device add %s %s disk source=%s path=%s 2>/dev/null; then"
                qname (shell-quote-argument device) qpkg-dir qmount)
+       (format "  lxc restart %s" qname)
+       (format "  lxc config device add %s %s disk source=%s path=%s"
+               qname (shell-quote-argument device) qpkg-dir qmount)
+       "fi"
        ;; Skip install when the fingerprint matches, unless forced.
        (format "FP=%s" (shell-quote-argument fingerprint))
        (format "FORCE=%s" (if force "1" ""))
@@ -168,26 +174,34 @@ FORCE re-provisions regardless."
        "else"
        "  if [ -n \"$FORCE\" ]; then echo \"Force re-provisioning\"; else echo \"Provisioning (fingerprint changed or first run)\"; fi"
        ;; Language servers + build helpers.
-       (format "  lxc exec %s -- sh -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y --no-install-recommends devscripts equivs %s'"
-               qname apt)
+       (format "  lxc exec %s -- sh -c %s"
+               qname
+               (shell-quote-argument
+                (format "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y --no-install-recommends devscripts equivs %s" apt)))
        ;; Build-deps from debian/control.  No -r: keep the package installed
-       ;; so re-provisions of an unchanged control are no-ops.
-       (format "  lxc exec %s -- sh -c 'cd %s && DEBIAN_FRONTEND=noninteractive mk-build-deps -i -t \"apt-get -y --no-install-recommends\" debian/control'"
-               qname qmount))
+       ;; so re-provisions of an unchanged control are no-ops.  Report
+       ;; failures clearly rather than letting set -e abort silently.
+       (format "  lxc exec %s -- sh -c %s || { echo 'mk-build-deps failed: build-deps could not be satisfied' >&2; exit 1; }"
+               qname
+               (shell-quote-argument
+                (format "cd %s && DEBIAN_FRONTEND=noninteractive mk-build-deps -i -t \"apt-get -y --no-install-recommends\" debian/control" mount))))
       ;; Non-apt servers.
       (mapcar
        (lambda (cmd)
-         (format "  lxc exec %s -- sh -c 'export DEBIAN_FRONTEND=noninteractive; %s'"
-                 qname cmd))
+         (format "  lxc exec %s -- sh -c %s"
+                 qname
+                 (shell-quote-argument
+                  (format "export DEBIAN_FRONTEND=noninteractive; %s" cmd))))
        deb-packaging-dev-extra-setup)
        (list
-        ;; Write the fingerprint.  Both values are safe (hex, fixed path)
-        ;; so no quoting needed inside the single-quoted sh -c.
-        (format "  lxc exec %s -- sh -c 'echo %s > %s'"
-                qname fingerprint marker)
+        ;; Write the fingerprint (hex) to the marker path.
+        (format "  lxc exec %s -- sh -c %s"
+                qname
+                (shell-quote-argument
+                 (format "echo %s > %s" fingerprint marker)))
         "fi"
         (format "echo READY: /lxc:%s:%s" name mount)))
-     "\n")))
+      "\n")))
 
 (defun deb-packaging-dev--open-on-success (proc tramp-path)
   "Open dired at TRAMP-PATH when PROC exits 0.  Chains onto existing sentinels."
@@ -201,6 +215,62 @@ FORCE re-provisions regardless."
                   (zerop (process-exit-status p)))
          (dired tramp-path)
          (message "Dev shell ready at %s" tramp-path))))))
+
+;;; Eglot
+
+(defun deb-packaging-dev-eglot ()
+  "Start eglot for the current buffer, launching the server in the container.
+The buffer must be visiting a file under an `/lxc:' TRAMP path (opened from
+the dev shell's dired).  Ensures `tramp-own-remote-path' is in
+`tramp-remote-path' so the container-installed server binary is found,
+then calls `eglot-ensure'.
+
+No hooks and no auto-start: call this manually after opening a file, or
+wire it into your own `prog-mode-hook' if you want it automatic."
+  (interactive)
+  (unless (and buffer-file-name
+              (string-prefix-p "/lxc:" buffer-file-name))
+    (user-error "Not visiting a file under /lxc: (open one from the dev shell)"))
+  (deb-packaging-dev--ensure-tramp-method)
+  (require 'eglot)
+  (eglot-ensure))
+
+;;; Container inspection
+
+(defun deb-packaging-dev--list-containers (&optional prefix)
+  "Return a list of plists for dev containers matching PREFIX.
+PREFIX defaults to \"deb-dev-\".  Each plist has :name, :status
+\(e.g. \"RUNNING\"), :source (mount source of the work device, or nil)
+and :fingerprint (stored provision marker, or nil).  Returns nil if
+`lxc' is unavailable or no containers match."
+  (let* ((filter (or prefix "deb-dev-"))
+         (output (with-output-to-string
+                   (with-current-buffer standard-output
+                     (ignore-errors
+                      (call-process "lxc" nil t nil "list" filter "--format=json"))))))
+    (when (and output (not (string-empty-p output)))
+      (let ((entries (ignore-errors (json-read-from-string output))))
+        (mapcar
+         (lambda (c)
+           (let* ((devices (cdr (assoc-string "devices" c)))
+                  (work-dev (cl-find-if
+                             (lambda (d)
+                               (string-prefix-p "work-"
+                                                 (symbol-name (car d))))
+                             devices))
+                  (source (when work-dev
+                            (cdr (assoc-string "source" (cdr work-dev))))))
+             (list :name (cdr (assoc-string "name" c))
+                   :status (cdr (assoc-string "status" c))
+                   :source source)))
+         (if (vectorp entries) (append entries nil) entries))))))
+
+(defun deb-packaging-dev--container-for-package (pkg distro)
+  "Return the container plist for PKG in DISTRO, or nil."
+  (cl-find (deb-packaging-dev--container-name pkg distro)
+           (deb-packaging-dev--list-containers)
+           :key (lambda (c) (plist-get c :name))
+           :test #'equal))
 
 ;;; Commands
 
@@ -232,15 +302,26 @@ matches.  C-u (FORCE) re-provisions regardless."
     buf))
 
 ;;;###autoload
-(defun deb-packaging-dev-destroy ()
-  "Delete the dev container for the current package and target release."
-  (interactive)
-  (let* ((pkg-dir (or (deb-packaging--find-package-dir)
-                      (user-error "Not in a Debian package directory")))
-         (info (deb-packaging--parse-changelog pkg-dir))
-         (pkg (nth 0 info))
-         (distro (deb-packaging--effective-distro))
-         (name (deb-packaging-dev--container-name pkg distro)))
+(defun deb-packaging-dev-destroy (&optional arg)
+  "Delete a dev container.
+With no prefix arg and inside a package, deletes that package's container.
+With a prefix ARG, or outside a package, prompts with completion over all
+existing dev containers."
+  (interactive "P")
+  (let* ((containers (deb-packaging-dev--list-containers))
+         (names (mapcar (lambda (c) (plist-get c :name)) containers))
+         (name
+          (cond
+           ((and (not arg) (deb-packaging--find-package-dir))
+            (let* ((pkg-dir (deb-packaging--find-package-dir))
+                   (info (deb-packaging--parse-changelog pkg-dir))
+                   (pkg (nth 0 info))
+                   (distro (deb-packaging--effective-distro)))
+              (deb-packaging-dev--container-name pkg distro)))
+           ((null names)
+            (user-error "No dev containers found"))
+           (t
+            (completing-read "Delete container: " names nil t)))))
     (when (yes-or-no-p (format "Delete dev container %s? " name))
       (deb-packaging--run-command
        "dev-destroy"
