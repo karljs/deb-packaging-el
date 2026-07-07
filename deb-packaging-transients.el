@@ -220,8 +220,8 @@ stay separate."
     :always-read t
     :allow-empty nil)]
   ["Upload"
-   ("u" "Upload with dput"     deb-packaging-dput-upload)
-   ("p" "Show PPA test results" deb-packaging-ppa-tests)])
+   ("p" "Upload with dput"     deb-packaging-dput-upload)
+   ("r" "PPA test results"     deb-packaging-ppa-tests)])
 
 ;;; 6. Clean artifacts
 

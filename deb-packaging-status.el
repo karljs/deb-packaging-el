@@ -849,6 +849,11 @@ Walks up the section tree to the nearest registered type."
   (interactive)
   (deb-packaging-status--open #'deb-packaging-test-transient))
 
+(defun deb-packaging-status-upload ()
+  "Open the PPA upload transient."
+  (interactive)
+  (deb-packaging-status--open #'deb-packaging-upload-transient))
+
 (defun deb-packaging-status-clean ()
   "Open the clean artifacts transient."
   (interactive)
@@ -876,6 +881,7 @@ Navigation and folding come from `magit-section-mode'."
   "b"   #'deb-packaging-status-build-binary
   "l"   #'deb-packaging-status-lint
   "t"   #'deb-packaging-status-test
+  "p"   #'deb-packaging-status-upload
   "c"   #'deb-packaging-status-clean
   "r"   #'deb-packaging-status-reset
   "e"   #'deb-packaging-status-dev

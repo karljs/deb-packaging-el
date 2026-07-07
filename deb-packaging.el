@@ -62,17 +62,17 @@ Set the target distro with `d'; other transients inherit it."
   ["Check & Test"
    ("l" "Lint..."           deb-packaging-lint-transient)
    ("t" "Autopkgtest..."   deb-packaging-test-transient)]
-   ["Patch / Develop"
-    ("d" "Dev shell..." deb-packaging-dev-transient)]
+  ["Develop & Propagate"
+   ("e" "Dev shell..."       deb-packaging-dev-transient)
+   ("P" "Propagate..."       deb-packaging-propagate-transient)]
   ["Publish"
    ("p" "PPA upload..."   deb-packaging-upload-transient)]
   ["Cleanup"
    ("c" "Clean artifacts..." deb-packaging-clean-transient)
    ("r" "Reset source tree..." deb-packaging-reset-transient)]
-   ["Other"
-    ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
-    ("P" "Propagate..."       deb-packaging-propagate-transient)
-    ("q" "Quit"             transient-quit-one)])
+  ["Other"
+   ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
+   ("q" "Quit"             transient-quit-one)])
 
 ;;; Keybinding
 
