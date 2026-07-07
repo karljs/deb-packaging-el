@@ -5,7 +5,7 @@
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
 ;; URL: https://github.com/example/deb-packaging
-;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (magit-section "3.3"))
+;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -27,6 +27,7 @@
 (require 'deb-packaging-transients)
 (require 'deb-packaging-infra)
 (require 'deb-packaging-dev)
+(require 'deb-packaging-propagate)
 (require 'deb-packaging-status)
 
 ;;; Top-level dispatch hub
@@ -68,9 +69,10 @@ Set the target distro with `d'; other transients inherit it."
   ["Cleanup"
    ("c" "Clean artifacts..." deb-packaging-clean-transient)
    ("r" "Reset source tree..." deb-packaging-reset-transient)]
-  ["Other"
-   ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
-   ("q" "Quit"             transient-quit-one)])
+   ["Other"
+    ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
+    ("P" "Propagate..."       deb-packaging-propagate-transient)
+    ("q" "Quit"             transient-quit-one)])
 
 ;;; Keybinding
 

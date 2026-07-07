@@ -3,7 +3,6 @@
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
 ;; Keywords: tools, debian, ubuntu, packaging
-;; Package-Requires: ((emacs "28.1") (transient "0.4.0"))
 
 ;;; Commentary:
 

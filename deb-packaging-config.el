@@ -3,7 +3,6 @@
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
 ;; Keywords: tools, debian, ubuntu, packaging
-;; Package-Requires: ((emacs "28.1"))
 
 ;;; Commentary:
 
@@ -70,6 +69,24 @@ changelog, falling back to \"noble\"."
 (defconst deb-packaging-debian-distros
   '("sid" "stable" "testing")
   "Known Debian distribution names, alphabetical.")
+
+;;; Propagation
+
+(defvar deb-packaging-propagate-salsa-user nil
+  "Your salsa.debian.org username, used to build the personal remote.
+When nil, the `personal' remote is not configured in prepared clones;
+you'll push to salsa using your own git remote setup.")
+
+(defvar deb-packaging-propagate-cache-dir
+  (expand-file-name "propagate"
+                    (or (getenv "XDG_CACHE_HOME")
+                        (expand-file-name "~/.cache")))
+  "Directory for prepared propagate clones.
+Defaults to $XDG_CACHE_HOME/deb-packaging/propagate or
+~/.cache/deb-packaging/propagate.")
+
+(defvar deb-packaging-propagate-clone-mode-lighter " Prop"
+  "Lighter for `deb-packaging-propagate-clone-mode'.")
 
 (defun deb-packaging--distro-choices ()
   "Return distro completion list, prepending the changelog distro if unknown."

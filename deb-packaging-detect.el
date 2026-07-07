@@ -4,7 +4,6 @@
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
 ;; URL: https://github.com/example/deb-packaging
-;; Package-Requires: ((emacs "28.1"))
 
 ;;; Commentary:
 
@@ -60,6 +59,73 @@ Reads `debian/source/format'.  Returns nil if the file is absent."
         (goto-char (point-min))
         (when (re-search-forward "^[ \t]*\\(.+\\)$" nil t)
           (string-trim (match-string 1)))))))
+
+;;; Patches and VCS metadata
+
+(defun deb-packaging--list-patches ()
+  "Return an alist of (NAME . PATH) for patches in debian/patches/series.
+PATH is absolute.  Reads `debian/patches/series' in the current package
+directory.  Skips comments (lines beginning with `#'), blank lines, and
+quilt options after the patch name.  Returns nil if series is absent."
+  (when-let* ((pkg-dir (deb-packaging--find-package-dir))
+              (series (expand-file-name "debian/patches/series" pkg-dir)))
+    (when (file-readable-p series)
+      (with-temp-buffer
+        (insert-file-contents series)
+        (goto-char (point-min))
+        (let (patches)
+          (while (not (eobp))
+            (let ((line (buffer-substring-no-properties
+                         (line-beginning-position)
+                         (line-end-position))))
+              ;; Strip trailing options (anything after whitespace).
+              (when (string-match "^\\([^# \t][^ \t]*\\)" line)
+                (let* ((name (match-string 1 line))
+                       (path (expand-file-name
+                              (concat "debian/patches/" name) pkg-dir)))
+                  (when (file-readable-p path)
+                    (push (cons name path) patches)))))
+            (forward-line 1))
+          (nreverse patches))))))
+
+(defun deb-packaging--vcs-git (&optional pkg-dir)
+  "Return the Vcs-Git URL for the package in PKG-DIR.
+Strips a trailing `-b BRANCH' suffix if present.  Returns nil if
+debian/control is absent or has no Vcs-Git field."
+  (let ((value (deb-packaging--control-field "Vcs-Git" pkg-dir)))
+    (when value
+      ;; Strip "-b branch" suffix; keep the URL.
+      (string-trim
+       (replace-regexp-in-string "\\s-+-b\\s-+\\S-+$" "" value)))))
+
+(defun deb-packaging--upstream-url (&optional pkg-dir)
+  "Return a best-effort upstream repo URL for the package in PKG-DIR.
+Reads Homepage from debian/control; if absent, parses debian/watch for a
+GitHub or GitLab origin.  Returns nil if nothing is found."
+  (let* ((dir (or pkg-dir (deb-packaging--find-package-dir)))
+         (homepage (deb-packaging--control-field "Homepage" dir)))
+    (cond
+     ((and homepage
+           (string-match-p "\\`https?://\\(github\\.com\\|gitlab\\.com\\)/"
+                           homepage))
+      homepage)
+     ((and homepage (not (string-empty-p homepage)))
+      homepage)
+     (t
+      ;; Try debian/watch.
+      (when-let* ((dir)
+                  (watch (expand-file-name "debian/watch" dir)))
+        (when (file-readable-p watch)
+          (with-temp-buffer
+            (insert-file-contents watch)
+            (goto-char (point-min))
+            ;; debian/watch lines look like:
+            ;;   opts=...  https://github.com/owner/repo/tags ...
+            ;;   https://github.com/owner/repo/releases/...
+            (when (re-search-forward
+                   "https?://\\(?:gitlab\\.com\\|github\\.com\\)/[^/ \t]+/[^/ \t]+"
+                   nil t)
+              (match-string 0)))))))))
 
 (defun deb-packaging--orig-tarball (name version parent-dir)
   "Return the .orig.tar.* path for NAME/VERSION in PARENT-DIR.

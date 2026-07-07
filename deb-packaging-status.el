@@ -5,7 +5,6 @@
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
 ;; URL: https://github.com/example/deb-packaging
-;; Package-Requires: ((emacs "28.1") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -68,6 +67,7 @@
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
 (declare-function deb-packaging-dev--list-containers "deb-packaging-dev")
 (declare-function deb-packaging-dev-transient "deb-packaging-transients")
+(declare-function deb-packaging-propagate-transient "deb-packaging-propagate")
 
 ;;; Buffer-local context
 
@@ -880,6 +880,7 @@ Navigation and folding come from `magit-section-mode'."
   "r"   #'deb-packaging-status-reset
   "e"   #'deb-packaging-status-dev
   "i"   #'deb-packaging-infra-dispatch
+  "P"   #'deb-packaging-propagate-transient
   "?"   #'deb-packaging-dispatch
   "g"   #'deb-packaging-status-refresh
   "q"   #'quit-window)
