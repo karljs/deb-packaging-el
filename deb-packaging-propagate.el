@@ -371,12 +371,12 @@ message to the kill ring."
             (ref (plist-get item :ref))
             (patch-file (make-temp-file "propagate-" nil ".patch"))
             (output (let ((default-directory source-dir))
-                      (magit-git-string "format-patch" "-1" "--stdout" ref))))
+                      (magit-git-output "format-patch" "-1" "--stdout" ref))))
        (when (or (null output) (string-empty-p (string-trim output)))
          (user-error "git format-patch produced no output for %s" ref))
        (write-region output nil patch-file nil 'silent)
        (let ((msg (let ((default-directory source-dir))
-                    (magit-git-string "log" "--format=%B" "-1" ref))))
+                    (magit-git-output "log" "--format=%B" "-1" ref))))
          (when msg
            (kill-new msg)
            (message "Commit message saved to kill ring (C-y).")))
@@ -397,10 +397,10 @@ Set by `deb-packaging-propagate-apply'; consumed by
   "Apply a propagate patch file with git-apply flags.
 Mirrors `magit-patch-apply'\\='s flag set.  The patch file is
 pre-filled by `deb-packaging-propagate-apply'."
-  :value '("--cached")
+  :value '("--index")
   ["Arguments"
-   ("-c" "Only apply to index"     "--cached")
-   ("-i" "Also apply to index"     "--index")
+   ("-i" "Apply to index and worktree" "--index")
+   ("-c" "Only apply to index"         "--cached")
    ("-3" "Fall back on 3way merge" ("-3" "--3way"))]
   ["Actions"
    ("a" "Apply patch" deb-packaging-propagate-do-apply)])
@@ -448,17 +448,17 @@ per item.  Opens the result in view-mode for review."
               ('patch
                (deb-packaging-propagate--quilt-to-git-am-block
                 (plist-get item :path)))
-              ('commit
-               (let ((output (let ((default-directory
-                                    (plist-get item :source-dir)))
-                                (magit-git-string "format-patch" "-1" "--stdout"
-                                                  (plist-get item :ref)))))
-                 (or output "")))
-              ('range
-               (or (let ((default-directory
-                          (plist-get item :source-dir)))
-                     (magit-git-string "format-patch" "--stdout"
-                                       (plist-get item :range)))
+               ('commit
+                (let ((output (let ((default-directory
+                                     (plist-get item :source-dir)))
+                                 (magit-git-output "format-patch" "-1" "--stdout"
+                                                   (plist-get item :ref)))))
+                  (or output "")))
+               ('range
+                (or (let ((default-directory
+                           (plist-get item :source-dir)))
+                      (magit-git-output "format-patch" "--stdout"
+                                        (plist-get item :range)))
                    ""))
               (_ "")))
           items "")))
@@ -471,22 +471,14 @@ per item.  Opens the result in view-mode for review."
     output-path))
 
 ;;;###autoload
-(defun deb-packaging-propagate-clone (&optional branch)
-  "Prepare a Debian salsa clone on BRANCH.
+(defun deb-packaging-propagate-clone ()
+  "Prepare a Debian salsa clone.
 Confirms the Vcs-Git URL, clones (or reuses) into the propagate cache,
-prompts for the base branch, creates a work branch, sets up the
+prompts for the base branch and work branch name, sets up the
 `personal' remote if configured, and hands off to `magit-status'.
 Does not apply any fix — press `P' to apply items after the clone
 is ready."
-  (interactive
-   (let* ((pkg-dir (or (deb-packaging--find-package-dir nil t)
-                       (user-error "Not in a Debian package directory")))
-          (info (deb-packaging--parse-changelog pkg-dir))
-          (name (nth 0 info))
-          (branch (read-string "Branch name: "
-                               (format "wip/propagate-%s"
-                                       (or name "fix")))))
-     (list branch)))
+  (interactive)
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
          (info (deb-packaging--parse-changelog pkg-dir))
          (pkg-name (nth 0 info))
@@ -524,25 +516,30 @@ is ready."
     ;; Store source-dir in git config for apply.
     (let ((default-directory clone-dir))
       (magit-call-git "config" "deb-packaging.source-dir" pkg-dir))
-    ;; Prompt for base branch.
+    ;; Prompt for base branch, then work branch.
     (let* ((branches (deb-packaging-propagate--remote-branches clone-dir))
            (default-br (or (deb-packaging-propagate--default-branch clone-dir)
                            "main"))
            (base (if branches
-                     (completing-read "Base branch: " branches nil t default-br)
-                   default-br)))
+                     (magit-completing-read "Base branch: " branches nil t default-br)
+                   default-br))
+           (branch (read-string "Branch name: "
+                                 (format "wip/propagate-%s"
+                                         (or pkg-name "fix")))))
       (let ((default-directory clone-dir))
-        (magit-call-git "checkout" base)))
-    ;; Create work branch (delete old if exists).
-    (let ((default-directory clone-dir))
-      (ignore-errors (magit-call-git "branch" "-D" branch))
-      (unless (zerop (magit-call-git "checkout" "-b" branch))
-        (user-error "Failed to create branch %s" branch)))
+        (magit-call-git "checkout" base))
+      ;; Create work branch (delete old if exists).
+      (let ((default-directory clone-dir))
+        (when (deb-packaging-propagate--git-quiet clone-dir "rev-parse" "--verify" branch)
+          (magit-call-git "branch" "-D" branch))
+        (unless (zerop (magit-call-git "checkout" "-b" branch))
+          (user-error "Failed to create branch %s" branch))))
     ;; Set up personal remote if configured.
     (let ((personal-url (deb-packaging-propagate--salsa-personal-url pkg-name)))
       (when personal-url
         (let ((default-directory clone-dir))
-          (ignore-errors (magit-call-git "remote" "remove" "personal"))
+          (when (deb-packaging-propagate--git-quiet clone-dir "config" "remote.personal.url")
+            (magit-call-git "remote" "remove" "personal"))
           (if (zerop (magit-call-git "remote" "add" "personal" personal-url))
               (if (deb-packaging-propagate--fork-exists-p personal-url)
                   (message "Personal fork ready at %s" personal-url)
