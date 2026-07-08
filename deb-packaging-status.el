@@ -4,7 +4,6 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
-;; URL: https://github.com/example/deb-packaging
 
 ;;; Commentary:
 
@@ -45,20 +44,9 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-commands)
+(require 'deb-packaging-transients)
 
 (declare-function deb-packaging--effective-distro "deb-packaging-config")
-(declare-function transient-args "transient")
-(declare-function transient-arg-value "transient")
-
-;; Transient prefixes opened by RET/mnemonic keys; loaded by deb-packaging.el.
-(declare-function deb-packaging-source-build-transient "deb-packaging-transients")
-(declare-function deb-packaging-binary-build-transient "deb-packaging-transients")
-(declare-function deb-packaging-lint-transient "deb-packaging-transients")
-(declare-function deb-packaging-test-transient "deb-packaging-transients")
-(declare-function deb-packaging-upload-transient "deb-packaging-transients")
-(declare-function deb-packaging-clean-transient "deb-packaging-transients")
-(declare-function deb-packaging-reset-transient "deb-packaging-transients")
-(declare-function deb-packaging-dev-transient "deb-packaging-transients")
 ;; Other cross-file references
 (declare-function deb-packaging--run-summary "deb-packaging-commands")
 (declare-function deb-packaging--schroot-exists-p "deb-packaging-detect")
@@ -66,7 +54,6 @@
 (declare-function deb-packaging-dispatch "deb-packaging")
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
 (declare-function deb-packaging-dev--list-containers "deb-packaging-dev")
-(declare-function deb-packaging-dev-transient "deb-packaging-transients")
 (declare-function deb-packaging-propagate-transient "deb-packaging-propagate")
 
 ;;; Buffer-local context
@@ -380,11 +367,16 @@ adds the last-run time; DETAIL is an optional dimmed fragment."
             (when (string-match-p "_source\\.buildinfo$" b)
               (deb-packaging-status--insert-file-line b))))))))
 
+(defun deb-packaging-status--transient-args (prefix)
+  "Return PREFIX's saved/default transient args, or nil.
+Wraps `transient-args' defensively so a missing prefix yields nil
+rather than signaling."
+  (ignore-errors (transient-args prefix)))
+
 (defun deb-packaging-status--transient-flag-p (prefix flag)
   "Return non-nil if FLAG is in PREFIX's saved/default transient args."
-  (and (fboundp 'transient-args)
-       (let ((args (ignore-errors (transient-args prefix))))
-         (and args (member flag args) t))))
+  (let ((args (deb-packaging-status--transient-args prefix)))
+    (and args (member flag args) t)))
 
 (defun deb-packaging-status--insert-binary (ctx hide)
   "Insert the Binary phase section from CTX, collapsed when HIDE."
@@ -429,7 +421,7 @@ adds the last-run time; DETAIL is an optional dimmed fragment."
           (deb-packaging-status--insert-note "waiting on source build")))
         (when (deb-packaging-status--transient-flag-p
                'deb-packaging-binary-build-transient
-               "--build-failed-commands=%SBUILD_SHELL")
+               deb-packaging-sbuild-shell-flag)
           (deb-packaging-status--insert-note
            "Debug shell enabled, drops into chroot on build failure"))))))
 
@@ -562,11 +554,10 @@ ubuntu-lint targets source package metadata."
 
 (defun deb-packaging-status--transient-arg-value (prefix flag)
   "Return the value of FLAG from PREFIX's saved/default transient args.
-Returns nil if the flag is unset or transient is unavailable."
-  (and (fboundp 'transient-args)
-       (let ((args (ignore-errors (transient-args prefix))))
-         (when args
-           (transient-arg-value flag args)))))
+Returns nil if the flag is unset or the prefix is unavailable."
+  (let ((args (deb-packaging-status--transient-args prefix)))
+    (when args
+      (transient-arg-value flag args))))
 
 (defun deb-packaging-status--insert-upload (ctx hide)
   "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE."
@@ -574,10 +565,10 @@ Returns nil if the flag is unset or transient is unavailable."
          (changes (alist-get 'source-changes arts))
          (ppa (deb-packaging-status--transient-arg-value
                'deb-packaging-upload-transient "--ppa="))
-         (state (deb-packaging-status--phase-state 'ppa-tests nil t)))
+         (state (deb-packaging-status--phase-state 'dput nil t)))
     (magit-insert-section (deb-packaging-upload nil hide)
       (magit-insert-heading
-        (deb-packaging-status--phase-heading state "Upload" 'ppa-tests))
+        (deb-packaging-status--phase-heading state "Upload" 'dput))
       (magit-insert-section-body
         (deb-packaging-status--insert-state-row
          (delq nil
@@ -635,55 +626,54 @@ Unparseable versions are grouped under \"unknown\"."
 (defun deb-packaging-status--insert-dev (ctx hide)
   "Insert a Dev section showing LXD dev containers for CTX's package.
 Collapsed when HIDE. Containers match by name prefix."
-  (when (fboundp 'deb-packaging-dev--list-containers)
-    (let* ((name (plist-get ctx :name))
-           (distro (plist-get ctx :distro))
-           (containers (deb-packaging-dev--list-containers
-                        (when name (format "deb-dev-%s-" name))))
-           (target (when (and name distro)
-                     (format "deb-dev-%s-%s" name distro))))
-      (when containers
-        (magit-insert-section (deb-packaging-dev nil hide)
-          (magit-insert-heading
-            (concat
-             (propertize (deb-packaging-status--pad
-                          "Dev shell" deb-packaging-status--label-width)
-                         'font-lock-face 'magit-section-heading)
-             (propertize
-              (if target
-                  (if (cl-find target containers
-                               :key (lambda (c) (plist-get c :name))
-                               :test #'equal)
-                      "ready"
-                    "none")
-                (format "%d" (length containers)))
-              'font-lock-face
-              (if (and target
-                       (cl-find target containers
-                                :key (lambda (c) (plist-get c :name))
-                                :test #'equal))
-                  'deb-packaging-status-done
-                'shadow))))
-          (magit-insert-section-body
-            (dolist (c containers)
-              (let* ((cname (plist-get c :name))
-                     (status (plist-get c :status))
-                     (source (plist-get c :source))
-                     (currentp (equal cname target)))
-                (insert
-                 (format "    %s %s %s\n"
-                         (propertize cname 'font-lock-face
-                                     (if currentp
-                                         'magit-section-secondary-heading
-                                       'shadow))
-                         (propertize (downcase status) 'font-lock-face
-                                     (if (string= status "RUNNING")
-                                         'deb-packaging-status-done
-                                       'shadow))
-                         (if source
-                             (propertize (concat "  " source)
-                                         'font-lock-face 'shadow)
-                           "")))))))))))
+  (let* ((name (plist-get ctx :name))
+         (distro (plist-get ctx :distro))
+         (containers (deb-packaging-dev--list-containers
+                      (when name (format "deb-dev-%s-" name))))
+         (target (when (and name distro)
+                   (format "deb-dev-%s-%s" name distro))))
+    (when containers
+      (magit-insert-section (deb-packaging-dev nil hide)
+        (magit-insert-heading
+          (concat
+           (propertize (deb-packaging-status--pad
+                        "Dev shell" deb-packaging-status--label-width)
+                       'font-lock-face 'magit-section-heading)
+           (propertize
+            (if target
+                (if (cl-find target containers
+                             :key (lambda (c) (plist-get c :name))
+                             :test #'equal)
+                    "ready"
+                  "none")
+              (format "%d" (length containers)))
+            'font-lock-face
+            (if (and target
+                     (cl-find target containers
+                              :key (lambda (c) (plist-get c :name))
+                              :test #'equal))
+                'deb-packaging-status-done
+              'shadow))))
+        (magit-insert-section-body
+          (dolist (c containers)
+            (let* ((cname (plist-get c :name))
+                   (status (plist-get c :status))
+                   (source (plist-get c :source))
+                   (currentp (equal cname target)))
+              (insert
+               (format "    %s %s %s\n"
+                       (propertize cname 'font-lock-face
+                                   (if currentp
+                                       'magit-section-secondary-heading
+                                     'shadow))
+                       (propertize (downcase status) 'font-lock-face
+                                   (if (string= status "RUNNING")
+                                       'deb-packaging-status-done
+                                     'shadow))
+                       (if source
+                           (propertize (concat "  " source)
+                                       'font-lock-face 'shadow)
+                         ""))))))))))
 
 (defun deb-packaging-status--next-actionable-key (ctx)
   "Return the run-history key of the first ready phase in CTX, or nil.
@@ -703,9 +693,9 @@ expands by default."
                        'sbuild (and bin-changes debs) dsc))
                 (cons 'autopkgtest
                       (deb-packaging-status--phase-state 'autopkgtest nil debs))
-                (cons 'ppa-tests
+                (cons 'dput
                       ;; Upload is always ready; PPA is set inside its transient.
-                      (deb-packaging-status--phase-state 'ppa-tests nil t)))))
+                      (deb-packaging-status--phase-state 'dput nil t)))))
     (car (cl-find 'ready phases :key #'cdr))))
 
 (defun deb-packaging-status--render ()
@@ -749,10 +739,10 @@ at the bottom. Point ends on the first phase heading."
                 next 'autopkgtest))
           (deb-packaging-status--insert-upload
            ctx (deb-packaging-status--hide-phase-p
-                (deb-packaging-status--phase-state 'ppa-tests nil t)
-                                 next 'ppa-tests))
-           (deb-packaging-status--insert-stale ctx t)
-           (deb-packaging-status--insert-dev ctx t))))
+                (deb-packaging-status--phase-state 'dput nil t)
+                next 'dput))
+          (deb-packaging-status--insert-stale ctx t)
+          (deb-packaging-status--insert-dev ctx t))))
      ;; Walk the freshly-built tree once, applying each section's initial
      ;; visibility through the show/hide path.  This is what creates the fold
      ;; indicators; without it the `>'/`v' cue is missing until the first manual
@@ -800,13 +790,22 @@ Called from process sentinels after a run finishes."
         (when (derived-mode-p 'deb-packaging-status-mode)
           (deb-packaging-status-refresh))))))
 
+(defvar-local deb-packaging-status--refresh-timer nil
+  "Idle timer for debounced window-selection refresh, or nil.")
+
 (defun deb-packaging-status--on-window-selected (_window)
   "Re-scan and refresh the status buffer when it gains selection.
 Registered on `window-selection-change-functions' so external changes
-are picked up. The scan is side-effect-free and folding is preserved."
+are picked up. Debounced via an idle timer so rapid window switches do
+not trigger a filesystem scan each time. The scan is side-effect-free
+and folding is preserved."
   (when (and (derived-mode-p 'deb-packaging-status-mode)
              (eq (current-buffer) (window-buffer (selected-window))))
-    (deb-packaging-status-refresh)))
+    (when deb-packaging-status--refresh-timer
+      (cancel-timer deb-packaging-status--refresh-timer))
+    (setq deb-packaging-status--refresh-timer
+          (run-with-idle-timer 0.4 nil
+                               #'deb-packaging-status-refresh))))
 
 ;;; Actions
 
@@ -904,8 +903,7 @@ Navigation and folding come from `magit-section-mode'."
 Primary entry point for the deb-packaging workflow."
   (interactive)
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (info (and pkg-dir (deb-packaging--parse-changelog pkg-dir)))
-         (name (nth 0 info))
+         (name (deb-packaging--package-name pkg-dir))
          (buf (get-buffer-create (deb-packaging-status--buffer-name name))))
     (with-current-buffer buf
       (when pkg-dir
@@ -914,7 +912,7 @@ Primary entry point for the deb-packaging workflow."
         (deb-packaging-status-mode))
       (deb-packaging-status--render)
       (deb-packaging-status--goto-first-phase))
-    (switch-to-buffer buf)))
+    (pop-to-buffer buf)))
 
 (provide 'deb-packaging-status)
 ;;; deb-packaging-status.el ends here

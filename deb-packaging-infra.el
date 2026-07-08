@@ -2,6 +2,7 @@
 
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
+;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
 
 ;;; Commentary:
@@ -39,6 +40,36 @@ as `help-echo'; t means use VALUE."
     (when tip
       (put-text-property 0 (length cell) 'help-echo tip cell))
     cell))
+
+(defun deb-packaging-infra--read-name (prompt list-fn)
+  "Return the name at point, or prompt with PROMPT from (LIST-FN).
+LIST-FN returns a list of plists with :name keys."
+  (or (plist-get (tabulated-list-get-id) :name)
+      (let* ((items (funcall list-fn))
+             (names (mapcar (lambda (s) (plist-get s :name)) items)))
+        (completing-read prompt names nil t))))
+
+(defun deb-packaging-infra--read-entry (prompt &optional type-filter)
+  "Return the LXD entry at point, or prompt for one with PROMPT.
+The entry is the plist stored as the tabulated-list id.  With
+TYPE-FILTER (a symbol like `container'), restrict completion to entries
+of that type and signal `user-error' if none exist."
+  (or (tabulated-list-get-id)
+      (let* ((all (deb-packaging-infra--list-lxd-all))
+             (candidates (if type-filter
+                             (cl-remove-if-not
+                              (lambda (e) (eq (plist-get e :type) type-filter))
+                              all)
+                           all))
+             (names (mapcar (lambda (e) (plist-get e :name)) candidates)))
+        (when (null names)
+          (user-error (if (eq type-filter 'container)
+                          "No dev containers found"
+                        "No LXD images or containers found")))
+        (let ((name (completing-read prompt names nil t)))
+          (cl-find name all
+                   :key (lambda (e) (plist-get e :name))
+                   :test #'equal)))))
 
 ;;; Schroot Management
 
@@ -91,10 +122,8 @@ Each plist has keys: :name, :config-file, :description, :directory."
   "Update a schroot with sbuild-update.
 Use schroot at point, or prompt."
   (interactive
-   (list (or (plist-get (tabulated-list-get-id) :name)
-             (let* ((schroots (deb-packaging-infra--list-schroots))
-                    (names (mapcar (lambda (s) (plist-get s :name)) schroots)))
-               (completing-read "Schroot to update: " names nil t)))))
+   (list (deb-packaging-infra--read-name
+          "Schroot to update: " #'deb-packaging-infra--list-schroots)))
   (compile (format "sbuild-update -udcar %s" (shell-quote-argument name))))
 
 (defun deb-packaging-infra-end-sessions ()
@@ -106,10 +135,8 @@ Use schroot at point, or prompt."
   "Delete a schroot (config and directory).
 Use schroot at point, or prompt."
   (interactive
-   (list (or (plist-get (tabulated-list-get-id) :name)
-             (let* ((schroots (deb-packaging-infra--list-schroots))
-                    (names (mapcar (lambda (s) (plist-get s :name)) schroots)))
-               (completing-read "Schroot to delete: " names nil t)))))
+   (list (deb-packaging-infra--read-name
+          "Schroot to delete: " #'deb-packaging-infra--list-schroots)))
   (let* ((schroots (deb-packaging-infra--list-schroots))
          (sc (cl-find name schroots
                       :key (lambda (s) (plist-get s :name)) :test #'equal))
@@ -178,28 +205,32 @@ Use schroot at point, or prompt."
       (unless (derived-mode-p 'deb-packaging-infra-schroots-mode)
         (deb-packaging-infra-schroots-mode))
       (deb-packaging-infra-refresh-schroots))
-    (switch-to-buffer buf)))
+    (pop-to-buffer buf)))
 
 ;;; LXD Management (autopkgtest images and dev containers)
 
 (defun deb-packaging-infra--list-lxd-images ()
   "Return autopkgtest LXD image plists from `lxc image list'.
-Keys: :alias, :fingerprint, :description, :arch, :size."
-  (let ((output (shell-command-to-string "lxc image list --format=csv 2>/dev/null")))
+Keys: :alias, :fingerprint, :description, :arch, :size.
+Uses JSON output and keyed access to stay robust against column changes."
+  (require 'json)
+  (let ((output (shell-command-to-string "lxc image list --format=json 2>/dev/null")))
     (when (and output (not (string-empty-p output)))
-      (let (result)
-        (dolist (line (split-string output "\n" t))
-          (let ((fields (split-string line ",")))
-            (when (>= (length fields) 2)
-              (let ((alias (nth 0 fields)))
-                (when (and alias (string-match-p "autopkgtest" alias))
-                  (push (list :alias alias
-                              :fingerprint (nth 1 fields)
-                              :description (nth 3 fields)
-                              :arch (nth 4 fields)
-                              :size (nth 6 fields))
-                        result))))))
-        (nreverse result)))))
+      (let ((data (json-read-from-string output)))
+        (cl-remove-if-not
+         #'identity
+         (mapcar
+          (lambda (img)
+            (let* ((aliases (cdr (assoc-string "aliases" img)))
+                   (alias (and (arrayp aliases) (> (length aliases) 0)
+                               (cdr (assoc-string "name" (aref aliases 0))))))
+              (when (and alias (string-match-p "autopkgtest" alias))
+                (list :alias alias
+                      :fingerprint (cdr (assoc-string "fingerprint" img))
+                      :description (cdr (assoc-string "description" img))
+                      :arch (cdr (assoc-string "architecture" img))
+                      :size (cdr (assoc-string "size" img))))))
+          data))))))
 
 (defun deb-packaging-infra--list-lxd-all ()
   "Return LXD images and dev containers as plists.
@@ -238,15 +269,7 @@ Each plist has :name, :type, :status, and type-specific keys."
   "Delete the LXD image or container at point.
 ENTRY is a plist from `deb-packaging-infra--list-lxd-all'."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let* ((all (deb-packaging-infra--list-lxd-all))
-                    (names (mapcar (lambda (e) (plist-get e :name)) all)))
-               (when (null names)
-                 (user-error "No LXD images or containers found"))
-               (let ((name (completing-read "Delete: " names nil t)))
-                 (cl-find name all
-                          :key (lambda (e) (plist-get e :name))
-                          :test #'equal))))))
+   (list (deb-packaging-infra--read-entry "Delete: ")))
   (let ((name (plist-get entry :name))
         (type (plist-get entry :type)))
     (when (yes-or-no-p
@@ -261,18 +284,7 @@ ENTRY is a plist from `deb-packaging-infra--list-lxd-all'."
   "Open dired for the LXD container at point.
 Images are ignored."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let* ((all (deb-packaging-infra--list-lxd-all))
-                    (containers (cl-remove-if-not
-                                 (lambda (e) (eq (plist-get e :type) 'container))
-                                 all))
-                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
-               (when (null names)
-                 (user-error "No dev containers found"))
-               (let ((name (completing-read "Visit container: " names nil t)))
-                 (cl-find name all
-                          :key (lambda (e) (plist-get e :name))
-                          :test #'equal))))))
+   (list (deb-packaging-infra--read-entry "Visit container: " 'container)))
   (if (not (eq (plist-get entry :type) 'container))
       (message "Only dev containers can be visited")
     (let* ((raw (plist-get entry :raw))
@@ -287,18 +299,7 @@ Images are ignored."
   "Stop the LXD container at point.
 No-op for images."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let* ((all (deb-packaging-infra--list-lxd-all))
-                    (containers (cl-remove-if-not
-                                 (lambda (e) (eq (plist-get e :type) 'container))
-                                 all))
-                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
-               (when (null names)
-                 (user-error "No dev containers found"))
-               (let ((name (completing-read "Stop container: " names nil t)))
-                 (cl-find name all
-                          :key (lambda (e) (plist-get e :name))
-                          :test #'equal))))))
+   (list (deb-packaging-infra--read-entry "Stop container: " 'container)))
   (if (not (eq (plist-get entry :type) 'container))
       (message "Cannot stop an image")
     (let ((name (plist-get entry :name)))
@@ -311,18 +312,7 @@ No-op for images."
   "Start the LXD container at point.
 No-op for images."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let* ((all (deb-packaging-infra--list-lxd-all))
-                    (containers (cl-remove-if-not
-                                 (lambda (e) (eq (plist-get e :type) 'container))
-                                 all))
-                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
-               (when (null names)
-                 (user-error "No dev containers found"))
-               (let ((name (completing-read "Start container: " names nil t)))
-                 (cl-find name all
-                          :key (lambda (e) (plist-get e :name))
-                          :test #'equal))))))
+   (list (deb-packaging-infra--read-entry "Start container: " 'container)))
   (if (not (eq (plist-get entry :type) 'container))
       (message "Cannot start an image")
     (let ((name (plist-get entry :name)))
@@ -335,18 +325,7 @@ No-op for images."
   "Open a shell in the LXD container at point.
 Runs `lxc exec NAME -- bash -l' in a comint buffer."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let* ((all (deb-packaging-infra--list-lxd-all))
-                    (containers (cl-remove-if-not
-                                 (lambda (e) (eq (plist-get e :type) 'container))
-                                 all))
-                    (names (mapcar (lambda (e) (plist-get e :name)) containers)))
-               (when (null names)
-                 (user-error "No dev containers found"))
-               (let ((name (completing-read "Shell into container: " names nil t)))
-                 (cl-find name all
-                          :key (lambda (e) (plist-get e :name))
-                          :test #'equal))))))
+   (list (deb-packaging-infra--read-entry "Shell into container: " 'container)))
   (if (not (eq (plist-get entry :type) 'container))
       (message "Cannot shell into an image")
     (let ((name (plist-get entry :name)))
@@ -354,7 +333,7 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
       (deb-packaging-dev--ensure-tramp-method)
       (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
                               "exec" name "--" "bash" "-l")))
-        (switch-to-buffer buf)))))
+        (pop-to-buffer buf)))))
 
 ;;; LXD list buffer
 
@@ -418,7 +397,7 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
       (unless (derived-mode-p 'deb-packaging-infra-lxd-mode)
         (deb-packaging-infra-lxd-mode))
       (deb-packaging-infra-refresh-lxd))
-    (switch-to-buffer buf)))
+    (pop-to-buffer buf)))
 
 ;;; QEMU Management
 
@@ -453,10 +432,8 @@ Each plist has keys: :name, :path, :size."
   "Delete a QEMU autopkgtest image.
 Use image at point, or prompt."
   (interactive
-   (list (or (plist-get (tabulated-list-get-id) :name)
-             (let* ((images (deb-packaging-infra--list-qemu-images))
-                    (names (mapcar (lambda (i) (plist-get i :name)) images)))
-               (completing-read "Image to delete: " names nil t)))))
+   (list (deb-packaging-infra--read-name
+          "Image to delete: " #'deb-packaging-infra--list-qemu-images)))
   (let* ((images (deb-packaging-infra--list-qemu-images))
          (img (cl-find name images
                        :key (lambda (i) (plist-get i :name)) :test #'equal))
@@ -517,7 +494,7 @@ Use image at point, or prompt."
       (unless (derived-mode-p 'deb-packaging-infra-qemu-images-mode)
         (deb-packaging-infra-qemu-images-mode))
       (deb-packaging-infra-refresh-qemu-images))
-    (switch-to-buffer buf)))
+    (pop-to-buffer buf)))
 
 ;;; PPA (Launchpad) Management
 
@@ -747,7 +724,7 @@ loading message so Emacs does not block."
       (unless (derived-mode-p 'deb-packaging-infra-ppas-mode)
         (deb-packaging-infra-ppas-mode))
       (deb-packaging-infra-refresh-ppas))
-    (switch-to-buffer buf)))
+    (pop-to-buffer buf)))
 
 ;;; Infrastructure dispatch
 

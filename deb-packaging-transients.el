@@ -2,18 +2,21 @@
 
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
+;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
 
 ;;; Commentary:
 
-;; Six per-tool transients:
+;; Eight per-tool transients:
 ;;
 ;;   deb-packaging-source-build-transient  dpkg-buildpackage
 ;;   deb-packaging-binary-build-transient  sbuild
 ;;   deb-packaging-lint-transient          lintian + ubuntu-lint
 ;;   deb-packaging-test-transient          autopkgtest
-;;   deb-packaging-upload-transient        ppa tests
+;;   deb-packaging-upload-transient        dput + ppa tests
 ;;   deb-packaging-clean-transient         clean artifacts
+;;   deb-packaging-reset-transient         reset source tree
+;;   deb-packaging-dev-transient           LXD dev containers
 ;;
 ;; Each lists its own flags and forwards them to the runner in
 ;; deb-packaging-commands.el.  Flags persist per-prefix via transient.
@@ -31,6 +34,12 @@
 
 ;; Tool-specific variables live in deb-packaging-commands.el.
 (defvar deb-packaging-sbuild-variants)
+
+;; sbuild `--build-failed-commands' token.  sbuild expands %SBUILD_SHELL to
+;; a shell invocation; shared here so the status buffer can detect the flag
+;; without duplicating the literal.
+(defconst deb-packaging-sbuild-shell-flag
+  "--build-failed-commands=%SBUILD_SHELL")
 
 ;; Forward-declare command functions.
 (declare-function deb-packaging-source-build "deb-packaging-commands")
@@ -107,8 +116,8 @@ string at runtime.")
     :allow-empty nil)
    ("-A" "Build arch-all packages"  "-A")
    ("-v" "Verbose"                  "-v")
-   ("-F" "Shell on build failure"
-    "--build-failed-commands=%SBUILD_SHELL")
+    ("-F" "Shell on build failure"
+     deb-packaging-sbuild-shell-flag)
    ("-e" "Extra repository"
     "--extra-repository="
     :class deb-packaging--extra-repo-argument

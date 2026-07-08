@@ -4,7 +4,6 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
-;; URL: https://github.com/example/deb-packaging
 
 ;;; Commentary:
 
@@ -119,24 +118,33 @@ the parser."
     ('ubuntu-lint #'deb-packaging--parse-ubuntu-lint-summary)
     (_ nil)))
 
+(defun deb-packaging--wrap-sentinel (proc action)
+  "Wrap PROC's existing sentinel, calling ACTION (a function) after it.
+ACTION is called as (ACTION PROC EVENT) once the process exits or is
+signaled.  The original sentinel (if any) is preserved and invoked first."
+  (let ((old (process-sentinel proc)))
+    (set-process-sentinel
+     proc
+     (lambda (p event)
+       (when (functionp old)
+         (funcall old p event))
+       (when (memq (process-status p) '(exit signal))
+         (funcall action p event))))))
+
 (defun deb-packaging--attach-run-sentinel (proc key buf-name)
   "Attach a sentinel to PROC that records the outcome for KEY.
 For lint-style keys, parse findings counts and store them as :summary."
-  (let ((old (process-sentinel proc)))
-    (set-process-sentinel
-      proc
-      (lambda (p event)
-        (when (functionp old)
-          (funcall old p event))
-        (when (memq (process-status p) '(exit signal))
-          (let* ((status (if (and (eq (process-status p) 'exit)
-                                  (zerop (process-exit-status p)))
-                             'success
-                           'failure))
-                 (parser (deb-packaging--run-summary-parser key))
-                 (summary (when parser (funcall parser buf-name))))
-            (deb-packaging--record-run key status buf-name summary)
-           (deb-packaging--notify-status-refresh)))))))
+  (deb-packaging--wrap-sentinel
+   proc
+   (lambda (p _event)
+     (let* ((status (if (and (eq (process-status p) 'exit)
+                             (zerop (process-exit-status p)))
+                        'success
+                      'failure))
+            (parser (deb-packaging--run-summary-parser key))
+            (summary (when parser (funcall parser buf-name))))
+       (deb-packaging--record-run key status buf-name summary)
+       (deb-packaging--notify-status-refresh)))))
 
 (defun deb-packaging--run-command (name args &optional dir key)
   "Run command in a comint buffer.
@@ -165,10 +173,10 @@ KEY (a symbol) enables run tracking."
                 #'ansi-color-process-output nil t))
     (when key
       (deb-packaging--record-run key 'running buf-name)
-      (when-let ((proc (get-buffer-process buf-name)))
+      (when-let* ((proc (get-buffer-process buf-name)))
         (deb-packaging--attach-run-sentinel proc key buf-name))
       (deb-packaging--notify-status-refresh))
-    (switch-to-buffer buf-name)
+    (pop-to-buffer buf-name)
     buf-name))
 
 ;;; dpkg-buildpackage
@@ -221,7 +229,7 @@ onto lintian's command line.  TARGETS may contain one .dsc, several
   (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let ((parent-dir (file-name-directory (directory-file-name pkg-dir)))
+    (let ((parent-dir (deb-packaging--parent-dir pkg-dir))
           (lint-args (deb-packaging--filter-args
                       (or args '())
                       deb-packaging--lintian-arg-prefixes)))
@@ -234,8 +242,8 @@ onto lintian's command line.  TARGETS may contain one .dsc, several
   "Run lintian on the source .dsc file with ARGS."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (info (deb-packaging--parse-changelog pkg-dir))
-         (parent-dir (file-name-directory (directory-file-name pkg-dir)))
+         (info (deb-packaging--package-info pkg-dir))
+         (parent-dir (deb-packaging--parent-dir pkg-dir))
          (artifacts (deb-packaging--scan-artifacts
                      (nth 0 info) (nth 1 info) parent-dir))
          (dsc (alist-get 'dsc artifacts)))
@@ -247,9 +255,8 @@ onto lintian's command line.  TARGETS may contain one .dsc, several
   "Return the .deb files for the current package.
 Signal `user-error' if none exist."
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
-         (parent-dir (when pkg-dir
-                       (file-name-directory (directory-file-name pkg-dir))))
+         (info (deb-packaging--package-info pkg-dir))
+         (parent-dir (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
          (artifacts (when info
                       (deb-packaging--scan-artifacts
                        (nth 0 info) (nth 1 info) parent-dir)))
@@ -284,10 +291,10 @@ modes pass only the named context."
     ("changelog" (list "--changelog"
                        (expand-file-name "debian/changelog" pkg-dir)))
     (_
-     (let* ((info (deb-packaging--parse-changelog pkg-dir))
+     (let* ((info (deb-packaging--package-info pkg-dir))
             (name (nth 0 info))
             (version (nth 1 info))
-            (parent-dir (file-name-directory (directory-file-name pkg-dir)))
+            (parent-dir (deb-packaging--parent-dir pkg-dir))
             (artifacts (when info
                          (deb-packaging--scan-artifacts name version parent-dir)))
             (changes (alist-get 'source-changes artifacts)))
@@ -323,13 +330,16 @@ package directory under the `ubuntu-lint' key."
 ;;; sbuild
 
 (defvar deb-packaging-sbuild-variants
-  '(("rust-ppa"
-     . "deb [trusted=yes] http://ppa.launchpadcontent.net/rust-toolchain/staging/ubuntu/ %s main")
-    ("proposed"
+  '(("proposed"
      . "deb http://archive.ubuntu.com/ubuntu/ %s-proposed main"))
   "Alist of short name to extra-repository string for sbuild.
 %s is replaced with the target distro.  Used as completion candidates in
-the binary-build transient's --extra-repository option.")
+the binary-build transient --extra-repository option.
+
+Add your own entries, e.g. a team PPA:
+
+  (add-to-list \\='deb-packaging-sbuild-variants
+               \\='(\"rust-ppa\" . \"deb [trusted=yes] http://ppa.launchpadcontent.net/rust-toolchain/staging/ubuntu/ %s main\"))")
 
 (defun deb-packaging--expand-extra-repo (value distro)
   "Expand VALUE into an extra-repository string for DISTRO.
@@ -345,8 +355,8 @@ template; otherwise return VALUE unchanged for custom repos."
   (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((info (deb-packaging--parse-changelog pkg-dir))
-           (parent-dir (file-name-directory (directory-file-name pkg-dir)))
+    (let* ((info (deb-packaging--package-info pkg-dir))
+           (parent-dir (deb-packaging--parent-dir pkg-dir))
            (artifacts (when info
                         (deb-packaging--scan-artifacts
                          (nth 0 info) (nth 1 info) parent-dir)))
@@ -435,8 +445,8 @@ Returns nil if RUNNER has no registered hint."
   (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((info (deb-packaging--parse-changelog pkg-dir))
-           (parent-dir (file-name-directory (directory-file-name pkg-dir)))
+    (let* ((info (deb-packaging--package-info pkg-dir))
+           (parent-dir (deb-packaging--parent-dir pkg-dir))
            (artifacts (when info
                         (deb-packaging--scan-artifacts
                          (nth 0 info) (nth 1 info) parent-dir)))
@@ -488,11 +498,10 @@ distro defaults to `deb-packaging-target-distro'."
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA specified -- set it with the -p option"))
     (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-           (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
+           (info (deb-packaging--package-info pkg-dir))
            (name (nth 0 info))
            (version (nth 1 info))
-           (parent-dir (when pkg-dir
-                         (file-name-directory (directory-file-name pkg-dir))))
+           (parent-dir (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
            (artifacts (when (and name version parent-dir)
                         (deb-packaging--scan-artifacts
                          name version parent-dir)))
@@ -519,8 +528,7 @@ ARGS is the argument list from `deb-packaging-upload-transient'."
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA specified -- set it with the -p option"))
     (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-           (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
-           (name (nth 0 info))
+           (name (deb-packaging--package-name pkg-dir))
            (cmd-args (append (list "ppa" "tests" ppa)
                              (when name (list "-p" name))
                              (list "-r" distro))))
@@ -541,10 +549,9 @@ output (parent) directory."
     (let* ((effective-args (or args '()))
            (do-artifacts (member "--artifacts" effective-args))
            (do-stale     (member "--stale"     effective-args))
-           (info (deb-packaging--parse-changelog pkg-dir))
-           (name (nth 0 info))
-           (version (nth 1 info))
-           (parent-dir (file-name-directory (directory-file-name pkg-dir)))
+           (name (deb-packaging--package-name pkg-dir))
+           (version (deb-packaging--package-version pkg-dir))
+           (parent-dir (deb-packaging--parent-dir pkg-dir))
            (file-version (deb-packaging--version-to-filename version))
            (files nil))
       (when do-artifacts
@@ -591,7 +598,7 @@ Pops quilt patches, removes .pc/, and/or removes debian/files."
         (push "pop quilt" desc))
       (when do-pc
         (push "rm -rf .pc/" steps)
-        (push "rm .pc/" desc))
+        (push "rm -rf .pc/" desc))
       (when do-files
         (push "rm -f debian/files" steps)
         (push "rm debian/files" desc))

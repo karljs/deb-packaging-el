@@ -2,6 +2,7 @@
 
 ;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
+;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
 
 ;;; Commentary:
@@ -56,7 +57,7 @@ Returns DISTRO."
   "Return the target distro, seeding from the changelog if needed.
 Uses the current value if already chosen; otherwise seeds once from the
 changelog, falling back to \"noble\"."
-  (when-let ((distro (plist-get (deb-packaging--scan-context) :distro)))
+  (when-let* ((distro (plist-get (deb-packaging--scan-context) :distro)))
     (deb-packaging--maybe-seed-distro distro))
   deb-packaging-target-distro)
 
@@ -78,9 +79,8 @@ When nil, the `personal' remote is not configured in prepared clones;
 you'll push to salsa using your own git remote setup.")
 
 (defvar deb-packaging-propagate-cache-dir
-  (expand-file-name "propagate"
-                    (or (getenv "XDG_CACHE_HOME")
-                        (expand-file-name "~/.cache")))
+  (expand-file-name "deb-packaging/propagate"
+                    (deb-packaging--cache-dir))
   "Directory for prepared propagate clones.
 Defaults to $XDG_CACHE_HOME/deb-packaging/propagate or
 ~/.cache/deb-packaging/propagate.")

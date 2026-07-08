@@ -4,7 +4,6 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
-;; URL: https://github.com/example/deb-packaging
 
 ;;; Commentary:
 
@@ -42,11 +41,9 @@
 
 (declare-function magit-status-setup-buffer "magit-status" (directory))
 (declare-function magit-toplevel "magit-git" (&optional noerror))
-(declare-function deb-packaging--parse-changelog "deb-packaging-detect")
 (declare-function deb-packaging--find-package-dir "deb-packaging-detect")
 (declare-function deb-packaging--list-patches "deb-packaging-detect")
 (declare-function deb-packaging--vcs-git "deb-packaging-detect")
-(declare-function deb-packaging--control-field "deb-packaging-detect")
 
 ;;; Slug and description helpers
 
@@ -314,14 +311,14 @@ Return plist: :description, :author.  Description may be multi-line."
          (diff-start (string-match "^---" content))
          (diff-body (if diff-start (substring content diff-start) ""))
          (normalized (deb-packaging-propagate--normalize-diff-paths diff-body)))
-    (concat
-     (format "From %s Mon Sep 17 00:00:00 2001\n"
-             (secure-hash 'sha1 patch-path))
-     (format "From: %s\n" author)
-     (format "Date: %s\n" (format-time-string "%a, %d %b %Y %H:%M:%S %z"))
-     (format "Subject: [PATCH] %s\n\n" description)
-     normalized
-     "\n-- \n2.43.0\n\n")))
+     (concat
+      (format "From %s Mon Sep 17 00:00:00 2001\n"
+              (secure-hash 'sha1 patch-path))
+      (format "From: %s\n" author)
+      (format "Date: %s\n" (format-time-string "%a, %d %b %Y %H:%M:%S %z"))
+      (format "Subject: [PATCH] %s\n\n" description)
+      normalized
+      "\n-- \ndeb-packaging\n\n")))
 
 ;;; Clone directory and salsa helpers
 
@@ -427,10 +424,8 @@ per item.  Opens the result in view-mode for review."
   (interactive
    (let* ((items (deb-packaging-propagate--read-fix-source-multi nil t))
           (pkg-dir (deb-packaging--find-package-dir nil t))
-          (info (when pkg-dir (deb-packaging--parse-changelog pkg-dir)))
-          (name (nth 0 info))
-          (parent (when pkg-dir
-                    (file-name-directory (directory-file-name pkg-dir))))
+          (name (deb-packaging--package-name pkg-dir))
+          (parent (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
           (slug (deb-packaging-propagate--item-slug (car items)))
           (default-output (when (and name parent slug)
                             (expand-file-name
@@ -448,17 +443,17 @@ per item.  Opens the result in view-mode for review."
               ('patch
                (deb-packaging-propagate--quilt-to-git-am-block
                 (plist-get item :path)))
-               ('commit
-                (let ((output (let ((default-directory
-                                     (plist-get item :source-dir)))
-                                 (magit-git-output "format-patch" "-1" "--stdout"
-                                                   (plist-get item :ref)))))
-                  (or output "")))
-               ('range
-                (or (let ((default-directory
-                           (plist-get item :source-dir)))
-                      (magit-git-output "format-patch" "--stdout"
-                                        (plist-get item :range)))
+              ('commit
+               (let ((output (let ((default-directory
+                                    (plist-get item :source-dir)))
+                                (magit-git-output "format-patch" "-1" "--stdout"
+                                                  (plist-get item :ref)))))
+                 (or output "")))
+              ('range
+               (or (let ((default-directory
+                          (plist-get item :source-dir)))
+                     (magit-git-output "format-patch" "--stdout"
+                                       (plist-get item :range)))
                    ""))
               (_ "")))
           items "")))
@@ -480,8 +475,7 @@ Does not apply any fix — press `P' to apply items after the clone
 is ready."
   (interactive)
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (info (deb-packaging--parse-changelog pkg-dir))
-         (pkg-name (nth 0 info))
+         (pkg-name (deb-packaging--package-name pkg-dir))
          (detected-url (or (deb-packaging--vcs-git pkg-dir) ""))
          (vcs-url (read-string "Clone URL: " detected-url))
          (clone-dir (deb-packaging-propagate--clone-dir pkg-name)))
@@ -563,9 +557,7 @@ produces a patch file, and opens `deb-packaging-propagate-apply-patch'
 \(mirrors `magit-patch-apply'\\='s flags: --cached/--index/--3way).
 The user chooses flags and presses `a' to apply via `magit-run-git'."
   (interactive)
-  (let* ((clone-dir (or (when (fboundp 'magit-toplevel)
-                          (magit-toplevel))
-                        default-directory
+  (let* ((clone-dir (or (magit-toplevel)
                         (user-error "Not in a git repository")))
          (item (deb-packaging-propagate--read-fix-source-one clone-dir))
          (patch-file (deb-packaging-propagate--produce-patch-file item)))

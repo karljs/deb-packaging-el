@@ -1,9 +1,9 @@
 ;;; deb-packaging-detect.el --- Source detection -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2024 Karl Smeltzer
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
-;; URL: https://github.com/example/deb-packaging
 
 ;;; Commentary:
 
@@ -29,6 +29,43 @@ a container."
            "This command runs on the host, but the current file is inside a dev container.  Run it from the status buffer (M-x deb-packaging-status) or a host file."))
         expanded))))
 
+;;; Shared helpers
+
+(defun deb-packaging--parent-dir (pkg-dir)
+  "Return the build-output directory (parent of PKG-DIR)."
+  (file-name-directory (directory-file-name pkg-dir)))
+
+(defun deb-packaging--package-info (&optional pkg-dir)
+  "Return (NAME VERSION) for the package in PKG-DIR.
+PKG-DIR defaults to the detected package directory.  Returns nil
+outside a Debian package tree."
+  (when-let* ((info (deb-packaging--parse-changelog pkg-dir)))
+    (list (nth 0 info) (nth 1 info))))
+
+(defun deb-packaging--package-name (&optional pkg-dir)
+  "Return the source package name for PKG-DIR, or nil."
+  (car (deb-packaging--package-info pkg-dir)))
+
+(defun deb-packaging--package-version (&optional pkg-dir)
+  "Return the full version string for PKG-DIR, or nil."
+  (cadr (deb-packaging--package-info pkg-dir)))
+
+(defun deb-packaging--call-process-string (program &rest args)
+  "Run PROGRAM with ARGS synchronously, returning stdout as a string.
+Returns the trimmed output or nil if PROGRAM produced nothing."
+  (let ((output (with-output-to-string
+                  (with-current-buffer standard-output
+                    (apply #'call-process program nil t nil args)))))
+    (unless (string-empty-p output)
+      (string-trim output))))
+
+(defun deb-packaging--cache-dir ()
+  "Return the base cache directory for deb-packaging.
+Honors $XDG_CACHE_HOME, falling back to ~/.cache."
+  (or (and (getenv "XDG_CACHE_HOME")
+           (expand-file-name (getenv "XDG_CACHE_HOME")))
+      (expand-file-name "~/.cache")))
+
 ;;; Changelog Parsing
 
 (defun deb-packaging--parse-changelog (&optional dir)
@@ -38,7 +75,7 @@ a container."
                       (expand-file-name "debian/changelog" pkg-dir))))
     (when (and changelog (file-readable-p changelog))
       (with-temp-buffer
-        (insert-file-contents changelog nil 0 1024)
+        (insert-file-contents changelog)
         (goto-char (point-min))
         (when (looking-at "^\\([^ ]+\\) (\\([^)]+\\)) \\([^;]+\\);")
           (list (match-string 1)
@@ -155,24 +192,20 @@ FIELD is e.g. \"Maintainer\".  Returns the trimmed value or nil."
 
 (defun deb-packaging--architecture ()
   "Return the build architecture string (e.g. \"amd64\")."
-  (string-trim
-   (with-output-to-string
-     (with-current-buffer standard-output
-       (call-process "dpkg" nil t nil "--print-architecture")))))
+  (deb-packaging--call-process-string "dpkg" "--print-architecture"))
 
 (defun deb-packaging--schroot-exists-p (distro arch)
-  "Return non-nil if a DISTRO-ARCH schroot exists.
-Matches names starting with DISTRO and containing ARCH."
+  "Return the schroot name matching DISTRO and ARCH, or nil.
+Matches names starting with DISTRO and containing ARCH.  Callers may
+treat the return as a boolean; the name is returned so it can be reused."
   (when (and distro arch)
-    (let ((output (with-output-to-string
-                    (with-current-buffer standard-output
-                      (call-process "schroot" nil t nil "-l"))))
+    (let ((output (deb-packaging--call-process-string "schroot" "-l"))
           (target (format "%s-%s" distro arch)))
       (cl-some
        (lambda (line)
          (when (string-match-p (regexp-quote target) line)
            (string-trim (replace-regexp-in-string ":.*$" "" line))))
-       (split-string output "\n" t)))))
+       (split-string (or output "") "\n" t)))))
 
 ;;; Artifact Scanning
 
@@ -363,7 +396,7 @@ No caching or side effects."
     (let* ((name (nth 0 info))
            (version (nth 1 info))
            (distro (nth 2 info))
-           (parent-dir (file-name-directory (directory-file-name pkg-dir)))
+           (parent-dir (deb-packaging--parent-dir pkg-dir))
            (artifacts (deb-packaging--scan-artifacts name version parent-dir))
            (stale (deb-packaging--scan-stale-artifacts name version parent-dir pkg-dir)))
       (list :name name

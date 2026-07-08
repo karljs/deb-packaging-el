@@ -4,7 +4,6 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
-;; URL: https://github.com/example/deb-packaging
 
 ;;; Commentary:
 
@@ -94,6 +93,10 @@ Best-effort install.")
   "Container name for PKG/DISTRO."
   (format "deb-dev-%s-%s" pkg distro))
 
+(defun deb-packaging-dev--container-exists-p (name)
+  "Return non-nil if an LXD container named NAME exists."
+  (zerop (call-process "lxc" nil nil nil "info" name)))
+
 (defun deb-packaging-dev--mount-path (pkg)
   "Mount path for PKG inside the container."
   (format "%s/%s" deb-packaging-dev-mount-point pkg))
@@ -113,10 +116,8 @@ Best-effort install.")
 (defun deb-packaging-dev--langs-cache-file (pkg distro)
   "Return cache file path for PKG/DISTRO language selection, or nil."
   (condition-case nil
-      (let ((dir (expand-file-name
-                  "deb-packaging-dev"
-                  (or (getenv "XDG_CACHE_HOME")
-                      (expand-file-name "~/.cache")))))
+      (let ((dir (expand-file-name "deb-packaging-dev"
+                                   (deb-packaging--cache-dir))))
         (unless (file-directory-p dir)
           (make-directory dir t))
         (expand-file-name (format "%s-%s-langs" pkg distro) dir))
@@ -315,16 +316,13 @@ layer re-runs. FORCE re-runs all."
 
 (defun deb-packaging-dev--open-on-success (proc tramp-path)
   "Open dired at TRAMP-PATH when PROC exits 0."
-  (let ((old (process-sentinel proc)))
-    (set-process-sentinel
-     proc
-     (lambda (p event)
-       (when (functionp old)
-         (funcall old p event))
-       (when (and (eq (process-status p) 'exit)
-                  (zerop (process-exit-status p)))
-         (dired tramp-path)
-         (message "Dev shell ready at %s" tramp-path))))))
+  (deb-packaging--wrap-sentinel
+   proc
+   (lambda (p _event)
+     (when (and (eq (process-status p) 'exit)
+                (zerop (process-exit-status p)))
+       (dired tramp-path)
+       (message "Dev shell ready at %s" tramp-path)))))
 
 ;;; Eglot
 
@@ -349,14 +347,13 @@ Partial builds produce partial results. Re-run after changing build flags."
   (interactive)
   (let* ((pkg-dir (or (deb-packaging--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (info (deb-packaging--parse-changelog pkg-dir))
-         (pkg (nth 0 info))
+         (pkg (deb-packaging--package-name pkg-dir))
          (distro (deb-packaging--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg))
          (qname (shell-quote-argument name))
          (qmount (shell-quote-argument mount)))
-    (unless (zerop (call-process "lxc" nil nil nil "info" name))
+    (unless (deb-packaging-dev--container-exists-p name)
       (user-error
        "Container %s doesn't exist. Run `deb-packaging-dev-shell' first."
        name))
@@ -391,12 +388,11 @@ Partial builds produce partial results. Re-run after changing build flags."
 Errors if container doesn't exist."
   (let* ((pkg-dir (or (deb-packaging--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (info (deb-packaging--parse-changelog pkg-dir))
-         (pkg (nth 0 info))
+         (pkg (deb-packaging--package-name pkg-dir))
          (distro (deb-packaging--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg)))
-    (unless (zerop (call-process "lxc" nil nil nil "info" name))
+    (unless (deb-packaging-dev--container-exists-p name)
       (user-error "Container %s doesn't exist. Run `deb-packaging-dev-shell' first."
                   name))
     (call-process "lxc" nil nil nil "start" name)
@@ -413,17 +409,16 @@ Errors if container doesn't exist."
   (interactive)
   (let* ((pkg-dir (or (deb-packaging--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (info (deb-packaging--parse-changelog pkg-dir))
-         (pkg (nth 0 info))
+         (pkg (deb-packaging--package-name pkg-dir))
          (distro (deb-packaging--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro)))
-    (unless (zerop (call-process "lxc" nil nil nil "info" name))
+    (unless (deb-packaging-dev--container-exists-p name)
       (user-error "Container %s doesn't exist. Run `deb-packaging-dev-shell' first."
                   name))
     (call-process "lxc" nil nil nil "start" name)
     (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
                             "exec" name "--" "bash" "-l")))
-      (switch-to-buffer buf))))
+      (pop-to-buffer buf))))
 
 (defun deb-packaging-dev-project ()
   "Find file in the container. Uses projectile or project.el, else dired."
@@ -446,10 +441,8 @@ Errors if container doesn't exist."
   "Return plists for dev containers matching PREFIX (default \"deb-dev-\").
 Each plist: :name, :status, :source."
   (let* ((filter (or prefix "deb-dev-"))
-         (output (with-output-to-string
-                   (with-current-buffer standard-output
-                     (ignore-errors
-                      (call-process "lxc" nil t nil "list" filter "--format=json"))))))
+         (output (deb-packaging--call-process-string
+                  "lxc" "list" filter "--format=json")))
     (when (and output (not (string-empty-p output)))
       (let ((entries (ignore-errors (json-read-from-string output))))
         (mapcar
@@ -457,8 +450,10 @@ Each plist: :name, :status, :source."
            (let* ((devices (cdr (assoc-string "devices" c)))
                   (work-dev (cl-find-if
                              (lambda (d)
-                               (string-prefix-p "work-"
-                                                 (symbol-name (car d))))
+                               (let ((key (car d)))
+                                 (string-prefix-p
+                                  "work-"
+                                  (if (symbolp key) (symbol-name key) key))))
                              devices))
                   (source (when work-dev
                             (cdr (assoc-string "source" (cdr work-dev))))))
@@ -486,16 +481,15 @@ C-u forces re-provision of all layers."
   (deb-packaging-dev--ensure-tramp-method)
   (let* ((pkg-dir (or (deb-packaging--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (info (deb-packaging--parse-changelog pkg-dir))
-         (pkg (nth 0 info))
+         (pkg (deb-packaging--package-name pkg-dir))
          (distro (deb-packaging--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg))
          (control-fp (deb-packaging-dev--control-fingerprint pkg-dir))
          (tools-fp (deb-packaging-dev--tools-fingerprint))
-       ;; Only prompt for languages if the langs layer will run.
-       (langs-fp (secure-hash 'sha256 ""))
-       (profiles nil))
+        ;; Only prompt for languages if the langs layer will run.
+        (langs-fp (secure-hash 'sha256 ""))
+        (profiles nil))
     ;; Check cached selection against the marker. Prompt only on mismatch.
     (let* ((cached-keys (deb-packaging-dev--read-langs-cache pkg distro))
            (cached-profiles (delq nil
@@ -503,13 +497,11 @@ C-u forces re-provision of all layers."
                                           cached-keys)))
            (cached-fp (when cached-profiles
                         (deb-packaging-dev--langs-fingerprint cached-profiles)))
-           (marker-val (when (zerop (call-process "lxc" nil nil nil "info" name))
-                         (with-output-to-string
-                           (with-current-buffer standard-output
-                             (ignore-errors
-                              (call-process "lxc" nil t nil "exec" name "--"
-                                            "cat" "/root/.deb-dev-marker-langs"))))))
-           (marker-val (string-trim (or marker-val "")))
+           (marker-val (when (deb-packaging-dev--container-exists-p name)
+                         (or (deb-packaging--call-process-string
+                              "lxc" "exec" name "--" "cat"
+                              "/root/.deb-dev-marker-langs")
+                             "")))
            (need-prompt (or force
                             (null cached-fp)
                             (not (string= marker-val cached-fp)))))
@@ -540,8 +532,7 @@ With arg or outside a package: prompts with completion."
           (cond
            ((and (not arg) (deb-packaging--find-package-dir))
             (let* ((pkg-dir (deb-packaging--find-package-dir))
-                   (info (deb-packaging--parse-changelog pkg-dir))
-                   (pkg (nth 0 info))
+                   (pkg (deb-packaging--package-name pkg-dir))
                    (distro (deb-packaging--effective-distro)))
               (deb-packaging-dev--container-name pkg distro)))
            ((null names)
