@@ -27,6 +27,7 @@
 (require 'deb-packaging-infra)
 (require 'deb-packaging-dev)
 (require 'deb-packaging-propagate)
+(require 'deb-packaging-pq)
 (require 'deb-packaging-status)
 
 ;;; Top-level dispatch hub
@@ -63,6 +64,7 @@ Set the target distro with `d'; other transients inherit it."
    ("t" "Autopkgtest..."   deb-packaging-test-transient)]
   ["Develop & Propagate"
    ("e" "Dev shell..."       deb-packaging-dev-transient)
+   ("u" "Patch queue (gbp pq)..." deb-packaging-pq-transient)
    ("P" "Propagate..."       deb-packaging-propagate-transient)]
   ["Publish"
    ("p" "PPA upload..."   deb-packaging-upload-transient)]

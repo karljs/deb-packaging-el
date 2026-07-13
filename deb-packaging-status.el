@@ -55,6 +55,8 @@
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
 (declare-function deb-packaging-dev--list-containers "deb-packaging-dev")
 (declare-function deb-packaging-propagate-transient "deb-packaging-propagate")
+(declare-function deb-packaging-pq-transient "deb-packaging-pq")
+(declare-function deb-packaging-pq--state "deb-packaging-pq")
 
 ;;; Buffer-local context
 
@@ -103,7 +105,8 @@ Does not create or refresh a buffer."
     (deb-packaging-test           . deb-packaging-test-transient)
     (deb-packaging-upload         . deb-packaging-upload-transient)
     (deb-packaging-stale          . deb-packaging-clean-transient)
-    (deb-packaging-dev            . deb-packaging-dev-transient))
+    (deb-packaging-dev            . deb-packaging-dev-transient)
+    (deb-packaging-pq             . deb-packaging-pq-transient))
   "Map status-buffer section types to the transient RET opens.
 Lint is a parent section; RET on a child walks up and opens the lint
 transient.")
@@ -673,7 +676,49 @@ Collapsed when HIDE. Containers match by name prefix."
                        (if source
                            (propertize (concat "  " source)
                                        'font-lock-face 'shadow)
-                         ""))))))))))
+                          ""))))))))))
+
+(defun deb-packaging-status--insert-pq (ctx hide)
+  "Insert a Patch Queue (gbp pq) section when the source format is 3.0 (quilt).
+Shows whether a patch-queue branch exists and whether the user is on it.
+Collapsed when HIDE."
+  (let ((source-format (plist-get ctx :source-format)))
+    (when (and source-format (string= source-format "3.0 (quilt)"))
+      (let* ((state (deb-packaging-pq--state))
+             (on-pq (plist-get state :on-pq-p))
+             (exists (plist-get state :exists-p))
+             (branch (plist-get state :branch))
+             (pq-branch (plist-get state :pq-branch))
+             (state-word
+              (cond
+               (on-pq
+                (propertize "editing"
+                            'font-lock-face 'deb-packaging-status-running))
+               (exists
+                (propertize "ready"
+                            'font-lock-face 'deb-packaging-status-ready))
+               (t
+                (propertize "none"
+                            'font-lock-face 'shadow))))
+             (detail
+              (cond
+               (on-pq
+                (propertize (format "  on %s — export when done" branch)
+                            'font-lock-face 'shadow))
+               (exists
+                (propertize (format "  %s exists — switch to edit" pq-branch)
+                            'font-lock-face 'shadow))
+               (t
+                (propertize "  import to start editing patches as commits"
+                            'font-lock-face 'shadow)))))
+        (magit-insert-section (deb-packaging-pq nil hide)
+          (magit-insert-heading
+            (concat
+             (propertize (deb-packaging-status--pad
+                          "Patch queue" deb-packaging-status--label-width)
+                         'font-lock-face 'magit-section-heading)
+             state-word
+             detail)))))))
 
 (defun deb-packaging-status--next-actionable-key (ctx)
   "Return the run-history key of the first ready phase in CTX, or nil.
@@ -742,7 +787,8 @@ at the bottom. Point ends on the first phase heading."
                 (deb-packaging-status--phase-state 'dput nil t)
                 next 'dput))
           (deb-packaging-status--insert-stale ctx t)
-          (deb-packaging-status--insert-dev ctx t))))
+          (deb-packaging-status--insert-dev ctx t)
+          (deb-packaging-status--insert-pq ctx t))))
      ;; Walk the freshly-built tree once, applying each section's initial
      ;; visibility through the show/hide path.  This is what creates the fold
      ;; indicators; without it the `>'/`v' cue is missing until the first manual
@@ -868,6 +914,11 @@ Walks up the section tree to the nearest registered type."
   (interactive)
   (deb-packaging-status--open #'deb-packaging-dev-transient))
 
+(defun deb-packaging-status-pq ()
+  "Open the patch-queue (gbp pq) transient."
+  (interactive)
+  (deb-packaging-status--open #'deb-packaging-pq-transient))
+
 ;;; Major mode
 
 (defvar-keymap deb-packaging-status-mode-map
@@ -884,6 +935,7 @@ Navigation and folding come from `magit-section-mode'."
   "c"   #'deb-packaging-status-clean
   "r"   #'deb-packaging-status-reset
   "e"   #'deb-packaging-status-dev
+  "u"   #'deb-packaging-status-pq
   "i"   #'deb-packaging-infra-dispatch
   "P"   #'deb-packaging-propagate-transient
   "?"   #'deb-packaging-dispatch
