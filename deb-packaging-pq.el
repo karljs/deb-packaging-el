@@ -24,12 +24,12 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'compile)
 (require 'magit)
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-commands)
 
-(declare-function deb-packaging-status--maybe-refresh "deb-packaging-status")
 (declare-function magit-status-setup-buffer "magit-status" (directory))
 
 ;;; Pre-flight checks
@@ -85,6 +85,22 @@ one), :exists-p (whether the patch-queue branch exists)."
           :pq-branch (if on-pq branch pq-branch)
           :exists-p exists)))
 
+;;; Compilation follow-up
+
+(defun deb-packaging-pq--after-compile (buf action)
+  "Run ACTION when the compilation in BUF finishes successfully.
+ACTION is called with no arguments.  Registers a one-shot entry on
+`compilation-finish-functions' that matches BUF, removes itself once
+BUF finishes, and calls ACTION only when the process exited normally
+\(the finish message contains \"finished\").  On failure the action is
+skipped; the compilation buffer already shows the error output."
+  (letrec ((hook (lambda (finished-buf msg)
+                   (when (eq finished-buf buf)
+                     (remove-hook 'compilation-finish-functions hook)
+                     (when (string-match-p "finished" msg)
+                       (funcall action))))))
+    (add-hook 'compilation-finish-functions hook)))
+
 ;;; Commands
 
 ;;;###autoload
@@ -95,25 +111,25 @@ to it.  Opens `magit-status' on success so you can edit patches as
 commits with normal git tools."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (compile "gbp pq import")
   ;; Open magit-status so the user can edit on the patch-queue branch.
-  (run-with-timer 0.5 nil
-                  (lambda (dir)
-                    (when (deb-packaging-pq--on-pq-branch-p)
-                      (magit-status-setup-buffer dir)
-                      (message "On patch-queue branch.  Edit with Magit, then run export when ready.")))
-                  (magit-toplevel)))
+  (let ((dir (magit-toplevel)))
+    (deb-packaging-pq--after-compile
+     (compile "gbp pq import")
+     (lambda ()
+       (when (deb-packaging-pq--on-pq-branch-p)
+         (magit-status-setup-buffer dir)
+         (message "On patch-queue branch.  Edit with Magit, then run export when ready."))))))
 
 ;;;###autoload
 (defun deb-packaging-pq-switch ()
   "Toggle between the packaging branch and its patch-queue branch."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (compile "gbp pq switch")
-  (run-with-timer 0.5 nil
-                  (lambda ()
-                    (let ((branch (deb-packaging-pq--current-branch)))
-                      (message "On branch: %s" (or branch "detached"))))))
+  (deb-packaging-pq--after-compile
+   (compile "gbp pq switch")
+   (lambda ()
+     (let ((branch (deb-packaging-pq--current-branch)))
+       (message "On branch: %s" (or branch "detached"))))))
 
 ;;;###autoload
 (defun deb-packaging-pq-rebase ()
@@ -132,12 +148,11 @@ Refreshes the status buffer on success."
   (deb-packaging-pq--ensure-quilt-repo)
   (unless (deb-packaging-pq--on-pq-branch-p)
     (user-error "Not on a patch-queue branch; switch first"))
-  (compile "gbp pq export --commit --drop")
-  (run-with-timer 0.5 nil
-                  (lambda ()
-                    (when (fboundp 'deb-packaging-status--maybe-refresh)
-                      (deb-packaging-status--maybe-refresh))
-                    (message "Exported patches to debian/patches/"))))
+  (deb-packaging-pq--after-compile
+   (compile "gbp pq export --commit --drop")
+   (lambda ()
+     (deb-packaging--notify-status-refresh)
+     (message "Exported patches to debian/patches/"))))
 
 ;;;###autoload
 (defun deb-packaging-pq-drop ()
@@ -145,11 +160,9 @@ Refreshes the status buffer on success."
 Useful to abort an edit session and start over."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (compile "gbp pq drop")
-  (run-with-timer 0.5 nil
-                  (lambda ()
-                    (when (fboundp 'deb-packaging-status--maybe-refresh)
-                      (deb-packaging-status--maybe-refresh)))))
+  (deb-packaging-pq--after-compile
+   (compile "gbp pq drop")
+   #'deb-packaging--notify-status-refresh))
 
 ;;; Transient
 
