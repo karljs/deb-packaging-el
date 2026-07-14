@@ -160,10 +160,7 @@ KEY (a symbol) enables run tracking."
     ;; `make-comint-in-buffer' uses the current buffer's default-directory,
     ;; so a leaked binding would make the status refresh scan from parent-dir
     ;; and report "not in a package".
-    (if dir
-        (let ((default-directory dir))
-          (make-comint-in-buffer name buf-name shell-file-name nil
-                                 shell-command-switch cmd))
+    (let ((default-directory (or dir default-directory)))
       (make-comint-in-buffer name buf-name shell-file-name nil
                              shell-command-switch cmd))
     (with-current-buffer buf-name
