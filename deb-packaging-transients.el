@@ -7,20 +7,9 @@
 
 ;;; Commentary:
 
-;; Eight per-tool transients:
-;;
-;;   deb-packaging-source-build-transient  dpkg-buildpackage
-;;   deb-packaging-binary-build-transient  sbuild
-;;   deb-packaging-lint-transient          lintian + ubuntu-lint
-;;   deb-packaging-test-transient          autopkgtest
-;;   deb-packaging-upload-transient        dput + ppa tests
-;;   deb-packaging-clean-transient         clean artifacts
-;;   deb-packaging-reset-transient         reset source tree
-;;   deb-packaging-dev-transient           LXD dev containers
-;;
-;; Each lists its own flags and forwards them to the runner in
+;; Per-tool transients that forward their flags to the runners in
 ;; deb-packaging-commands.el.  Flags persist per-prefix via transient.
-;; Distro-bearing options seed dynamically from `deb-packaging-target-distro'.
+;; Distro options seed from `deb-packaging-target-distro'.
 
 ;;; Code:
 
@@ -36,9 +25,8 @@
 ;; Tool-specific variables live in deb-packaging-commands.el.
 (defvar deb-packaging-sbuild-variants)
 
-;; sbuild `--build-failed-commands' token.  sbuild expands %SBUILD_SHELL to
-;; a shell invocation; shared here so the status buffer can detect the flag
-;; without duplicating the literal.
+;; Shared with the status buffer so it can detect this flag without
+;; duplicating the literal.
 (defconst deb-packaging-sbuild-shell-flag
   "--build-failed-commands=%SBUILD_SHELL")
 
@@ -82,22 +70,18 @@
 ;;; 2. Binary build (sbuild)
 
 (defun deb-packaging--binary-default-value ()
-  "Dynamic default for the binary-build transient.
-Seeds the distro from the changelog."
+  "Dynamic default for the binary-build transient, seeding distro from changelog."
   (list (format "--dist=%s" (deb-packaging--effective-distro))
         "-A"))
 
 (defclass deb-packaging--extra-repo-argument (transient-option) ()
-  "Transient option for sbuild --extra-repository= values.
-Completes against named variants and your known Launchpad PPAs, then
-expands the choice to a full repo string at build time.")
+  "sbuild --extra-repository= option, expanded to a repo string at build time.")
 
 (cl-defmethod transient-infix-read ((obj deb-packaging--extra-repo-argument))
   "Read an extra-repository value.
-Offers the named variants from `deb-packaging-sbuild-variants' plus your
-known PPAs (\"ppa:owner/name\") as completions.  A named variant or a
-ppa: address is expanded at build time; any other input is passed to
-sbuild verbatim (e.g. a full \"deb [trusted=yes] ...\" line)."
+Completes against `deb-packaging-sbuild-variants' names and known PPAs.
+A variant name or ppa: address expands at build time; anything else is
+passed to sbuild verbatim."
   (let* ((variants (mapcar #'car deb-packaging-sbuild-variants))
          (ppas (deb-packaging-infra--list-ppas))
          (choices (delete-dups (append variants ppas))))
@@ -118,18 +102,15 @@ sbuild verbatim (e.g. a full \"deb [trusted=yes] ...\" line)."
     (propertize "none" 'face 'transient-inactive-value)))
 
 (defclass deb-packaging--extra-package-argument (transient-option) ()
-  "Transient option for sbuild --extra-package= values.
-Completes against .deb files in the build-output (parent) directory,
-but accepts any file path.  Multi-valued: each selected .deb becomes a
-separate --extra-package= argument.")
+  "sbuild --extra-package= option.
+Completes against .deb files in the build-output directory but accepts
+any path.  Multi-valued: each .deb becomes a separate --extra-package=.")
 
 (cl-defmethod transient-infix-read ((obj deb-packaging--extra-package-argument))
   "Read an extra-package .deb file path.
-Offers the .deb files found in the package's build-output (parent)
-directory as completions, falling back to file-name completion when none
-are found there.  Any path is accepted (e.g. a .deb downloaded from a
-PPA); the result is expanded to an absolute path so sbuild resolves it
-regardless of its working directory."
+Completes against .deb files in the build-output (parent) directory,
+falling back to file-name completion.  Result is made absolute so sbuild
+resolves it regardless of working directory."
   (ignore obj)
   (let* ((pkg-dir (deb-packaging--find-package-dir))
          (parent-dir (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
@@ -192,8 +173,7 @@ regardless of its working directory."
 (transient-define-prefix deb-packaging-lint-transient ()
   "Run a linter against the current package.
 lintian inspects built artifacts; ubuntu-lint checks Ubuntu policy.
-Each action reads only its own flags, so lintian and ubuntu-lint flags
-stay separate."
+Each action reads only its own flags."
   :value '("-i" "--tag-display-limit=0" "--context=changes" "--all=warn")
   ["Lintian arguments"
    ("-i"  "Show informational tags"   "-i")

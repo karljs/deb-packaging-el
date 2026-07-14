@@ -23,9 +23,9 @@
 
 (defun deb-packaging-infra--format-cell (value width &optional align face help-echo)
   "Format VALUE as a table cell of display WIDTH.
-ALIGN is `left' or `right' (default `left').  FACE is applied to the
-visible text.  If HELP-ECHO is non-nil and VALUE is truncated, use it
-as `help-echo'; t means use VALUE."
+ALIGN is `left' or `right' (default `left').  FACE styles the text.
+When VALUE is truncated and HELP-ECHO is non-nil, use it as `help-echo'
+(t means use VALUE)."
   (let* ((str (if value (format "%s" value) ""))
          (sw (string-width str))
          (cell (if (eq align 'right)
@@ -50,10 +50,9 @@ LIST-FN returns a list of plists with :name keys."
         (completing-read prompt names nil t))))
 
 (defun deb-packaging-infra--read-entry (prompt &optional type-filter)
-  "Return the LXD entry at point, or prompt for one with PROMPT.
-The entry is the plist stored as the tabulated-list id.  With
-TYPE-FILTER (a symbol like `container'), restrict completion to entries
-of that type and signal `user-error' if none exist."
+  "Return the LXD entry (tabulated-list id plist) at point, or prompt with PROMPT.
+TYPE-FILTER (e.g. `container') restricts completion to that type and
+signals `user-error' if none exist."
   (or (tabulated-list-get-id)
       (let* ((all (deb-packaging-infra--list-lxd-all))
              (candidates (if type-filter
@@ -211,8 +210,7 @@ Use schroot at point, or prompt."
 
 (defun deb-packaging-infra--list-lxd-images ()
   "Return autopkgtest LXD image plists from `lxc image list'.
-Keys: :alias, :fingerprint, :description, :arch, :size.
-Uses JSON output and keyed access to stay robust against column changes."
+Keys: :alias, :fingerprint, :description, :arch, :size."
   (require 'json)
   (let ((output (deb-packaging--call-process-string
                  "lxc" "image" "list" "--format=json")))
@@ -502,9 +500,8 @@ Use image at point, or prompt."
 (defvar deb-packaging-infra-ppa-team-config-dir
   "~/.config/ppa-dev-tools/teams"
   "Directory of per-team `ppa' config files.
-YAML files with a `list' section containing `owner_name'.  Used to run
-`ppa list -C <file>' and merge results with personal PPAs.  Files must
-end in `.yml' or `.yaml'.  Set in your init file.")
+YAML files (`.yml'/`.yaml') with a `list' section containing
+`owner_name'.  Used via `ppa list -C <file>'.  Set in your init file.")
 
 (defun deb-packaging-infra--team-config-files ()
   "Return per-team `ppa' config files.
@@ -525,23 +522,19 @@ Return PPA address strings in order."
 
 (defvar deb-packaging-infra--ppa-cache nil
   "Session cache for `deb-packaging-infra--list-ppas'.
-Cons of (PPAS . FETCHED-AT), where PPAS is the cached PPA list and
-FETCHED-AT is a float-time.  Nil when no cache exists.")
+Cons of (PPAS . FETCHED-AT-FLOAT-TIME), or nil.")
 
 (defvar deb-packaging-infra--ppa-cache-ttl 300
-  "Time-to-live in seconds for the PPA cache.
-After this many seconds the cache is stale and the next
-`deb-packaging-infra--list-ppas' call fetches synchronously again.")
+  "Seconds before the PPA cache is stale and refetched synchronously.")
 
 (defun deb-packaging-infra--invalidate-ppa-cache ()
   "Clear the PPA cache.  Call after creating or deleting a PPA."
   (setq deb-packaging-infra--ppa-cache nil))
 
 (defun deb-packaging-infra--fetch-ppas-sync ()
-  "Fetch PPA names for the user and configured teams synchronously.
-Each entry is \"ppa:owner/name\".  Personal PPAs come first, then
-team-config PPAs.  Team config failures are warned and skipped.  Blocks
-on `ppa list'; stores the result in `deb-packaging-infra--ppa-cache'."
+  "Fetch and cache PPA names for the user and configured teams synchronously.
+Personal PPAs first, then team-config PPAs.  Blocks on `ppa list'; team
+config failures are warned and skipped."
   (let ((result (deb-packaging-infra--parse-ppa-lines
                  (shell-command-to-string "ppa list 2>/dev/null"))))
     (dolist (cfg (deb-packaging-infra--team-config-files))
@@ -558,10 +551,8 @@ on `ppa list'; stores the result in `deb-packaging-infra--ppa-cache'."
 
 (defun deb-packaging-infra--list-ppas ()
   "Return PPA names for the user and configured teams.
-Uses a session cache with `deb-packaging-infra--ppa-cache-ttl' to avoid
-repeated synchronous `ppa list' calls.  On first call (or after the TTL
-expires), blocks while fetching.  Subsequent calls within the TTL return
-the cached value instantly."
+Cached for `deb-packaging-infra--ppa-cache-ttl' seconds; blocks on the
+first call and after the TTL expires."
   (if (and deb-packaging-infra--ppa-cache
            (< (- (float-time) (cdr deb-packaging-infra--ppa-cache))
               deb-packaging-infra--ppa-cache-ttl))
@@ -678,9 +669,7 @@ Use PPA at point, or prompt."
                   (list (deb-packaging-infra--make-ppa-entry ppa))))))
 
 (defun deb-packaging-infra--finalize-ppas (buf)
-  "Reprint the PPAs table in BUF.
-Show an empty-state message if all processes finished and no PPAs were
-found."
+  "Reprint the PPAs table in BUF, showing empty-state once all fetches finish."
   (when (buffer-live-p buf)
     (with-current-buffer buf
       (let ((inhibit-read-only t))
@@ -715,9 +704,7 @@ BUF is the PPAs list buffer; TEMP-BUF holds output."
             (kill-buffer temp-buf)))))))
 
 (defun deb-packaging-infra--show-ppas-loading-message ()
-  "Show a loading message in the PPAs list buffer.
-Clears the table and inserts a transient message while async `ppa list'
-processes run."
+  "Show a loading message in the PPAs list buffer while async fetches run."
   (setq tabulated-list-entries nil)
   (tabulated-list-init-header)
   (tabulated-list-print t)
@@ -726,9 +713,7 @@ processes run."
     (insert (propertize "\nLoading PPAs..." 'face 'shadow))))
 
 (defun deb-packaging-infra-refresh-ppas ()
-  "Refresh the PPAs list buffer asynchronously.
-Launches all `ppa list' invocations as background processes and shows a
-loading message so Emacs does not block."
+  "Refresh the PPAs list buffer asynchronously so Emacs does not block."
   (interactive)
   (when (derived-mode-p 'deb-packaging-infra-ppas-mode)
     (deb-packaging-infra--cancel-ppa-processes)

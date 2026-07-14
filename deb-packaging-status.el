@@ -7,33 +7,13 @@
 
 ;;; Commentary:
 
-;; Magit-style status buffer for deb-packaging. Shows package phases
-;; (source build, binary build, lint, test, upload) with a status word
-;; per phase derived from artifacts and run history.
+;; Magit-style status buffer for deb-packaging. Shows packaging phases
+;; (source build, binary build, lint, test, upload) in flow order, each
+;; heading ending in a colored status word. The next actionable phase and
+;; any running/failed phase expand by default; the rest fold.
 ;;
-;; Keys:
-;;   RET     run action for section at point.
-;;   TAB     fold/unfold section.
-;;   n/p     navigate sections.
-;;   s b t c mnemonic flow actions.
-;;   ?       open `deb-packaging-dispatch'.
-;;   g       refresh.   q  quit.
-;;
-;; The buffer drives state; the transient drives configuration.
-;;
-;; Layout: phases in flow order. Each heading ends in a colored status word
-;; (ready/running/done/failed/blocked). Detail is folded by default except
-;; for the next actionable phase and any running/failed phase. Stale
-;; artifacts and a collapsed Settings section sit at the bottom.
-;;
-;; No private cache: every render calls `deb-packaging--scan-context', shared
-;; with the dispatch transient. The buffer also refreshes on window selection.
-;;
-;; Directories:
-;;   Source  repository containing debian/changelog; `default-directory'.
-;;   Output  parent of source tree; dpkg-buildpackage and sbuild drop
-;;           artifacts here. Leftover artifacts from other versions are
-;;           flagged as stale.
+;; No cache: every render re-scans via `deb-packaging--scan-context'
+;; (shared with the dispatch transient) and on window selection.
 ;;
 ;; Entry point: `deb-packaging-status'.
 
@@ -71,9 +51,8 @@ Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
 
 (defun deb-packaging-status--collect-context ()
   "Gather fresh package context from `default-directory'.
-Return a plist, or nil outside a Debian package tree. Delegates to
-`deb-packaging--scan-context' so status buffer and transient agree.
-Seeds the target distro once, without clobbering user choice."
+Return a plist, or nil outside a Debian package tree. Seeds the target
+distro once without clobbering user choice."
   (let ((ctx (deb-packaging--scan-context)))
     (when ctx
       (deb-packaging--maybe-seed-distro (plist-get ctx :distro)))
@@ -81,7 +60,6 @@ Seeds the target distro once, without clobbering user choice."
 
 (defun deb-packaging-status--current-context ()
   "Return the context of the live status buffer, if any.
-Used by `deb-packaging.el' so the transient matches the status buffer.
 Does not create or refresh a buffer."
   (catch 'found
     (dolist (buf (buffer-list))
@@ -94,9 +72,8 @@ Does not create or refresh a buffer."
 
 ;;; Section -> action dispatch
 ;;
-;; Actionable sections carry type symbols. RET walks up the section tree
-;; to a registered type and invokes the matching command. Mnemonic keys
-;; below are shortcuts to the same commands.
+;; RET walks up the section tree to a registered type and invokes the
+;; matching command. Mnemonic keys are shortcuts to the same commands.
 
 (defconst deb-packaging-status--section-actions
   '((deb-packaging-source         . deb-packaging-source-build-transient)
@@ -107,14 +84,11 @@ Does not create or refresh a buffer."
     (deb-packaging-stale          . deb-packaging-clean-transient)
     (deb-packaging-dev            . deb-packaging-dev-transient)
     (deb-packaging-pq             . deb-packaging-pq-transient))
-  "Map status-buffer section types to the transient RET opens.
-Lint is a parent section; RET on a child walks up and opens the lint
-transient.")
+  "Map status-buffer section types to the transient RET opens.")
 
 ;;; Status words
 ;;
-;; Each phase heading ends in a colored status word. Colour signals
-;; state; the word helps non-colour terminals and accessibility.
+;; The word backs up color for non-color terminals and accessibility.
 
 (defconst deb-packaging-status--state-words
   '((running . ("running" . deb-packaging-status-running))
@@ -138,8 +112,7 @@ transient.")
 
 (defun deb-packaging-status--lint-summary-note (key)
   "Return a colored findings summary for KEY's last lint run, or empty.
-For lintian: \" 2E 5W 12I\". For ubuntu-lint: \" 1F 2E 3W\".
-Each count is colored by severity."
+Counts colored by severity, e.g. \" 2E 5W 12I\" or \" 1F 2E 3W\"."
   (if-let* ((summary (deb-packaging--run-summary key)))
       (let ((fmt (lambda (n face)
                    (propertize (format "%d" n) 'font-lock-face face))))
@@ -160,19 +133,14 @@ Each count is colored by severity."
 
 ;;; Phase state and fold decisions
 ;;
-;; A phase is done when its artifacts exist or its last run succeeded.
-;; running/failed come from run history. Smart fold expands the first
-;; not-done phase and any running/failed phase; everything else collapses.
-;; This is only the default: magit-section preserves manual TAB state on
-;; refresh.
+;; Smart fold sets only the initial state; magit-section preserves manual
+;; TAB toggles across refresh.
 
 (defun deb-packaging-status--phase-state (key done ready &optional keep-ready)
   "Return a phase state symbol for KEY.
 DONE means artifacts exist or the phase succeeded. READY means
-prerequisites are met; otherwise it is blocked. Live run wins, then
-failed run, then completion, then readiness.
-If KEEP-READY is non-nil, success stays ready so the phase can be
-re-run. Used for lint."
+prerequisites are met, else blocked. Precedence: running, failed,
+done, ready. KEEP-READY keeps success as ready so it can re-run (lint)."
   (let ((status (plist-get (deb-packaging-run-record key) :status)))
     (cond ((eq status 'running) 'running)
           ((eq status 'failure) 'failed)
@@ -186,8 +154,8 @@ re-run. Used for lint."
 
 (defun deb-packaging-status--hide-phase-p (state next-key key)
   "Return non-nil if a phase in STATE should collapse by default.
-Expand running/failed phases and the single next actionable phase
-\(KEY equals NEXT-KEY); collapse the rest."
+Expand running/failed phases and the next actionable phase (KEY equals
+NEXT-KEY); collapse the rest."
   (cond
    ((memq state '(failed running)) nil)
    ((eq key next-key) nil)
@@ -195,9 +163,8 @@ Expand running/failed phases and the single next actionable phase
 
 ;;; Rendering helpers
 ;;
-;; magit-section-mode uses font-lock-defaults (nil t), so only the
-;; `font-lock-face' property works; `face' is ignored. Use
-;; `font-lock-face' for all inserted text.
+;; magit-section-mode sets font-lock-defaults, so use `font-lock-face' on
+;; inserted text; the `face' property is ignored.
 
 (defface deb-packaging-status-title
   '((t :inherit magit-section-heading :weight bold :height 1.2))
@@ -268,8 +235,7 @@ Expand running/failed phases and the single next actionable phase
     (error "")))
 
 (defun deb-packaging-status--insert-file-line (path)
-  "Insert an indented PATH line with size and modification time.
-Aligns the basename, then shows size and date."
+  "Insert an indented PATH line with size and modification time."
   (let* ((base (file-name-nondirectory path))
          (size (deb-packaging-status--file-size path))
          (mtime (deb-packaging-status--file-mtime path)))
@@ -285,7 +251,7 @@ Aligns the basename, then shows size and date."
 
 (defun deb-packaging-status--insert-state-row (pairs)
   "Insert a state row from PAIRS, a list of (label . value) cells.
-Renders each as \"Label: value\". Pairs are separated by 4 spaces."
+Renders each as \"Label: value\"."
   (when pairs
     (let ((parts (mapcar
                   (lambda (pair)
@@ -326,8 +292,8 @@ Renders each as \"Label: value\". Pairs are separated by 4 spaces."
 
 (defun deb-packaging-status--phase-heading (state label &optional key detail)
   "Return a propertized phase heading line.
-LABEL is the phase name; STATE drives the trailing status word; KEY
-adds the last-run time; DETAIL is an optional dimmed fragment."
+LABEL is the phase name, STATE drives the status word, KEY adds the
+last-run time, DETAIL is an optional dimmed fragment."
   (concat
    (propertize (deb-packaging-status--pad label deb-packaging-status--label-width)
                'font-lock-face 'magit-section-heading)
@@ -372,8 +338,7 @@ adds the last-run time; DETAIL is an optional dimmed fragment."
 
 (defun deb-packaging-status--transient-args (prefix)
   "Return PREFIX's saved/default transient args, or nil.
-Wraps `transient-args' defensively so a missing prefix yields nil
-rather than signaling."
+Defensive: a missing prefix yields nil rather than signaling."
   (ignore-errors (transient-args prefix)))
 
 (defun deb-packaging-status--transient-flag-p (prefix flag)
@@ -426,14 +391,13 @@ rather than signaling."
                'deb-packaging-binary-build-transient
                deb-packaging-sbuild-shell-flag)
           (deb-packaging-status--insert-note
-           "Debug shell enabled, drops into chroot on build failure"))))))
+           "Drops into a chroot shell on build failure"))))))
 
 (defun deb-packaging-status--insert-lintian-child (section-type key label artifacts)
   "Insert one Lint child section of SECTION-TYPE for run key KEY.
-LABEL is the heading text; ARTIFACTS are files to lint. Absence blocks
-the child. Lint never reaches done: success returns to ready
-\(KEEP-READY) so it can be re-run. Completed lintian runs show a colored
-findings summary. SECTION-TYPE must be registered so RET acts on it."
+LABEL is the heading; ARTIFACTS are files to lint, absence blocks the
+child. Lint never reaches done: KEEP-READY returns success to ready so
+it can re-run. SECTION-TYPE must be registered for RET to act on it."
   (let ((state (deb-packaging-status--phase-state key nil (and artifacts t) t)))
     (magit-insert-section ((eval section-type))
       (magit-insert-heading
@@ -452,10 +416,8 @@ findings summary. SECTION-TYPE must be registered so RET acts on it."
 
 (defun deb-packaging-status--lint-rollup-state (ctx)
   "Return a status symbol summarising the Lint section's children.
-Priority: failed > running > ready > done > blocked.
-Children are lintian source/binary and ubuntu-lint. Lint children never
-reach done, and ubuntu-lint is always ready inside a package, so Lint is
-never blocked."
+Priority: failed > running > ready > done > blocked. Children never
+reach done and ubuntu-lint is always ready, so Lint is never blocked."
   (let* ((arts (plist-get ctx :artifacts))
          (dsc (alist-get 'dsc arts))
          (debs (alist-get 'debs arts))
@@ -470,15 +432,14 @@ never blocked."
                 '(failed running ready done blocked))))
 
 (defun deb-packaging-status--lint-hide-p (ctx)
-  "Return non-nil if the Lint section should collapse by default.
-Expand when any child is running or failed; collapse otherwise."
+  "Return non-nil if the Lint section should collapse by default."
   (let ((state (deb-packaging-status--lint-rollup-state ctx)))
     (not (memq state '(failed running)))))
 
 (defun deb-packaging-status--insert-ubuntu-lint-child ()
   "Insert the Ubuntu lint child section under Lint.
-ubuntu-lint checks source metadata, so it is always ready inside a
-package. Like lintian, success returns to ready (KEEP-READY)."
+Always ready inside a package. Like lintian, KEEP-READY keeps success
+as ready."
   (let ((state (deb-packaging-status--phase-state 'ubuntu-lint nil t t)))
     (magit-insert-section (deb-packaging-ubuntu-lint)
       (magit-insert-heading
@@ -494,9 +455,7 @@ package. Like lintian, success returns to ready (KEEP-READY)."
          "Ubuntu upload policy checks (SRU, maintainer, bug references)")))))
 
 (defun deb-packaging-status--insert-check (ctx hide)
-  "Insert the Lint phase: lintian source/binary children plus
-ubuntu-lint. Source lint targets the .dsc; binary lint targets .debs;
-ubuntu-lint targets source package metadata."
+  "Insert the Lint phase: lintian source/binary children plus ubuntu-lint."
   (let ((state (deb-packaging-status--lint-rollup-state ctx)))
     (magit-insert-section (deb-packaging-check nil hide)
       (magit-insert-heading
@@ -553,7 +512,7 @@ ubuntu-lint targets source package metadata."
                    'deb-packaging-test-transient
                    "--shell-fail")
               (deb-packaging-status--insert-note
-               "Shell on failure enabled, drops into testbed on failure"))))))))
+               "Drops into a testbed shell on test failure"))))))))
 
 (defun deb-packaging-status--transient-arg-value (prefix flag)
   "Return the value of FLAG from PREFIX's saved/default transient args.
@@ -589,7 +548,7 @@ Returns nil if the flag is unset or the prefix is unavailable."
 
 (defun deb-packaging-status--group-stale-by-version (stale-files)
   "Group STALE-FILES by version, returning an alist of (version . files).
-Unparseable versions are grouped under \"unknown\"."
+Unparseable versions group under \"unknown\"."
   (let ((groups nil))
     (dolist (f stale-files)
       (let ((ver (or (deb-packaging--filename-version f) "unknown")))
@@ -676,8 +635,8 @@ Collapsed when HIDE. Containers match by name prefix."
                           ""))))))))))
 
 (defun deb-packaging-status--insert-pq (ctx hide)
-  "Insert a Patch Queue (gbp pq) section when the source format is 3.0 (quilt).
-Shows whether a patch-queue branch exists and whether the user is on it.
+  "Insert a Patch Queue (gbp pq) section for 3.0 (quilt) source format.
+Shows whether a patch-queue branch exists and whether point is on it.
 Collapsed when HIDE."
   (let ((source-format (plist-get ctx :source-format)))
     (when (and source-format (string= source-format "3.0 (quilt)"))
@@ -700,10 +659,10 @@ Collapsed when HIDE."
              (detail
               (cond
                (on-pq
-                (propertize (format "  on %s — export when done" branch)
+                (propertize (format "  on %s, export when done" branch)
                             'font-lock-face 'shadow))
                (exists
-                (propertize (format "  %s exists — switch to edit" pq-branch)
+                (propertize (format "  %s exists, switch to edit" pq-branch)
                             'font-lock-face 'shadow))
                (t
                 (propertize "  import to start editing patches as commits"
@@ -719,8 +678,7 @@ Collapsed when HIDE."
 
 (defun deb-packaging-status--next-actionable-key (ctx)
   "Return the run-history key of the first ready phase in CTX, or nil.
-Walks phases in flow order; used to decide which phase smart-fold
-expands by default."
+Walks phases in flow order; picks which phase smart-fold expands."
   (let* ((arts (plist-get ctx :artifacts))
          (dsc (alist-get 'dsc arts))
          (src-changes (alist-get 'source-changes arts))
@@ -742,10 +700,7 @@ expands by default."
 
 (defun deb-packaging-status--render ()
   "Render the status buffer from freshly collected context.
-Phases appear first as terse headings with colored status words.
-Detail lives in foldable bodies. The next actionable phase and any
-running/failed phase expand by default. Stale artifacts and config sit
-at the bottom. Point ends on the first phase heading."
+Point ends on the first phase heading."
   (let ((ctx (deb-packaging-status--collect-context))
         (inhibit-read-only t))
     (setq deb-packaging-status--context ctx)
@@ -771,8 +726,8 @@ at the bottom. Point ends on the first phase heading."
            ctx (deb-packaging-status--hide-phase-p
                 (deb-packaging-status--phase-state 'sbuild bin-done dsc)
                 next 'sbuild))
-          ;; Lint groups two children; expand when either child is live or
-          ;; failed (there is no single phase state for the group).
+          ;; Lint groups two children and has no single phase state, so
+          ;; use the rollup fold decision instead.
           (deb-packaging-status--insert-check
            ctx (deb-packaging-status--lint-hide-p ctx))
           (deb-packaging-status--insert-test
@@ -786,10 +741,7 @@ at the bottom. Point ends on the first phase heading."
           (deb-packaging-status--insert-stale ctx t)
           (deb-packaging-status--insert-dev ctx t)
           (deb-packaging-status--insert-pq ctx t))))
-     ;; Walk the freshly-built tree once, applying each section's initial
-     ;; visibility through the show/hide path.  This is what creates the fold
-     ;; indicators; without it the `>'/`v' cue is missing until the first manual
-     ;; toggle.
+     ;; Show the root once so fold indicators appear before any manual toggle.
      (when magit-root-section
        (magit-section-show magit-root-section))))
 
@@ -838,10 +790,8 @@ Called from process sentinels after a run finishes."
 
 (defun deb-packaging-status--on-window-selected (_window)
   "Re-scan and refresh the status buffer when it gains selection.
-Registered on `window-selection-change-functions' so external changes
-are picked up. Debounced via an idle timer so rapid window switches do
-not trigger a filesystem scan each time. The scan is side-effect-free
-and folding is preserved."
+Debounced via idle timer so rapid window switches do not scan the
+filesystem each time."
   (when (and (derived-mode-p 'deb-packaging-status-mode)
              (eq (current-buffer) (window-buffer (selected-window))))
     (when deb-packaging-status--refresh-timer
@@ -853,8 +803,7 @@ and folding is preserved."
 ;;; Actions
 
 (defun deb-packaging-status--open (transient-prefix)
-  "Open TRANSIENT-PREFIX from the status buffer.
-The sentinel refresh updates the buffer when a run completes."
+  "Open TRANSIENT-PREFIX from the status buffer."
   (call-interactively transient-prefix))
 
 (defun deb-packaging-status-visit ()
@@ -942,14 +891,13 @@ Navigation and folding come from `magit-section-mode'."
 (define-derived-mode deb-packaging-status-mode magit-section-mode "Deb-Status"
   "Major mode for the Debian packaging status landing page."
   :interactive nil
-  ;; Re-scan when the user returns. Buffer-local hook cleans up with buffer.
+  ;; Buffer-local hook cleans up with the buffer.
   (add-hook 'window-selection-change-functions
             #'deb-packaging-status--on-window-selected nil t))
 
 ;;;###autoload
 (defun deb-packaging-status ()
-  "Open the Debian packaging status buffer.
-Primary entry point for the deb-packaging workflow."
+  "Open the Debian packaging status buffer."
   (interactive)
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
          (name (deb-packaging--package-name pkg-dir))

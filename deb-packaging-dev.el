@@ -7,26 +7,13 @@
 
 ;;; Commentary:
 
-;; LXD dev containers for editing upstream source with real LSP.
+;; Persistent LXD container that bind-mounts host source and runs an LSP
+;; server inside (over TRAMP) so quilt-patch editing gets real header
+;; resolution with build-deps present.
 ;;
-;; Problem: writing quilt patches means editing upstream files, but
-;; clangd/pylsp/etc can't resolve headers without build-deps installed.
-;; sbuild chroots have them but are throwaway.
-;;
-;; Source stays on the host. We bind-mount it into a persistent LXD
-;; container with build-deps and run the LSP server inside over TRAMP.
-;; eglot launches the server remotely where everything resolves.
-;;
-;; One container per package per release (deb-dev-<pkg>-<release>).
-;;
-;; Provisioning is split into independent layers with separate markers:
-;;   1. Core helpers (devscripts, equivs) -- installed if missing
-;;   2. Build-deps (mk-build-deps) -- marker: control hash
-;;   3. Language servers -- marker: profiles hash, cached per package
-;;   4. Dev tools (extra-packages) -- marker: tools hash
-;; Only the changed layer re-runs. C-u forces all.
-;;
-;; Ownership: raw.idmap maps container root to host user. No shift needed.
+;; One container per package per release. Provisioning is split into layers
+;; keyed by markers (control hash, profiles hash, tools hash); only the
+;; changed layer re-runs, C-u forces all.
 
 ;;; Code:
 
@@ -191,13 +178,137 @@ Best-effort install.")
   "SHA256 of `deb-packaging-dev-extra-packages'."
   (secure-hash 'sha256 (format "%S" deb-packaging-dev-extra-packages)))
 
+(defun deb-packaging-dev--script-container-setup (qname image uid qpkg-dir
+                                                        qmount device)
+  "Return script lines to launch/reuse the container and bind-mount source.
+DEVICE is the disk-device name. idmap maps container root to host UID so
+the bind mount needs no shift."
+  (list
+   "set -e"
+   (format "if ! lxc info %s >/dev/null 2>&1; then" qname)
+   (format "  lxc launch %s %s" (shell-quote-argument image) qname)
+   (format "  lxc config set %s raw.idmap \"both %s 0\"" qname uid)
+   (format "  lxc restart %s" qname)
+   "fi"
+   (format "lxc start %s >/dev/null 2>&1 || true" qname)
+   "i=0"
+   "while [ $i -lt 90 ]; do"
+   (format "  lxc exec %s -- true >/dev/null 2>&1 && break" qname)
+   "  sleep 1; i=$((i+1))"
+   "done"
+   (format "lxc exec %s -- cloud-init status --wait >/dev/null 2>&1 || true"
+           qname)
+   (format "lxc config device remove %s %s >/dev/null 2>&1 || true"
+           qname (shell-quote-argument device))
+   (format "if ! lxc config device add %s %s disk source=%s path=%s 2>/dev/null; then"
+           qname (shell-quote-argument device) qpkg-dir qmount)
+   (format "  lxc restart %s" qname)
+   (format "  lxc config device add %s %s disk source=%s path=%s"
+           qname (shell-quote-argument device) qpkg-dir qmount)
+   "fi"))
+
+(defun deb-packaging-dev--script-force-line (force)
+  "Return the FORCE shell-variable assignment line for FORCE."
+  (list (format "FORCE=%s" (if force "1" ""))))
+
+(defun deb-packaging-dev--script-core-helpers (qname)
+  "Return script lines installing devscripts and equivs when missing."
+  (list
+   (format "if ! lxc exec %s -- dpkg -s devscripts >/dev/null 2>&1; then"
+           qname)
+   "  echo 'Installing core build helpers...'"
+   (format "  lxc exec %s -- sh -c %s"
+           qname
+           (shell-quote-argument
+            "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y --no-install-recommends devscripts equivs"))
+   "fi"))
+
+(defun deb-packaging-dev--script-build-deps-layer (qname mount control-fp)
+  "Return script lines for the build-deps layer.
+CONTROL-FP is the debian/control fingerprint used as the layer marker."
+  (list
+   (format "FP_CONTROL=%s" (shell-quote-argument control-fp))
+   "MARKER_CONTROL=/root/.deb-dev-marker-control"
+   "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_CONTROL\" ] && [ \"$(cat \"$MARKER_CONTROL\")\" = \"$FP_CONTROL\" ]; then"
+   "  echo 'Build-deps up to date, skipping mk-build-deps'"
+   "else"
+   "  echo 'Installing build-deps from debian/control...'"
+   (format "  lxc exec %s -- sh -c %s || { echo 'mk-build-deps failed: build-deps could not be satisfied' >&2; exit 1; }"
+           qname
+           (shell-quote-argument
+            (format "cd %s && DEBIAN_FRONTEND=noninteractive mk-build-deps -i -t \"apt-get -y --no-install-recommends\" debian/control" mount)))
+   (format "  lxc exec %s -- sh -c %s"
+           qname
+           (shell-quote-argument
+            (format "echo %s > /root/.deb-dev-marker-control" control-fp)))
+   "fi"))
+
+(defun deb-packaging-dev--script-langs-layer (qname langs-fp
+                                                    profile-apts profile-setups)
+  "Return script lines for the language-servers layer.
+LANGS-FP is the profiles fingerprint used as the layer marker.
+PROFILE-APTS are apt package strings; PROFILE-SETUPS are shell commands."
+  (append
+   (list
+    (format "FP_LANGS=%s" (shell-quote-argument langs-fp))
+    "MARKER_LANGS=/root/.deb-dev-marker-langs"
+    "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_LANGS\" ] && [ \"$(cat \"$MARKER_LANGS\")\" = \"$FP_LANGS\" ]; then"
+    "  echo 'Language servers up to date, skipping'"
+    "else")
+   (when profile-apts
+     (list
+      "  echo 'Installing language servers...'"
+      (format "  lxc exec %s -- sh -c %s || true"
+              qname
+              (shell-quote-argument
+               (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some unavailable on this release)'"
+                       (mapconcat #'shell-quote-argument profile-apts " "))))))
+   (mapcar
+    (lambda (cmd)
+      (format "  lxc exec %s -- sh -c %s"
+              qname
+              (shell-quote-argument
+               (format "export DEBIAN_FRONTEND=noninteractive; %s" cmd))))
+    profile-setups)
+   (list
+    (format "  lxc exec %s -- sh -c %s"
+            qname
+            (shell-quote-argument
+             (format "echo %s > /root/.deb-dev-marker-langs" langs-fp)))
+    "fi")))
+
+(defun deb-packaging-dev--script-tools-layer (qname tools-fp extra-apt)
+  "Return script lines for the dev-tools layer.
+TOOLS-FP is the extra-packages fingerprint used as the layer marker.
+EXTRA-APT is a space-joined, shell-quoted package string."
+  (append
+   (list
+    (format "FP_TOOLS=%s" (shell-quote-argument tools-fp))
+    "MARKER_TOOLS=/root/.deb-dev-marker-tools"
+    "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_TOOLS\" ] && [ \"$(cat \"$MARKER_TOOLS\")\" = \"$FP_TOOLS\" ]; then"
+    "  echo 'Dev tools up to date, skipping'"
+    "else")
+   (unless (string-empty-p extra-apt)
+     (list
+      "  echo 'Installing dev tools...'"
+      (format "  lxc exec %s -- sh -c %s || true"
+              qname
+              (shell-quote-argument
+               (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some unavailable on this release)'"
+                       extra-apt)))))
+   (list
+    (format "  lxc exec %s -- sh -c %s"
+            qname
+            (shell-quote-argument
+             (format "echo %s > /root/.deb-dev-marker-tools" tools-fp)))
+    "fi")))
+
 (defun deb-packaging-dev--provision-script (name distro pkg-dir mount pkg
                                                  control-fp langs-fp tools-fp
                                                  force profiles)
   "Build the provision script for container NAME.
-Three independent layers, each with its own marker: build-deps
-\(CONTROL-FP), languages (LANGS-FP), tools (TOOLS-FP). Only the changed
-layer re-runs. FORCE re-runs all."
+Three layers, each with its own marker: build-deps (CONTROL-FP),
+languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all."
   (let ((qname (shell-quote-argument name))
         (qpkg-dir (shell-quote-argument pkg-dir))
         (qmount (shell-quote-argument mount))
@@ -212,105 +323,14 @@ layer re-runs. FORCE re-runs all."
         (device (format "work-%s" pkg)))
     (string-join
      (append
-      (list
-       "set -e"
-       (format "if ! lxc info %s >/dev/null 2>&1; then" qname)
-       (format "  lxc launch %s %s" (shell-quote-argument image) qname)
-       (format "  lxc config set %s raw.idmap \"both %s 0\"" qname uid)
-       (format "  lxc restart %s" qname)
-       "fi"
-       (format "lxc start %s >/dev/null 2>&1 || true" qname)
-       "i=0"
-       "while [ $i -lt 90 ]; do"
-       (format "  lxc exec %s -- true >/dev/null 2>&1 && break" qname)
-       "  sleep 1; i=$((i+1))"
-       "done"
-       (format "lxc exec %s -- cloud-init status --wait >/dev/null 2>&1 || true"
-               qname)
-       (format "lxc config device remove %s %s >/dev/null 2>&1 || true"
-               qname (shell-quote-argument device))
-       (format "if ! lxc config device add %s %s disk source=%s path=%s 2>/dev/null; then"
-               qname (shell-quote-argument device) qpkg-dir qmount)
-       (format "  lxc restart %s" qname)
-       (format "  lxc config device add %s %s disk source=%s path=%s"
-               qname (shell-quote-argument device) qpkg-dir qmount)
-       "fi"
-       (format "FORCE=%s" (if force "1" "")))
-       ;; Core helpers: install if missing.
-       (list
-        (format "if ! lxc exec %s -- dpkg -s devscripts >/dev/null 2>&1; then"
-                qname)
-        "  echo 'Installing core build helpers...'"
-        (format "  lxc exec %s -- sh -c %s"
-                qname
-                (shell-quote-argument
-                 "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y --no-install-recommends devscripts equivs"))
-        "fi")
-       ;; Build-deps layer.
-       (list
-       (format "FP_CONTROL=%s" (shell-quote-argument control-fp))
-       "MARKER_CONTROL=/root/.deb-dev-marker-control"
-       "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_CONTROL\" ] && [ \"$(cat \"$MARKER_CONTROL\")\" = \"$FP_CONTROL\" ]; then"
-       "  echo 'Build-deps up to date, skipping mk-build-deps'"
-       "else"
-       "  echo 'Installing build-deps from debian/control...'"
-       (format "  lxc exec %s -- sh -c %s || { echo 'mk-build-deps failed: build-deps could not be satisfied' >&2; exit 1; }"
-               qname
-               (shell-quote-argument
-                (format "cd %s && DEBIAN_FRONTEND=noninteractive mk-build-deps -i -t \"apt-get -y --no-install-recommends\" debian/control" mount)))
-       (format "  lxc exec %s -- sh -c %s"
-               qname
-               (shell-quote-argument
-                (format "echo %s > /root/.deb-dev-marker-control" control-fp)))
-       "fi")
-       ;; Language servers layer.
-       (list
-       (format "FP_LANGS=%s" (shell-quote-argument langs-fp))
-       "MARKER_LANGS=/root/.deb-dev-marker-langs"
-       "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_LANGS\" ] && [ \"$(cat \"$MARKER_LANGS\")\" = \"$FP_LANGS\" ]; then"
-       "  echo 'Language servers up to date, skipping'"
-       "else"
-       (when profile-apts
-         (list
-          "  echo 'Installing language servers...'"
-          (format "  lxc exec %s -- sh -c %s || true"
-                  qname
-                  (shell-quote-argument
-                   (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some unavailable on this release)'"
-                           (mapconcat #'shell-quote-argument profile-apts " "))))))
-       (mapcar
-        (lambda (cmd)
-          (format "  lxc exec %s -- sh -c %s"
-                  qname
-                  (shell-quote-argument
-                   (format "export DEBIAN_FRONTEND=noninteractive; %s" cmd))))
-        profile-setups)
-       (format "  lxc exec %s -- sh -c %s"
-               qname
-               (shell-quote-argument
-                (format "echo %s > /root/.deb-dev-marker-langs" langs-fp)))
-       "fi")
-       ;; Extra dev tools layer.
-       (list
-       (format "FP_TOOLS=%s" (shell-quote-argument tools-fp))
-       "MARKER_TOOLS=/root/.deb-dev-marker-tools"
-       "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_TOOLS\" ] && [ \"$(cat \"$MARKER_TOOLS\")\" = \"$FP_TOOLS\" ]; then"
-       "  echo 'Dev tools up to date, skipping'"
-       "else"
-       (when (and deb-packaging-dev-extra-packages
-                  (not (string-empty-p extra-apt)))
-         (list
-          "  echo 'Installing dev tools...'"
-          (format "  lxc exec %s -- sh -c %s || true"
-                  qname
-                  (shell-quote-argument
-                   (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some unavailable on this release)'"
-                           extra-apt)))))
-       (format "  lxc exec %s -- sh -c %s"
-               qname
-               (shell-quote-argument
-                (format "echo %s > /root/.deb-dev-marker-tools" tools-fp)))
-       "fi")
+      (deb-packaging-dev--script-container-setup
+       qname image uid qpkg-dir qmount device)
+      (deb-packaging-dev--script-force-line force)
+      (deb-packaging-dev--script-core-helpers qname)
+      (deb-packaging-dev--script-build-deps-layer qname mount control-fp)
+      (deb-packaging-dev--script-langs-layer
+       qname langs-fp profile-apts profile-setups)
+      (deb-packaging-dev--script-tools-layer qname tools-fp extra-apt)
       (list (format "echo READY: /lxc:%s:%s" name mount)))
      "\n")))
 
@@ -355,7 +375,7 @@ Partial builds produce partial results. Re-run after changing build flags."
          (qmount (shell-quote-argument mount)))
     (unless (deb-packaging-dev--container-exists-p name)
       (user-error
-       "Container %s doesn't exist. Run `deb-packaging-dev-shell' first."
+       "Container %s does not exist; run deb-packaging-dev-shell first"
        name))
     (call-process "lxc" nil nil nil "start" name)
     (let* ((inner
@@ -393,7 +413,7 @@ Errors if container doesn't exist."
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg)))
     (unless (deb-packaging-dev--container-exists-p name)
-      (user-error "Container %s doesn't exist. Run `deb-packaging-dev-shell' first."
+      (user-error "Container %s does not exist; run deb-packaging-dev-shell first"
                   name))
     (call-process "lxc" nil nil nil "start" name)
     (deb-packaging-dev--ensure-tramp-method)
@@ -413,7 +433,7 @@ Errors if container doesn't exist."
          (distro (deb-packaging--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro)))
     (unless (deb-packaging-dev--container-exists-p name)
-      (user-error "Container %s doesn't exist. Run `deb-packaging-dev-shell' first."
+      (user-error "Container %s does not exist; run deb-packaging-dev-shell first"
                   name))
     (call-process "lxc" nil nil nil "start" name)
     (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
@@ -487,10 +507,10 @@ C-u forces re-provision of all layers."
          (mount (deb-packaging-dev--mount-path pkg))
          (control-fp (deb-packaging-dev--control-fingerprint pkg-dir))
          (tools-fp (deb-packaging-dev--tools-fingerprint))
-        ;; Only prompt for languages if the langs layer will run.
+        ;; langs-fp starts empty; only recomputed if the langs layer runs.
         (langs-fp (secure-hash 'sha256 ""))
         (profiles nil))
-    ;; Check cached selection against the marker. Prompt only on mismatch.
+    ;; Prompt for languages only when cache disagrees with the marker.
     (let* ((cached-keys (deb-packaging-dev--read-langs-cache pkg distro))
            (cached-profiles (delq nil
                                   (mapcar #'deb-packaging-dev--profile-lookup

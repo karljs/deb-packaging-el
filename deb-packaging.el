@@ -8,14 +8,9 @@
 
 ;;; Commentary:
 
-;; A context-aware interface for Debian/Ubuntu packaging.
-;; Detects package context and provides per-tool transients.
-;;
-;; Primary entry point: `deb-packaging-status' (Magit-style status buffer).
-;; Secondary entry point: `deb-packaging-dispatch' (hub from `?').
-;; Per-tool transients are defined in deb-packaging-transients.el.
-;;
-;; Default keybinding: C-c d
+;; Context-aware interface for Debian/Ubuntu packaging.
+;; Entry points: `deb-packaging-status' (status buffer) and
+;; `deb-packaging-dispatch' (transient hub). Default key: C-c d.
 
 ;;; Code:
 
@@ -40,8 +35,7 @@
 ;;;###autoload
 (defun deb-packaging-set-distro (distro)
   "Set the global target distro to DISTRO.
-Interactively, prompt with completion against known distros.  Propagated
-to all per-tool transients and the status buffer."
+Propagated to all per-tool transients and the status buffer."
   (interactive
    (list (completing-read
           "Target distro: "
@@ -79,10 +73,8 @@ Set the target distro with `d'; other transients inherit it."
 
 ;;;###autoload
 (defun deb-packaging-setup-keys ()
-  "Set up default keybindings for deb-packaging.
-Binds `C-c d' to `deb-packaging-status'.  If `C-c d' is already bound
-to a different command, skips the binding and warns instead of
-clobbering it."
+  "Bind `C-c d' to `deb-packaging-status'.
+Skips and warns if `C-c d' is already bound to another command."
   (let* ((key (kbd "C-c d"))
          (cmd (key-binding key t)))
     (if (or (null cmd) (eq cmd #'deb-packaging-status))

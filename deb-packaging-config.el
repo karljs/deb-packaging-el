@@ -7,16 +7,9 @@
 
 ;;; Commentary:
 
-;; Shared distro configuration for Debian/Ubuntu packaging.
-;; The target distribution is the one state shared across tools.  Each tool
-;; keeps its own flags in its transient, but the distro propagates so
-;; build/test/upload default to the same value.
-;;
-;; Tool-specific data lives in deb-packaging-commands.el.
-;;
-;; Here:
-;;   - deb-packaging-target-distro   session distro, seeded from changelog
-;;   - deb-packaging--distro-choices completion candidates
+;; Shared distro config.  The target distribution is the one piece of state
+;; shared across tools so build/test/upload default to the same value; each
+;; tool keeps its own flags in its transient.
 
 ;;; Code:
 
@@ -35,8 +28,7 @@ Seeded from the changelog once; not overwritten silently.")
 Set by interactive choice or one-time changelog seed.")
 
 (defun deb-packaging--maybe-seed-distro (distro)
-  "Seed `deb-packaging-target-distro' from DISTRO once.
-Only when the user has not set it this session.
+  "Seed `deb-packaging-target-distro' from DISTRO once, unless user-set.
 Returns `deb-packaging-target-distro'."
   (when (and distro
              (not (string-empty-p distro))
@@ -46,17 +38,15 @@ Returns `deb-packaging-target-distro'."
   deb-packaging-target-distro))
 
 (defun deb-packaging--set-distro (distro)
-  "Set `deb-packaging-target-distro' to DISTRO deliberately.
-Always overwrites, unlike `deb-packaging--maybe-seed-distro'.
+  "Set `deb-packaging-target-distro' to DISTRO, always overwriting.
 Returns DISTRO."
   (setq deb-packaging-target-distro distro
         deb-packaging--distro-user-set t)
   deb-packaging-target-distro)
 
 (defun deb-packaging--effective-distro ()
-  "Return the target distro, seeding from the changelog if needed.
-Uses the current value if already chosen; otherwise seeds once from the
-changelog, falling back to \"noble\"."
+  "Return the target distro, seeding once from the changelog if unset.
+Falls back to \"noble\"."
   (when-let* ((distro (plist-get (deb-packaging--scan-context) :distro)))
     (deb-packaging--maybe-seed-distro distro))
   deb-packaging-target-distro)
@@ -75,15 +65,13 @@ changelog, falling back to \"noble\"."
 
 (defvar deb-packaging-propagate-salsa-user nil
   "Your salsa.debian.org username, used to build the personal remote.
-When nil, the `personal' remote is not configured in prepared clones;
-you'll push to salsa using your own git remote setup.")
+When nil, prepared clones get no `personal' remote.")
 
 (defvar deb-packaging-propagate-cache-dir
   (expand-file-name "deb-packaging/propagate"
                     (deb-packaging--cache-dir))
   "Directory for prepared propagate clones.
-Defaults to $XDG_CACHE_HOME/deb-packaging/propagate or
-~/.cache/deb-packaging/propagate.")
+Under $XDG_CACHE_HOME/deb-packaging/propagate (or ~/.cache).")
 
 (defvar deb-packaging-propagate-clone-mode-lighter " Prop"
   "Lighter for `deb-packaging-propagate-clone-mode'.")

@@ -8,27 +8,14 @@
 ;;; Commentary:
 
 ;; Propagate packaging fixes from Ubuntu to Debian and upstream.
+;;   1. Export quilt patches or git commits as a git-am-friendly .patch.
+;;   2. Prepare a salsa.debian.org clone, then apply items one at a time.
 ;;
-;; Two legs:
-;;   1. Export: produce a git-am-friendly .patch file from quilt patches
-;;      or git commits.  Offline, no network.
-;;   2. Debian clone: clone the salsa.debian.org packaging repo, create
-;;      a work branch, hand off to magit-status.  Then apply fix items
-;;      one at a time via the apply transient (mirrors magit-patch-apply's
-;;      flags: --cached/--index/--3way).
+;; The clone's git history is the source of truth for what has been
+;; applied. The source directory lives in the clone's git config
+;; (deb-packaging.source-dir) so apply survives Emacs restarts.
 ;;
-;; Design: stateless.  The clone's git history is the sole source of
-;; truth for what has been applied.  The source directory is stored in
-;; the clone's git config (deb-packaging.source-dir) so apply works
-;; across Emacs restarts.  Re-invoke to apply another item.
-;;
-;; All git mutations run through Magit's process module (magit-call-git
-;; / magit-run-git) so output appears in *magit-process*.  Read-only
-;; probes (applied checks, config reads, log listings) use call-process
-;; silently to avoid process-buffer spam.
-;;
-;; Entry point: `deb-packaging-propagate-transient' (from dispatch `P'
-;; or status buffer `P').
+;; Entry point: `deb-packaging-propagate-transient'.
 
 ;;; Code:
 
@@ -79,8 +66,7 @@
 
 (defun deb-packaging-propagate--git-quiet (dir &rest args)
   "Run git synchronously in DIR with ARGS, returning stdout string.
-Uses `call-process' directly — no Magit process buffer logging.
-For read-only probes only."
+Read-only probes only; skips Magit process-buffer logging."
   (string-trim
    (with-output-to-string
      (with-current-buffer standard-output
@@ -89,14 +75,14 @@ For read-only probes only."
 
 (defun deb-packaging-propagate--patch-applied-p (patch-path clone-dir)
   "Return non-nil if PATCH-PATH is already applied in CLONE-DIR.
-Uses `git apply --check -R' to test reverse-application."
+Tests reverse-application with `git apply --check -R'."
   (zerop (call-process "git" nil nil nil
                        "-C" clone-dir "apply" "--check" "-R"
                        patch-path)))
 
 (defun deb-packaging-propagate--commit-applied-p (subject clone-dir)
   "Heuristic: return non-nil if SUBJECT appears in CLONE-DIR's log.
-Not perfect (user may have reworded); used only for indicators."
+Fooled by rewording; only used for indicators."
   (let ((log-subjects (deb-packaging-propagate--git-quiet
                        clone-dir "log" "--format=%s")))
     (member subject (split-string log-subjects "\n" t))))
@@ -356,10 +342,8 @@ Return plist: :description, :author.  Description may be multi-line."
 
 (defun deb-packaging-propagate--produce-patch-file (item)
   "Produce a patch file path for ITEM suitable for `git apply'.
-For quilt patches: returns the patch file path directly.
-For commits: writes `git format-patch --stdout' output to a temp file
-\(via `magit-git-string', visible in *magit-process*), saves the commit
-message to the kill ring."
+Quilt patches return their path directly. Commits get format-patch
+output written to a temp file and their message pushed to the kill ring."
   (pcase (plist-get item :type)
     ('patch
      (plist-get item :path))
@@ -386,15 +370,14 @@ message to the kill ring."
 
 (defvar-local deb-packaging-propagate--pending-patch nil
   "Patch file path for the next apply, or nil.
-Buffer-local to the Magit status buffer of the propagate clone.
-Set by `deb-packaging-propagate-apply'; consumed by
+Buffer-local to the clone's Magit status buffer. Set by
+`deb-packaging-propagate-apply', consumed by
 `deb-packaging-propagate-do-apply'.")
 
 ;;;###autoload(autoload 'deb-packaging-propagate-apply-patch "deb-packaging-propagate" nil t)
 (transient-define-prefix deb-packaging-propagate-apply-patch ()
   "Apply a propagate patch file with git-apply flags.
-Mirrors `magit-patch-apply'\\='s flag set.  The patch file is
-pre-filled by `deb-packaging-propagate-apply'."
+The patch file is pre-filled by `deb-packaging-propagate-apply'."
   :value '("--index")
   ["Arguments"
    ("-i" "Apply to index and worktree" "--index")
@@ -404,9 +387,7 @@ pre-filled by `deb-packaging-propagate-apply'."
    ("a" "Apply patch" deb-packaging-propagate-do-apply)])
 
 (defun deb-packaging-propagate-do-apply (&optional args)
-  "Apply the pending patch with git-apply ARGS.
-Calls `magit-run-git' so the operation is visible in *magit-process*
-and Magit auto-refreshes the status buffer on completion."
+  "Apply the pending patch with git-apply ARGS."
   (interactive
    (list (transient-args 'deb-packaging-propagate-apply-patch)))
   (unless deb-packaging-propagate--pending-patch
@@ -420,8 +401,8 @@ and Magit auto-refreshes the status buffer on completion."
 ;;;###autoload
 (defun deb-packaging-propagate-export-patch (&optional items output-path)
   "Export a .patch file from fix-source ITEMS to OUTPUT-PATH.
-Produces git-am-friendly output with separate From:/Subject: blocks
-per item.  Opens the result in view-mode for review."
+Git-am-friendly, one From:/Subject: block per item. Opens the result
+in view-mode."
   (interactive
    (let* ((items (deb-packaging-propagate--read-fix-source-multi nil t))
           (pkg-dir (deb-packaging--find-package-dir nil t))
@@ -470,10 +451,9 @@ per item.  Opens the result in view-mode for review."
 (defun deb-packaging-propagate-clone ()
   "Prepare a Debian salsa clone.
 Confirms the Vcs-Git URL, clones (or reuses) into the propagate cache,
-prompts for the base branch and work branch name, sets up the
-`personal' remote if configured, and hands off to `magit-status'.
-Does not apply any fix — press `P' to apply items after the clone
-is ready."
+prompts for base and work branch, sets up the `personal' remote if
+configured, and hands off to `magit-status'. Press `P' afterwards to
+apply items."
   (interactive)
   (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
          (pkg-name (deb-packaging--package-name pkg-dir))
@@ -485,9 +465,7 @@ is ready."
     (let ((parent (file-name-directory clone-dir)))
       (unless (file-directory-p parent)
         (make-directory parent t)))
-    ;; Clone or reuse.
-    (if (deb-packaging-propagate--clone-exists-p clone-dir)
-        (progn
+    (if (deb-packaging-propagate--clone-exists-p clone-dir)        (progn
           (unless (yes-or-no-p
                    (format "Clone exists at %s.  Fetch and reset to origin (discards local work)? "
                            clone-dir))
@@ -508,10 +486,9 @@ is ready."
                                        (file-name-nondirectory
                                         (directory-file-name clone-dir))))
           (user-error "git clone failed.  See *magit-process* buffer ($ in Magit)."))))
-    ;; Store source-dir in git config for apply.
+    ;; Store source-dir so apply can find it later.
     (let ((default-directory clone-dir))
       (magit-call-git "config" "deb-packaging.source-dir" pkg-dir))
-    ;; Prompt for base branch, then work branch.
     (let* ((branches (deb-packaging-propagate--remote-branches clone-dir))
            (default-br (or (deb-packaging-propagate--default-branch clone-dir)
                            "main"))
@@ -523,13 +500,12 @@ is ready."
                                          (or pkg-name "fix")))))
       (let ((default-directory clone-dir))
         (magit-call-git "checkout" base))
-      ;; Create work branch (delete old if exists).
+      ;; Recreate work branch fresh.
       (let ((default-directory clone-dir))
         (when (deb-packaging-propagate--git-quiet clone-dir "rev-parse" "--verify" branch)
           (magit-call-git "branch" "-D" branch))
         (unless (zerop (magit-call-git "checkout" "-b" branch))
           (user-error "Failed to create branch %s" branch))))
-    ;; Set up personal remote if configured.
     (let ((personal-url (deb-packaging-propagate--salsa-personal-url pkg-name)))
       (when personal-url
         (let ((default-directory clone-dir))
@@ -542,7 +518,6 @@ is ready."
                   (message "Personal fork not found.  Fork at: %s"
                            (or fork-url "salsa.debian.org"))))
             (message "Could not add personal remote (non-fatal)")))))
-    ;; Hand off to magit-status.
     (magit-status-setup-buffer clone-dir)
     (when (derived-mode-p 'magit-status-mode)
       (deb-packaging-propagate-clone-mode +1))
@@ -552,11 +527,8 @@ is ready."
 ;;;###autoload
 (defun deb-packaging-propagate-apply ()
   "Pick a fix item and open the apply transient.
-Reads the source-dir from the clone's git config, prompts for a fix
-source (patch or commit, with indicators on already-applied items),
-produces a patch file, and opens `deb-packaging-propagate-apply-patch'
-\(mirrors `magit-patch-apply'\\='s flags: --cached/--index/--3way).
-The user chooses flags and presses `a' to apply via `magit-run-git'."
+Reads source-dir from the clone's git config, prompts for a patch or
+commit (marking already-applied items), and opens the apply transient."
   (interactive)
   (let* ((clone-dir (or (magit-toplevel)
                         (user-error "Not in a git repository")))

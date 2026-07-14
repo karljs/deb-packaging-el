@@ -7,8 +7,8 @@
 
 ;;; Commentary:
 
-;; Detection utilities for Debian/Ubuntu package maintenance:
-;; find source directories, parse debian/changelog, scan artifacts.
+;; Detection utilities: find the package dir, parse debian/changelog,
+;; scan build artifacts.
 
 ;;; Code:
 
@@ -18,8 +18,7 @@
 
 (defun deb-packaging--find-package-dir (&optional start-dir host-only)
   "Find directory containing debian/changelog, walking up from START-DIR.
-With HOST-ONLY, error on TRAMP paths so host commands do not run inside
-a container."
+With HOST-ONLY, error on TRAMP paths so host commands stay off containers."
   (let ((dir (locate-dominating-file (or start-dir default-directory)
                                      "debian/changelog")))
     (when dir
@@ -36,9 +35,7 @@ a container."
   (file-name-directory (directory-file-name pkg-dir)))
 
 (defun deb-packaging--package-info (&optional pkg-dir)
-  "Return (NAME VERSION) for the package in PKG-DIR.
-PKG-DIR defaults to the detected package directory.  Returns nil
-outside a Debian package tree."
+  "Return (NAME VERSION) for PKG-DIR, or nil outside a package tree."
   (when-let* ((info (deb-packaging--parse-changelog pkg-dir)))
     (list (nth 0 info) (nth 1 info))))
 
@@ -51,8 +48,7 @@ outside a Debian package tree."
   (cadr (deb-packaging--package-info pkg-dir)))
 
 (defun deb-packaging--call-process-string (program &rest args)
-  "Run PROGRAM with ARGS synchronously, returning stdout as a string.
-Returns the trimmed output or nil if PROGRAM produced nothing."
+  "Run PROGRAM with ARGS, returning trimmed stdout, or nil if empty."
   (let ((output (with-output-to-string
                   (with-current-buffer standard-output
                     (apply #'call-process program nil t nil args)))))
@@ -60,8 +56,7 @@ Returns the trimmed output or nil if PROGRAM produced nothing."
       (string-trim output))))
 
 (defun deb-packaging--cache-dir ()
-  "Return the base cache directory for deb-packaging.
-Honors $XDG_CACHE_HOME, falling back to ~/.cache."
+  "Return the base cache directory, honoring $XDG_CACHE_HOME."
   (or (and (getenv "XDG_CACHE_HOME")
            (expand-file-name (getenv "XDG_CACHE_HOME")))
       (expand-file-name "~/.cache")))
@@ -85,8 +80,8 @@ Honors $XDG_CACHE_HOME, falling back to ~/.cache."
 ;;; Source metadata
 
 (defun deb-packaging--source-format (&optional pkg-dir)
-  "Return the source format string for the package in PKG-DIR.
-Reads `debian/source/format'.  Returns nil if the file is absent."
+  "Return the source format string for PKG-DIR from `debian/source/format'.
+Returns nil if the file is absent."
   (let* ((dir (or pkg-dir (deb-packaging--find-package-dir)))
          (format-file (when dir
                         (expand-file-name "debian/source/format" dir))))
@@ -100,10 +95,8 @@ Reads `debian/source/format'.  Returns nil if the file is absent."
 ;;; Patches and VCS metadata
 
 (defun deb-packaging--list-patches ()
-  "Return an alist of (NAME . PATH) for patches in debian/patches/series.
-PATH is absolute.  Reads `debian/patches/series' in the current package
-directory.  Skips comments (lines beginning with `#'), blank lines, and
-quilt options after the patch name.  Returns nil if series is absent."
+  "Return an alist of (NAME . ABSOLUTE-PATH) for patches in the series file.
+Skips comments, blanks, and quilt options.  Returns nil if series absent."
   (when-let* ((pkg-dir (deb-packaging--find-package-dir))
               (series (expand-file-name "debian/patches/series" pkg-dir)))
     (when (file-readable-p series)
@@ -115,7 +108,7 @@ quilt options after the patch name.  Returns nil if series is absent."
             (let ((line (buffer-substring-no-properties
                          (line-beginning-position)
                          (line-end-position))))
-              ;; Strip trailing options (anything after whitespace).
+              ;; Strip trailing quilt options.
               (when (string-match "^\\([^# \t][^ \t]*\\)" line)
                 (let* ((name (match-string 1 line))
                        (path (expand-file-name
@@ -126,19 +119,17 @@ quilt options after the patch name.  Returns nil if series is absent."
           (nreverse patches))))))
 
 (defun deb-packaging--vcs-git (&optional pkg-dir)
-  "Return the Vcs-Git URL for the package in PKG-DIR.
-Strips a trailing `-b BRANCH' suffix if present.  Returns nil if
-debian/control is absent or has no Vcs-Git field."
+  "Return the Vcs-Git URL for PKG-DIR, sans trailing `-b BRANCH'.
+Returns nil if debian/control has no Vcs-Git field."
   (let ((value (deb-packaging--control-field "Vcs-Git" pkg-dir)))
     (when value
-      ;; Strip "-b branch" suffix; keep the URL.
       (string-trim
        (replace-regexp-in-string "\\s-+-b\\s-+\\S-+$" "" value)))))
 
 (defun deb-packaging--upstream-url (&optional pkg-dir)
-  "Return a best-effort upstream repo URL for the package in PKG-DIR.
-Reads Homepage from debian/control; if absent, parses debian/watch for a
-GitHub or GitLab origin.  Returns nil if nothing is found."
+  "Return a best-effort upstream repo URL for PKG-DIR, or nil.
+Prefers Homepage from debian/control; else a GitHub/GitLab URL in
+debian/watch."
   (let* ((dir (or pkg-dir (deb-packaging--find-package-dir)))
          (homepage (deb-packaging--control-field "Homepage" dir)))
     (cond
@@ -149,24 +140,19 @@ GitHub or GitLab origin.  Returns nil if nothing is found."
      ((and homepage (not (string-empty-p homepage)))
       homepage)
      (t
-      ;; Try debian/watch.
       (when-let* ((dir)
                   (watch (expand-file-name "debian/watch" dir)))
         (when (file-readable-p watch)
           (with-temp-buffer
             (insert-file-contents watch)
             (goto-char (point-min))
-            ;; debian/watch lines look like:
-            ;;   opts=...  https://github.com/owner/repo/tags ...
-            ;;   https://github.com/owner/repo/releases/...
             (when (re-search-forward
                    "https?://\\(?:gitlab\\.com\\|github\\.com\\)/[^/ \t]+/[^/ \t]+"
                    nil t)
               (match-string 0)))))))))
 
 (defun deb-packaging--orig-tarball (name version parent-dir)
-  "Return the .orig.tar.* path for NAME/VERSION in PARENT-DIR.
-Matches `NAME_UPSTREAM.orig.tar.*'.  Returns nil if not found."
+  "Return the .orig.tar.* path matching `NAME_UPSTREAM' in PARENT-DIR, or nil."
   (let* ((upstream (deb-packaging--upstream-version version))
          (prefix (format "%s_%s.orig.tar." name upstream)))
     (when (and name upstream (file-directory-p parent-dir))
@@ -177,8 +163,7 @@ Matches `NAME_UPSTREAM.orig.tar.*'.  Returns nil if not found."
        (directory-files parent-dir nil (regexp-quote prefix))))))
 
 (defun deb-packaging--control-field (field &optional pkg-dir)
-  "Return FIELD's value from debian/control in PKG-DIR.
-FIELD is e.g. \"Maintainer\".  Returns the trimmed value or nil."
+  "Return FIELD's trimmed value from debian/control in PKG-DIR, or nil."
   (let* ((dir (or pkg-dir (deb-packaging--find-package-dir)))
          (control (when dir
                     (expand-file-name "debian/control" dir))))
@@ -196,8 +181,7 @@ FIELD is e.g. \"Maintainer\".  Returns the trimmed value or nil."
 
 (defun deb-packaging--schroot-exists-p (distro arch)
   "Return the schroot name matching DISTRO and ARCH, or nil.
-Matches names starting with DISTRO and containing ARCH.  Callers may
-treat the return as a boolean; the name is returned so it can be reused."
+Name (not just a boolean) so callers can reuse it."
   (when (and distro arch)
     (let ((output (deb-packaging--call-process-string "schroot" "-l"))
           (target (format "%s-%s" distro arch)))
@@ -210,13 +194,12 @@ treat the return as a boolean; the name is returned so it can be reused."
 ;;; Artifact Scanning
 
 (defun deb-packaging--version-to-filename (version)
-  "Convert VERSION to filename format. Strips epoch (everything before colon)."
+  "Convert VERSION to filename form, stripping any epoch prefix."
   (replace-regexp-in-string "^[0-9]+:" "" version))
 
 (defun deb-packaging--upstream-version (version)
-  "Return the upstream portion of VERSION.
-Strips epoch and Debian revision.  Native packages return VERSION.
-This is the version used in .orig.tar.* filenames."
+  "Return the upstream portion of VERSION, as used in .orig.tar.* names.
+Strips epoch and Debian revision.  Native packages return VERSION."
   (let ((file-version (deb-packaging--version-to-filename version)))
     (if (string-match "\\(.*\\)-[^-]+$" file-version)
         (match-string 1 file-version)
@@ -254,7 +237,6 @@ Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
          (binary-changes nil)
          (debs nil)
          (buildinfo nil))
-    ;; First pass: find .changes and .dsc files by source package name
     (dolist (file files)
       (cond
        ((string-match "\\.dsc$" file)
@@ -265,7 +247,7 @@ Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
         (push (expand-file-name file dir) binary-changes))
        ((string-match "_source\\.buildinfo$" file)
         (push (expand-file-name file dir) buildinfo))))
-    ;; Second pass: find debs from binary .changes
+    ;; debs are only discoverable via the binary .changes.
     (dolist (changes-file binary-changes)
       (dolist (referenced (deb-packaging--parse-changes-file changes-file))
         (let ((full-path (expand-file-name referenced dir)))
@@ -283,8 +265,7 @@ Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
       (buildinfo . ,(nreverse buildinfo)))))
 
 (defun deb-packaging--binary-package-names (&optional pkg-dir)
-  "Return binary package names from debian/control in PKG-DIR.
-Defaults to the detected package directory.  Returns nil if absent.
+  "Return binary package names from debian/control in PKG-DIR, or nil.
 Template variables are left as-is."
   (let* ((dir (or pkg-dir (deb-packaging--find-package-dir)))
          (control (when dir
@@ -300,8 +281,8 @@ Template variables are left as-is."
 
 (defun deb-packaging--owned-package-prefixes (&optional pkg-dir)
   "Return artifact name prefixes owned by this source.
-Includes the source name, binary names, and -dbgsym/-dbg variants.
-Falls back to the source name if debian/control is missing."
+Source name, binary names, and their -dbgsym/-dbg variants.  Falls back
+to the source name if debian/control is missing."
   (let* ((dir (or pkg-dir (deb-packaging--find-package-dir)))
          (info (when dir (deb-packaging--parse-changelog dir)))
          (source-name (nth 0 info))
@@ -317,15 +298,12 @@ Falls back to the source name if debian/control is missing."
      :test #'equal)))
 
 (defun deb-packaging--filename-version (filename)
-  "Extract the version field from packaging FILENAME.
-Debian filenames follow NAME_VERSION_ARCH.ext or NAME_VERSION.ext.
-Returns the second underscore-delimited field, or nil.  Returns nil for
-.orig.tar.* files."
+  "Extract the version field from packaging FILENAME, or nil.
+Filenames are NAME_VERSION_ARCH.ext or NAME_VERSION.ext.  Returns nil
+for .orig.tar.* files."
   (cond
    ((string-match "\\.orig\\.tar\\." filename) nil)
-   ;; Three-field: NAME_VERSION_ARCH.ext - version is between the _s
    ((string-match "_\\([^_]+\\)_" filename) (match-string 1 filename))
-   ;; Two-field: NAME_VERSION.ext - strip known extensions, then extract
    (t
     (let ((stripped (replace-regexp-in-string
                      "\\.\\(dsc\\|changes\\|u?deb\\|ddeb\\|buildinfo\\|upload\\|debian\\.tar\\.[a-z0-9]+\\|tar\\.[a-z0-9]+\\)$"
@@ -335,11 +313,10 @@ Returns the second underscore-delimited field, or nil.  Returns nil for
         nil)))))
 
 (defun deb-packaging--scan-stale-artifacts (name version dir &optional pkg-dir)
-  "Scan DIR for artifacts of NAME from versions other than VERSION.
-Returns sorted basenames in DIR owned by this source (source and binary
-package names) that do not match VERSION.  PKG-DIR supplies binary
-package names; otherwise only NAME is used.  Matches packaging extensions
-(dsc, changes, deb, udeb, ddeb, buildinfo, upload, tar.*, orig.tar.*)."
+  "Return sorted basenames in DIR owned by NAME but not matching VERSION.
+PKG-DIR supplies binary package names; otherwise only NAME is used.
+Matches packaging extensions (dsc, changes, deb, udeb, ddeb, buildinfo,
+upload, tar.*, orig.tar.*)."
   (when (and name version (file-directory-p dir))
     (let* ((file-version (deb-packaging--version-to-filename version))
            (upstream-version (deb-packaging--upstream-version version))
@@ -355,13 +332,10 @@ package names; otherwise only NAME is used.  Matches packaging extensions
        (dolist (file (directory-files dir nil prefix-regex))
          (when (string-match-p ext-pattern file)
            (if (string-match-p orig-pattern file)
-               ;; Orig tarballs use the upstream version, embedded as
-               ;; NAME_UPSTREAM.orig.tar.*.  Extract the version between
-               ;; the first _ and .orig, and compare to upstream-version.
+               ;; Orig tarballs embed the upstream version, not the full one.
                (when (string-match "_\\([^_]+\\)\\.orig\\.tar\\." file)
                  (unless (string= (match-string 1 file) upstream-version)
                    (push file stale)))
-             ;; Regular artifact: extract version, compare to current.
              (let ((fv (deb-packaging--filename-version file)))
                (when (and fv (not (string= fv file-version)))
                  (push file stale))))))
@@ -370,12 +344,11 @@ package names; otherwise only NAME is used.  Matches packaging extensions
 ;;; Unified context scan
 ;;
 ;; Single source of truth for the status buffer and dispatch transient.
-;; Re-reads the filesystem and changelog, never mutates user settings.
-;; Seeding from the changelog is the caller's responsibility.
+;; Re-reads the filesystem/changelog on each call, no caching or mutation.
 
 (defun deb-packaging--scan-context (&optional start-dir)
   "Return a fresh context plist for the package containing START-DIR.
-START-DIR defaults to `default-directory'.  Returns nil outside a Debian
+START-DIR defaults to `default-directory'.  Returns nil outside a
 package tree.  Keys:
 
   :name          source package name
@@ -388,9 +361,7 @@ package tree.  Keys:
   :source-format source format string, or nil
   :orig-tarball  .orig.tar.* path, or nil
   :arch          build architecture string
-  :maintainer    Maintainer field, or nil
-
-No caching or side effects."
+  :maintainer    Maintainer field, or nil"
   (when-let* ((pkg-dir (deb-packaging--find-package-dir start-dir))
               (info (deb-packaging--parse-changelog pkg-dir)))
     (let* ((name (nth 0 info))

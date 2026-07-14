@@ -6,23 +6,11 @@
 
 ;;; Commentary:
 
-;; Shared fixtures and helper macros for the deb-packaging ERT suite.
-;;
-;; This file defines no tests of its own.  Each per-module test file does
-;; `(require 'deb-packaging-test)' and uses the macros below.
-;;
-;; Three macros:
-;;
-;;   `deb-packaging-test--with-package-tree' — build a throwaway Debian
-;;     source tree on disk from a plist spec, bind `default-directory' to
-;;     it, and expose `pkg-dir'/`pkg-parent-dir' in the body.
-;;
-;;   `deb-packaging-test--with-mocked-process' — replace `call-process' and
-;;     `shell-command-to-string' with canned responses dispatched by
-;;     program name / command string.
-;;
-;;   `deb-packaging-test--with-temp-git-repo' — build a throwaway git repo
-;;     for tests that exercise real git state (branches, commits, log).
+;; Shared fixtures for the deb-packaging ERT suite. Defines no tests.
+;; Macros:
+;;   `deb-packaging-test--with-package-tree'   throwaway Debian source tree
+;;   `deb-packaging-test--with-mocked-process' canned call-process/shell output
+;;   `deb-packaging-test--with-temp-git-repo'  throwaway git repo
 
 ;;; Code:
 
@@ -160,21 +148,11 @@ RESPONSES is an alist whose keys are matched against KEY (a string) by
 
 (defmacro deb-packaging-test--with-mocked-process (responses &rest body)
   "Run BODY with `call-process' and `shell-command-to-string' mocked.
-
-RESPONSES (evaluated) is an alist of (MATCH . RESPONSE).
-
-For `call-process', MATCH is compared against PROGRAM by prefix.
-For `shell-command-to-string', MATCH is compared against the command
-string by prefix.
-
-RESPONSE may be:
-  a string   — stdout; for `call-process' the string is inserted into the
-               destination buffer and exit code 0 is returned
-  an integer — an exit code (no stdout)
-  a cons (CODE . STRING) — exit code CODE with STRING as stdout
-
-An unmatched program/command signals an error so tests fail loudly on an
-unexpected external call."
+RESPONSES (evaluated) is an alist of (MATCH . RESPONSE).  MATCH is
+prefix-compared against PROGRAM (call-process) or the command string
+\(shell-command-to-string).  RESPONSE is a string (stdout, exit 0), an
+integer (exit code, no stdout), or a cons (CODE . STRING).  An unmatched
+call signals an error so tests fail loudly on unexpected external calls."
   (declare (indent 1) (debug (form body)))
   (let ((rs (make-symbol "responses")))
     `(let ((,rs ,responses))

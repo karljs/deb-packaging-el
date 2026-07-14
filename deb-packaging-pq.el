@@ -9,17 +9,9 @@
 
 ;; Maintain Debian quilt patches as git commits via `gbp pq'.
 ;;
-;; gbp pq manages a "patch-queue branch" (patch-queue/<branch>) where quilt
-;; patches live as git commits.  You edit them with normal git tools (Magit),
-;; then export back to debian/patches/.
-;;
-;; Workflow:
-;;   1. import: quilt patches -> patch-queue branch (switches to it)
-;;   2. edit: cherry-pick, git am, or manual edits on the patch-queue branch
-;;   3. export: patch-queue -> debian/patches/ (commits + drops the branch)
-;;
-;; Only the branch lifecycle is wrapped.  Patch application is left to Magit.
-;; Requires a 3.0 (quilt) source format and a git repository.
+;; import: quilt patches -> patch-queue/<branch> (switches to it).
+;; export: patch-queue -> debian/patches/ (commits, drops the branch).
+;; Patch application is left to Magit. Requires 3.0 (quilt) format and git.
 
 ;;; Code:
 
@@ -70,9 +62,7 @@ Returns nil if BRANCH itself is a patch-queue branch."
 
 (defun deb-packaging-pq--state ()
   "Return a plist describing the patch-queue state.
-Keys: :on-pq-p (whether on a patch-queue branch), :branch (current
-branch name), :pq-branch (the patch-queue branch name or nil if on
-one), :exists-p (whether the patch-queue branch exists)."
+Keys: :on-pq-p, :branch, :pq-branch (nil if already on one), :exists-p."
   (let* ((branch (deb-packaging-pq--current-branch))
          (on-pq (and branch (string-prefix-p "patch-queue/" branch)))
          (pq-branch (unless on-pq
@@ -88,12 +78,9 @@ one), :exists-p (whether the patch-queue branch exists)."
 ;;; Compilation follow-up
 
 (defun deb-packaging-pq--after-compile (buf action)
-  "Run ACTION when the compilation in BUF finishes successfully.
-ACTION is called with no arguments.  Registers a one-shot entry on
-`compilation-finish-functions' that matches BUF, removes itself once
-BUF finishes, and calls ACTION only when the process exited normally
-\(the finish message contains \"finished\").  On failure the action is
-skipped; the compilation buffer already shows the error output."
+  "Call ACTION (no args) when the compilation in BUF finishes successfully.
+One-shot `compilation-finish-functions' hook; skips ACTION on failure
+since the buffer already shows the error."
   (letrec ((hook (lambda (finished-buf msg)
                    (when (eq finished-buf buf)
                      (remove-hook 'compilation-finish-functions hook)
@@ -106,12 +93,10 @@ skipped; the compilation buffer already shows the error output."
 ;;;###autoload
 (defun deb-packaging-pq-import ()
   "Create a patch-queue branch from quilt patches in debian/patches/.
-Runs `gbp pq import', which creates patch-queue/<branch> and switches
-to it.  Opens `magit-status' on success so you can edit patches as
-commits with normal git tools."
+Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
+`magit-status' on success."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  ;; Open magit-status so the user can edit on the patch-queue branch.
   (let ((dir (magit-toplevel)))
     (deb-packaging-pq--after-compile
      (compile "gbp pq import")
@@ -141,9 +126,8 @@ commits with normal git tools."
 ;;;###autoload
 (defun deb-packaging-pq-export ()
   "Export the patch-queue branch back to debian/patches/.
-Runs `gbp pq export --commit --drop', which writes patches, commits
-them on the packaging branch, and deletes the patch-queue branch.
-Refreshes the status buffer on success."
+Runs `gbp pq export --commit --drop': writes patches, commits on the
+packaging branch, deletes the patch-queue branch."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
   (unless (deb-packaging-pq--on-pq-branch-p)
@@ -172,17 +156,17 @@ Useful to abort an edit session and start over."
          (branch (plist-get state :branch))
          (on-pq (plist-get state :on-pq-p))
          (exists (plist-get state :exists-p)))
-    (format "gbp pq — patch queue\n%s"
+    (format "gbp pq: patch queue\n%s"
             (cond
              (on-pq
               (format "On patch-queue branch: %s\nExport when ready."
-                      (or branch "???")))
+                      (or branch "detached")))
              (exists
               (format "Packaging branch: %s\nPatch-queue ready: switch to edit."
-                      (or branch "???")))
+                      (or branch "detached")))
              (t
               (format "Packaging branch: %s\nNo patch-queue: import to start."
-                      (or branch "???")))))))
+                      (or branch "detached")))))))
 
 ;;;###autoload(autoload 'deb-packaging-pq-transient "deb-packaging-pq" nil t)
 (transient-define-prefix deb-packaging-pq-transient ()
