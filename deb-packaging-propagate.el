@@ -284,7 +284,7 @@ Return plist: :description, :author.  Description may be multi-line."
   (with-temp-buffer
     (insert diff-body)
     (goto-char (point-min))
-    (while (re-search-forward "^\\(---\\|\\+\\+\\) \\(.+\\)$" nil t)
+    (while (re-search-forward "^\\(---\\|\\+\\+\\+\\) \\(.+\\)$" nil t)
       (let* ((marker (match-string 1))
              (path (string-trim (match-string 2)))
              (clean (replace-regexp-in-string

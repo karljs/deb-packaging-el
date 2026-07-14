@@ -97,7 +97,7 @@ Author: Me <me@example.com>")
 ;;; Diff path normalization
 
 (ert-deftest deb-packaging-test-propagate/normalize-diff-paths ()
-  "`---' lines get a/ prefix; `+++' lines keep original path per source."
+  "`---' lines get a/ prefix; `+++' lines get b/ prefix."
   (let* ((input "--- a/src/foo.c
 +++ b/src/foo.c
 --- README
@@ -105,13 +105,13 @@ Author: Me <me@example.com>")
 --- a/.gitlab-ci.yml
 +++ b/.gitlab-ci.yml
 ")
-         (expected "--- a/src/foo.c\n+++ b/src/foo.c\n--- a/README\n+++ README\n--- a/.gitlab-ci.yml\n+++ b/.gitlab-ci.yml\n")
+         (expected "--- a/src/foo.c\n+++ b/src/foo.c\n--- a/README\n+++ b/README\n--- a/.gitlab-ci.yml\n+++ b/.gitlab-ci.yml\n")
          (got (deb-packaging-propagate--normalize-diff-paths input)))
     (should (string= got expected))))
 
 (ert-deftest deb-packaging-test-propagate/normalize-diff-paths-swapped-prefix ()
   (let* ((input "--- b/foo.c\n+++ a/foo.c\n")
-         (expected "--- a/foo.c\n+++ a/foo.c\n")
+         (expected "--- a/foo.c\n+++ b/foo.c\n")
          (got (deb-packaging-propagate--normalize-diff-paths input)))
     (should (string= got expected))))
 
