@@ -1,6 +1,6 @@
 ;;; deb-packaging-test-dev.el --- Dev-container provision tests -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2026 Karl Smeltzer
+;; Copyright (C) 2026 Karl Smeltzer
 
 ;;; Commentary:
 

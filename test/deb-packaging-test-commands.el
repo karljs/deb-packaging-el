@@ -1,6 +1,6 @@
 ;;; deb-packaging-test-commands.el --- Command arg & parse tests -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2026 Karl Smeltzer
+;; Copyright (C) 2026 Karl Smeltzer
 
 ;;; Commentary:
 

@@ -1,6 +1,6 @@
 ;;; deb-packaging-commands.el --- Command execution for deb-packaging -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024 Karl Smeltzer
+;; Copyright (C) 2026 Karl Smeltzer
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging

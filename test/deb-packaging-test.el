@@ -1,6 +1,6 @@
 ;;; deb-packaging-test.el --- Shared test helpers -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2026 Karl Smeltzer
+;; Copyright (C) 2026 Karl Smeltzer
 ;; Author: Karl Smeltzer
 ;; Keywords: tools, debian, ubuntu, packaging
 
