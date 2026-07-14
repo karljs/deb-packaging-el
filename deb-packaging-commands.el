@@ -23,6 +23,8 @@
 (require 'deb-packaging-config)
 
 (declare-function deb-packaging--effective-distro "deb-packaging-config")
+(declare-function deb-packaging-infra--ppa-owner "deb-packaging-infra")
+(declare-function deb-packaging-infra--ppa-name "deb-packaging-infra")
 
 ;;; Core Execution
 
@@ -339,15 +341,36 @@ the binary-build transient --extra-repository option.
 Add your own entries, e.g. a team PPA:
 
   (add-to-list \\='deb-packaging-sbuild-variants
-               \\='(\"rust-ppa\" . \"deb [trusted=yes] http://ppa.launchpadcontent.net/rust-toolchain/staging/ubuntu/ %s main\"))")
+               \\='(\"rust-ppa\" . \"deb [trusted=yes] http://ppa.launchpadcontent.net/rust-toolchain/staging/ubuntu/ %s main\"))
+
+Note that Launchpad PPAs need no entry here: selecting a \"ppa:owner/name\"
+value in the transient (completed against your known PPAs) is expanded
+automatically -- see `deb-packaging--expand-extra-repo'.")
+
+(defun deb-packaging--ppa-repo-line (ppa distro)
+  "Expand PPA (a \"ppa:owner/name\" string) into a sbuild repo line for DISTRO.
+Returns a full \"deb [trusted=yes] http://ppa.launchpadcontent.net/OWNER/NAME/ubuntu/ DISTRO main\"
+line.  Returns nil if PPA is not a recognisable ppa: address."
+  (let ((owner (deb-packaging-infra--ppa-owner ppa))
+        (name (deb-packaging-infra--ppa-name ppa)))
+    (when (and owner name)
+      (format "deb [trusted=yes] http://ppa.launchpadcontent.net/%s/%s/ubuntu/ %s main"
+              owner name distro))))
 
 (defun deb-packaging--expand-extra-repo (value distro)
   "Expand VALUE into an extra-repository string for DISTRO.
-If VALUE matches a key in `deb-packaging-sbuild-variants', substitute the
-template; otherwise return VALUE unchanged for custom repos."
-  (if-let ((template (cdr (assoc value deb-packaging-sbuild-variants))))
-      (format template distro)
-    value))
+Resolution order:
+1. If VALUE matches a key in `deb-packaging-sbuild-variants', substitute
+   that template (with %s -> DISTRO).
+2. If VALUE is a \"ppa:owner/name\" address, expand it into a full
+   \"deb [trusted=yes] ...\" line pointing at the Launchpad PPA archive.
+3. Otherwise return VALUE unchanged (a raw \"deb ...\" line)."
+  (cond
+   ((cdr (assoc value deb-packaging-sbuild-variants))
+    (format (cdr (assoc value deb-packaging-sbuild-variants)) distro))
+   ((string-prefix-p "ppa:" value)
+    (or (deb-packaging--ppa-repo-line value distro) value))
+   (t value)))
 
 (defun deb-packaging-sbuild (&optional args)
   "Run sbuild with ARGS from the binary-build transient."

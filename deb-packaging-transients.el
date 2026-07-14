@@ -31,6 +31,7 @@
 ;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging--effective-distro "deb-packaging-config")
 (declare-function deb-packaging--runner-choices "deb-packaging-commands")
+(declare-function deb-packaging--expand-extra-repo "deb-packaging-commands")
 
 ;; Tool-specific variables live in deb-packaging-commands.el.
 (defvar deb-packaging-sbuild-variants)
@@ -88,20 +89,75 @@ Seeds the distro from the changelog."
 
 (defclass deb-packaging--extra-repo-argument (transient-option) ()
   "Transient option for sbuild --extra-repository= values.
-Completes against variant short names and expands to the full repo
-string at runtime.")
+Completes against named variants and your known Launchpad PPAs, then
+expands the choice to a full repo string at build time.")
 
 (cl-defmethod transient-infix-read ((obj deb-packaging--extra-repo-argument))
-  "Read a variant short-name and store it."
-  (let ((choices (mapcar #'car deb-packaging-sbuild-variants)))
-    (completing-read (format "%s: " (oref obj description))
-                     choices nil nil (oref obj value))))
+  "Read an extra-repository value.
+Offers the named variants from `deb-packaging-sbuild-variants' plus your
+known PPAs (\"ppa:owner/name\") as completions.  A named variant or a
+ppa: address is expanded at build time; any other input is passed to
+sbuild verbatim (e.g. a full \"deb [trusted=yes] ...\" line)."
+  (let* ((variants (mapcar #'car deb-packaging-sbuild-variants))
+         (ppas (when (fboundp 'deb-packaging-infra--list-ppas)
+                 (deb-packaging-infra--list-ppas)))
+         (choices (delete-dups (append variants ppas))))
+    (completing-read
+     "Extra apt repo (variant, ppa:owner/name, or full deb line): "
+     choices nil nil (oref obj value))))
 
 (cl-defmethod transient-format-value ((obj deb-packaging--extra-repo-argument))
-  "Display the chosen variant short-name."
+  "Show the chosen value and, when it differs, the expanded repo line."
   (if-let ((v (oref obj value)))
-      (propertize v 'face 'transient-value)
+      (let ((expanded (deb-packaging--expand-extra-repo
+                       v (deb-packaging--effective-distro))))
+        (if (string= v expanded)
+            (propertize v 'face 'transient-value)
+          (concat (propertize v 'face 'transient-value)
+                  (propertize (format " → %s" expanded)
+                              'face 'transient-inactive-value))))
     (propertize "none" 'face 'transient-inactive-value)))
+
+(defclass deb-packaging--extra-package-argument (transient-option) ()
+  "Transient option for sbuild --extra-package= values.
+Completes against .deb files in the build-output (parent) directory,
+but accepts any file path.  Multi-valued: each selected .deb becomes a
+separate --extra-package= argument.")
+
+(cl-defmethod transient-infix-read ((obj deb-packaging--extra-package-argument))
+  "Read an extra-package .deb file path.
+Offers the .deb files found in the package's build-output (parent)
+directory as completions, falling back to file-name completion when none
+are found there.  Any path is accepted (e.g. a .deb downloaded from a
+PPA); the result is expanded to an absolute path so sbuild resolves it
+regardless of its working directory."
+  (ignore obj)
+  (let* ((pkg-dir (deb-packaging--find-package-dir))
+         (parent-dir (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
+         (debs (when (and parent-dir (file-directory-p parent-dir))
+                 (directory-files parent-dir t "\\.deb\\'")))
+         (choice (if debs
+                     (completing-read
+                      "Extra package (.deb, empty to stop): "
+                      debs nil nil nil nil "")
+                   (read-file-name "Extra package (.deb): "
+                                   (file-name-as-directory
+                                    (or parent-dir default-directory))
+                                   nil t))))
+    (if (or (null choice) (string-empty-p choice))
+        nil
+      (expand-file-name choice))))
+
+(cl-defmethod transient-format-value ((obj deb-packaging--extra-package-argument))
+  "Show the selected .deb file(s) by base name."
+  (let ((v (oref obj value)))
+    (if v
+        (mapconcat
+         (lambda (f) (propertize (file-name-nondirectory f)
+                                 'face 'transient-value))
+         (if (listp v) v (list v))
+         (propertize "," 'face 'transient-inactive-value))
+      (propertize "none" 'face 'transient-inactive-value))))
 
 ;;;###autoload(autoload 'deb-packaging-binary-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-binary-build-transient ()
@@ -116,12 +172,18 @@ string at runtime.")
     :allow-empty nil)
    ("-A" "Build arch-all packages"  "-A")
    ("-v" "Verbose"                  "-v")
+   ("-u" "apt upgrade"              "--apt-upgrade")
     ("-F" "Shell on build failure"
-     deb-packaging-sbuild-shell-flag)
+     "--build-failed-commands=%SBUILD_SHELL")
    ("-e" "Extra repository"
     "--extra-repository="
     :class deb-packaging--extra-repo-argument
-    :description "Extra apt repo")]
+    :description "Extra apt repo")
+   ("-p" "Extra package"
+    "--extra-package="
+    :class deb-packaging--extra-package-argument
+    :multi-value t
+    :description "Local .deb to install in chroot")]
   ["Build"
    ("b" "Build binary" deb-packaging-sbuild)])
 
