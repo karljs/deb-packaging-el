@@ -80,8 +80,15 @@ Set the target distro with `d'; other transients inherit it."
 ;;;###autoload
 (defun deb-packaging-setup-keys ()
   "Set up default keybindings for deb-packaging.
-Binds C-c d to `deb-packaging-status'."
-  (global-set-key (kbd "C-c d") #'deb-packaging-status))
+Binds `C-c d' to `deb-packaging-status'.  If `C-c d' is already bound
+to a different command, skips the binding and warns instead of
+clobbering it."
+  (let* ((key (kbd "C-c d"))
+         (cmd (key-binding key t)))
+    (if (or (null cmd) (eq cmd #'deb-packaging-status))
+        (global-set-key key #'deb-packaging-status)
+      (message "deb-packaging: C-c d already bound to %s; bind deb-packaging-status manually"
+               cmd))))
 
 ;;;###autoload
 (autoload 'deb-packaging-status "deb-packaging-status" nil t)

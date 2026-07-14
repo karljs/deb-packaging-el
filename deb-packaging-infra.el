@@ -214,7 +214,8 @@ Use schroot at point, or prompt."
 Keys: :alias, :fingerprint, :description, :arch, :size.
 Uses JSON output and keyed access to stay robust against column changes."
   (require 'json)
-  (let ((output (shell-command-to-string "lxc image list --format=json 2>/dev/null")))
+  (let ((output (deb-packaging--call-process-string
+                 "lxc" "image" "list" "--format=json")))
     (when (and output (not (string-empty-p output)))
       (let ((data (json-read-from-string output)))
         (cl-remove-if-not

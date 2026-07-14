@@ -634,7 +634,11 @@ Collapsed when HIDE. Containers match by name prefix."
          (containers (deb-packaging-dev--list-containers
                       (when name (format "deb-dev-%s-" name))))
          (target (when (and name distro)
-                   (format "deb-dev-%s-%s" name distro))))
+                   (format "deb-dev-%s-%s" name distro)))
+         (target-found (and target
+                            (cl-find target containers
+                                     :key (lambda (c) (plist-get c :name))
+                                     :test #'equal))))
     (when containers
       (magit-insert-section (deb-packaging-dev nil hide)
         (magit-insert-heading
@@ -644,17 +648,10 @@ Collapsed when HIDE. Containers match by name prefix."
                        'font-lock-face 'magit-section-heading)
            (propertize
             (if target
-                (if (cl-find target containers
-                             :key (lambda (c) (plist-get c :name))
-                             :test #'equal)
-                    "ready"
-                  "none")
+                (if target-found "ready" "none")
               (format "%d" (length containers)))
             'font-lock-face
-            (if (and target
-                     (cl-find target containers
-                              :key (lambda (c) (plist-get c :name))
-                              :test #'equal))
+            (if target-found
                 'deb-packaging-status-done
               'shadow))))
         (magit-insert-section-body

@@ -384,8 +384,9 @@ message to the kill ring."
 
 ;;; Apply transient (mirrors magit-patch-apply's flags)
 
-(defvar deb-packaging-propagate--pending-patch nil
+(defvar-local deb-packaging-propagate--pending-patch nil
   "Patch file path for the next apply, or nil.
+Buffer-local to the Magit status buffer of the propagate clone.
 Set by `deb-packaging-propagate-apply'; consumed by
 `deb-packaging-propagate-do-apply'.")
 
