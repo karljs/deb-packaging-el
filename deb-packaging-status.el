@@ -26,11 +26,7 @@
 (require 'deb-packaging-commands)
 (require 'deb-packaging-transients)
 
-(declare-function deb-packaging--effective-distro "deb-packaging-config")
-;; Other cross-file references
-(declare-function deb-packaging--run-summary "deb-packaging-commands")
-(declare-function deb-packaging--schroot-exists-p "deb-packaging-detect")
-(declare-function deb-packaging--filename-version "deb-packaging-detect")
+;; Cross-file references not pulled in by require (avoids load cycles).
 (declare-function deb-packaging-dispatch "deb-packaging")
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
 (declare-function deb-packaging-dev--list-containers "deb-packaging-dev")

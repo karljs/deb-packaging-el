@@ -26,12 +26,6 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 
-(declare-function magit-status-setup-buffer "magit-status" (directory))
-(declare-function magit-toplevel "magit-git" (&optional noerror))
-(declare-function deb-packaging--find-package-dir "deb-packaging-detect")
-(declare-function deb-packaging--list-patches "deb-packaging-detect")
-(declare-function deb-packaging--vcs-git "deb-packaging-detect")
-
 ;;; Slug and description helpers
 
 (defun deb-packaging-propagate--slug (str)

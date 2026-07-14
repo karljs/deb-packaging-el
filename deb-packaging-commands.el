@@ -20,7 +20,6 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 
-(declare-function deb-packaging--effective-distro "deb-packaging-config")
 (declare-function deb-packaging-infra--ppa-owner "deb-packaging-infra")
 (declare-function deb-packaging-infra--ppa-name "deb-packaging-infra")
 

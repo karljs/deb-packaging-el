@@ -18,7 +18,6 @@
 (require 'deb-packaging-config)
 
 ;; Forward-declare helpers to silence the byte-compiler.
-(declare-function deb-packaging--effective-distro "deb-packaging-config")
 (declare-function deb-packaging--runner-choices "deb-packaging-commands")
 (declare-function deb-packaging--expand-extra-repo "deb-packaging-commands")
 

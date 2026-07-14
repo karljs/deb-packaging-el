@@ -25,11 +25,6 @@
 (require 'deb-packaging-config)
 (require 'deb-packaging-commands)
 
-(declare-function deb-packaging--effective-distro "deb-packaging-config")
-(declare-function deb-packaging--find-package-dir "deb-packaging-detect")
-(declare-function deb-packaging--parse-changelog "deb-packaging-detect")
-(declare-function deb-packaging--run-command "deb-packaging-commands")
-
 ;;; Variables
 
 (defvar deb-packaging-dev-image-remote "ubuntu-daily"

@@ -22,8 +22,6 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-commands)
 
-(declare-function magit-status-setup-buffer "magit-status" (directory))
-
 ;;; Pre-flight checks
 
 (defun deb-packaging-pq--ensure-quilt-repo ()
