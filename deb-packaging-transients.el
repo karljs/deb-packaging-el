@@ -99,8 +99,7 @@ known PPAs (\"ppa:owner/name\") as completions.  A named variant or a
 ppa: address is expanded at build time; any other input is passed to
 sbuild verbatim (e.g. a full \"deb [trusted=yes] ...\" line)."
   (let* ((variants (mapcar #'car deb-packaging-sbuild-variants))
-         (ppas (when (fboundp 'deb-packaging-infra--list-ppas)
-                 (deb-packaging-infra--list-ppas)))
+         (ppas (deb-packaging-infra--list-ppas))
          (choices (delete-dups (append variants ppas))))
     (completing-read
      "Extra apt repo (variant, ppa:owner/name, or full deb line): "
@@ -267,8 +266,7 @@ stay separate."
 
 (defun deb-packaging--read-ppa (prompt initial-input _history)
   "Read a PPA name, completing against the user's known PPAs."
-  (let ((candidates (when (fboundp 'deb-packaging-infra--list-ppas)
-                      (deb-packaging-infra--list-ppas))))
+  (let ((candidates (deb-packaging-infra--list-ppas)))
     (completing-read prompt candidates nil nil initial-input)))
 
 ;;;###autoload(autoload 'deb-packaging-upload-transient "deb-packaging-transients" nil t)

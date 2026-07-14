@@ -522,10 +522,25 @@ Return PPA address strings in order."
         (push (match-string 1 line) result)))
     (nreverse result)))
 
-(defun deb-packaging-infra--list-ppas ()
-  "Return PPA names for the user and configured teams.
+(defvar deb-packaging-infra--ppa-cache nil
+  "Session cache for `deb-packaging-infra--list-ppas'.
+Cons of (PPAS . FETCHED-AT), where PPAS is the cached PPA list and
+FETCHED-AT is a float-time.  Nil when no cache exists.")
+
+(defvar deb-packaging-infra--ppa-cache-ttl 300
+  "Time-to-live in seconds for the PPA cache.
+After this many seconds the cache is stale and the next
+`deb-packaging-infra--list-ppas' call fetches synchronously again.")
+
+(defun deb-packaging-infra--invalidate-ppa-cache ()
+  "Clear the PPA cache.  Call after creating or deleting a PPA."
+  (setq deb-packaging-infra--ppa-cache nil))
+
+(defun deb-packaging-infra--fetch-ppas-sync ()
+  "Fetch PPA names for the user and configured teams synchronously.
 Each entry is \"ppa:owner/name\".  Personal PPAs come first, then
-team-config PPAs.  Team config failures are warned and skipped."
+team-config PPAs.  Team config failures are warned and skipped.  Blocks
+on `ppa list'; stores the result in `deb-packaging-infra--ppa-cache'."
   (let ((result (deb-packaging-infra--parse-ppa-lines
                  (shell-command-to-string "ppa list 2>/dev/null"))))
     (dolist (cfg (deb-packaging-infra--team-config-files))
@@ -536,7 +551,21 @@ team-config PPAs.  Team config failures are warned and skipped."
             (dolist (line (deb-packaging-infra--parse-ppa-lines output))
               (cl-pushnew line result :test #'string=)))
         (error (message "ppa team config %s failed: %s" cfg err))))
-    (nreverse result)))
+    (setq result (nreverse result))
+    (setq deb-packaging-infra--ppa-cache (cons result (float-time)))
+    result))
+
+(defun deb-packaging-infra--list-ppas ()
+  "Return PPA names for the user and configured teams.
+Uses a session cache with `deb-packaging-infra--ppa-cache-ttl' to avoid
+repeated synchronous `ppa list' calls.  On first call (or after the TTL
+expires), blocks while fetching.  Subsequent calls within the TTL return
+the cached value instantly."
+  (if (and deb-packaging-infra--ppa-cache
+           (< (- (float-time) (cdr deb-packaging-infra--ppa-cache))
+              deb-packaging-infra--ppa-cache-ttl))
+      (car deb-packaging-infra--ppa-cache)
+    (deb-packaging-infra--fetch-ppas-sync)))
 
 (defun deb-packaging-infra--ppa-owner (ppa)
   "Return the owner part of PPA string PPA."
@@ -555,6 +584,7 @@ team-config PPAs.  Team config failures are warned and skipped."
          (cmd (format "ppa create %s" (shell-quote-argument name))))
     (when (and (not (string-empty-p name))
                (yes-or-no-p (format "Run: %s? " cmd)))
+      (deb-packaging-infra--invalidate-ppa-cache)
       (compile cmd))))
 
 (defun deb-packaging-infra-delete-ppa (&optional name)
@@ -566,6 +596,7 @@ Use PPA at point, or prompt."
                (completing-read "PPA to delete: " ppas nil nil)))))
   (when (and (not (string-empty-p name))
              (yes-or-no-p (format "Really delete PPA %s? " name)))
+    (deb-packaging-infra--invalidate-ppa-cache)
     (compile (format "ppa destroy %s" (shell-quote-argument name)))))
 
 (defun deb-packaging-infra-set-ppa-config (&optional name)
