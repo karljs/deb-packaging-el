@@ -4,6 +4,8 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -111,7 +113,7 @@ Each plist has keys: :name, :config-file, :description, :directory."
 (defun deb-packaging-infra-create-schroot ()
   "Create a schroot with mk-sbuild."
   (interactive)
-  (let* ((distro (read-string "Distro: " deb-packaging-target-distro))
+  (let* ((distro (read-string "Distro: " deb-packaging-config-target-distro))
          (arch (completing-read "Arch: " '("amd64" "i386" "arm64" "armhf") nil t "amd64"))
          (cmd (format "mk-sbuild --arch=%s %s" arch distro)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
@@ -212,7 +214,7 @@ Use schroot at point, or prompt."
   "Return autopkgtest LXD image plists from `lxc image list'.
 Keys: :alias, :fingerprint, :description, :arch, :size."
   (require 'json)
-  (let ((output (deb-packaging--call-process-string
+  (let ((output (deb-packaging-detect--call-process-string
                  "lxc" "image" "list" "--format=json")))
     (when (and output (not (string-empty-p output)))
       (let ((data (json-read-from-string output)))
@@ -258,7 +260,7 @@ Each plist has :name, :type, :status, and type-specific keys."
 (defun deb-packaging-infra-create-lxd ()
   "Create an autopkgtest LXD image."
   (interactive)
-  (let* ((distro (read-string "Distro: " deb-packaging-target-distro))
+  (let* ((distro (read-string "Distro: " deb-packaging-config-target-distro))
          (arch (completing-read "Arch: " '("amd64" "arm64") nil t "amd64"))
          (cmd (format "autopkgtest-build-lxd ubuntu-daily:%s/%s" distro arch)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
@@ -420,7 +422,7 @@ Each plist has keys: :name, :path, :size."
 (defun deb-packaging-infra-create-qemu ()
   "Create a QEMU image for autopkgtest."
   (interactive)
-  (let* ((distro (read-string "Distro: " deb-packaging-target-distro))
+  (let* ((distro (read-string "Distro: " deb-packaging-config-target-distro))
          (arch (completing-read "Arch: " '("amd64" "arm64" "i386") nil t "amd64"))
          (cmd (format "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s"
                       distro arch deb-packaging-infra-qemu-dir)))
@@ -747,7 +749,7 @@ BUF is the PPAs list buffer; TEMP-BUF holds output."
 
 (defun deb-packaging-infra--header ()
   "Header for infrastructure transient."
-  (format "Infrastructure Management\nDistro: %s" deb-packaging-target-distro))
+  (format "Infrastructure Management\nDistro: %s" deb-packaging-config-target-distro))
 
 (transient-define-prefix deb-packaging-infra-dispatch ()
   "Manage build and test infrastructure."

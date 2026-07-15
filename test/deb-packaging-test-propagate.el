@@ -130,7 +130,7 @@ Author: A U Thor <author@example.com>
 -line
 +fixed line
 ")))
-    (let* ((patches (deb-packaging--list-patches))
+    (let* ((patches (deb-packaging-detect--list-patches))
            (path (cdar patches))
            (block (deb-packaging-propagate--quilt-to-git-am-block path)))
       (should (string-match-p "^From " block))
@@ -150,7 +150,7 @@ Author: A U Thor <author@example.com>
 -x
 +y
 ")))
-    (let* ((patches (deb-packaging--list-patches))
+    (let* ((patches (deb-packaging-detect--list-patches))
            (path (cdar patches))
            (block (let ((user-full-name "Test User")
                         (user-mail-address "test@example.com"))
@@ -182,19 +182,19 @@ Author: A U Thor <author@example.com>
 
 (ert-deftest deb-packaging-test-propagate/salsa-personal-url ()
   (should (null (deb-packaging-propagate--salsa-personal-url "pkg")))
-  (let ((deb-packaging-propagate-salsa-user "jdoe"))
+  (let ((deb-packaging-config-propagate-salsa-user "jdoe"))
     (should (string= (deb-packaging-propagate--salsa-personal-url "pkg")
                      "git@salsa.debian.org:~jdoe/pkg.git"))))
 
 ;;; Clone helpers
 
 (ert-deftest deb-packaging-test-propagate/clone-dir ()
-  (let ((deb-packaging-propagate-cache-dir (make-temp-file "prop-cache-" t)))
+  (let ((deb-packaging-config-propagate-cache-dir (make-temp-file "prop-cache-" t)))
     (unwind-protect
         (let ((dir (deb-packaging-propagate--clone-dir "foo")))
           (should (file-name-absolute-p dir))
           (should (string-suffix-p "debian/foo" dir)))
-      (delete-directory deb-packaging-propagate-cache-dir t))))
+      (delete-directory deb-packaging-config-propagate-cache-dir t))))
 
 (ert-deftest deb-packaging-test-propagate/clone-exists-p ()
   (let ((root (make-temp-file "clone-test-" t)))

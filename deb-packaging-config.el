@@ -4,6 +4,8 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -19,68 +21,68 @@
 
 ;;; Target distribution
 
-(defvar deb-packaging-target-distro "noble"
+(defvar deb-packaging-config-target-distro "noble"
   "Target distribution for builds and tests.
 Seeded from the changelog once; not overwritten silently.")
 
-(defvar deb-packaging--distro-user-set nil
-  "Non-nil when `deb-packaging-target-distro' was set deliberately.
+(defvar deb-packaging-config--distro-user-set nil
+  "Non-nil when `deb-packaging-config-target-distro' was set deliberately.
 Set by interactive choice or one-time changelog seed.")
 
-(defun deb-packaging--maybe-seed-distro (distro)
-  "Seed `deb-packaging-target-distro' from DISTRO once, unless user-set.
-Returns `deb-packaging-target-distro'."
+(defun deb-packaging-config--maybe-seed-distro (distro)
+  "Seed `deb-packaging-config-target-distro' from DISTRO once, unless user-set.
+Returns `deb-packaging-config-target-distro'."
   (when (and distro
              (not (string-empty-p distro))
-             (not deb-packaging--distro-user-set))
-  (setq deb-packaging-target-distro distro
-        deb-packaging--distro-user-set t)
-  deb-packaging-target-distro))
+             (not deb-packaging-config--distro-user-set))
+  (setq deb-packaging-config-target-distro distro
+        deb-packaging-config--distro-user-set t)
+  deb-packaging-config-target-distro))
 
-(defun deb-packaging--set-distro (distro)
-  "Set `deb-packaging-target-distro' to DISTRO, always overwriting.
+(defun deb-packaging-config--set-distro (distro)
+  "Set `deb-packaging-config-target-distro' to DISTRO, always overwriting.
 Returns DISTRO."
-  (setq deb-packaging-target-distro distro
-        deb-packaging--distro-user-set t)
-  deb-packaging-target-distro)
+  (setq deb-packaging-config-target-distro distro
+        deb-packaging-config--distro-user-set t)
+  deb-packaging-config-target-distro)
 
-(defun deb-packaging--effective-distro ()
+(defun deb-packaging-config--effective-distro ()
   "Return the target distro, seeding once from the changelog if unset.
 Falls back to \"noble\"."
-  (when-let* ((distro (plist-get (deb-packaging--scan-context) :distro)))
-    (deb-packaging--maybe-seed-distro distro))
-  deb-packaging-target-distro)
+  (when-let* ((distro (plist-get (deb-packaging-detect--scan-context) :distro)))
+    (deb-packaging-config--maybe-seed-distro distro))
+  deb-packaging-config-target-distro)
 
 ;;; Distribution choices
 
-(defconst deb-packaging-ubuntu-distros
+(defconst deb-packaging-config-ubuntu-distros
   '("focal" "jammy" "noble" "oracular" "plucky" "questing")
   "Known Ubuntu distribution codenames, alphabetical.")
 
-(defconst deb-packaging-debian-distros
+(defconst deb-packaging-config-debian-distros
   '("sid" "stable" "testing")
   "Known Debian distribution names, alphabetical.")
 
 ;;; Propagation
 
-(defvar deb-packaging-propagate-salsa-user nil
+(defvar deb-packaging-config-propagate-salsa-user nil
   "Your salsa.debian.org username, used to build the personal remote.
 When nil, prepared clones get no `personal' remote.")
 
-(defvar deb-packaging-propagate-cache-dir
+(defvar deb-packaging-config-propagate-cache-dir
   (expand-file-name "deb-packaging/propagate"
-                    (deb-packaging--cache-dir))
+                    (deb-packaging-detect--cache-dir))
   "Directory for prepared propagate clones.
 Under $XDG_CACHE_HOME/deb-packaging/propagate (or ~/.cache).")
 
-(defvar deb-packaging-propagate-clone-mode-lighter " Prop"
+(defvar deb-packaging-config-propagate-clone-mode-lighter " Prop"
   "Lighter for `deb-packaging-propagate-clone-mode'.")
 
-(defun deb-packaging--distro-choices ()
+(defun deb-packaging-config--distro-choices ()
   "Return distro completion list, prepending the changelog distro if unknown."
-  (let ((current (deb-packaging--effective-distro))
-        (candidates (append deb-packaging-ubuntu-distros
-                            deb-packaging-debian-distros)))
+  (let ((current (deb-packaging-config--effective-distro))
+        (candidates (append deb-packaging-config-ubuntu-distros
+                            deb-packaging-config-debian-distros)))
     (if (member current candidates)
         candidates
       (cons current candidates))))

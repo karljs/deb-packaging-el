@@ -4,6 +4,8 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -112,7 +114,7 @@ Fooled by rewording; only used for indicators."
 (defun deb-packaging-propagate--patch-choices (&optional clone-dir)
   "Return an alist of (display-string . item-plist) for quilt patches.
 CLONE-DIR, if non-nil, annotates already-applied patches."
-  (when-let ((patches (deb-packaging--list-patches)))
+  (when-let ((patches (deb-packaging-detect--list-patches)))
     (mapcar
      (lambda (p)
        (let* ((name (car p))
@@ -196,7 +198,7 @@ CLONE-DIR, if non-nil, annotates already-applied commits."
   "Prompt for a fix source for export (multi-select for patches).
 Returns a list of item plists.  CLONE-DIR annotates applied items.
 ALLOW-RANGE enables the range type."
-  (let* ((pkg-dir (or (deb-packaging--find-package-dir nil t)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir nil t)
                       (user-error "Not in a Debian package directory")))
          (choices (if allow-range
                       '("patch" "commit" "range")
@@ -219,7 +221,7 @@ provides the source-dir via git config."
               (or (deb-packaging-propagate--config-get
                    clone-dir "deb-packaging.source-dir")
                   (user-error "No source-dir stored in clone config"))
-            (or (deb-packaging--find-package-dir nil t)
+            (or (deb-packaging-detect--find-package-dir nil t)
                 (user-error "Not in a Debian package directory"))))
          (choice (completing-read "Fix source: "
                                   '("patch" "commit") nil t)))
@@ -305,7 +307,7 @@ Return plist: :description, :author.  Description may be multi-line."
 (defun deb-packaging-propagate--clone-dir (pkg-name)
   "Return the cache directory for PKG-NAME's Debian clone."
   (expand-file-name (format "debian/%s" pkg-name)
-                    deb-packaging-propagate-cache-dir))
+                    deb-packaging-config-propagate-cache-dir))
 
 (defun deb-packaging-propagate--clone-exists-p (dir)
   "Return non-nil if DIR is an existing git repo."
@@ -328,9 +330,9 @@ Return plist: :description, :author.  Description may be multi-line."
 
 (defun deb-packaging-propagate--salsa-personal-url (pkg-name)
   "Return the salsa personal fork git URL for PKG-NAME, or nil."
-  (when deb-packaging-propagate-salsa-user
+  (when deb-packaging-config-propagate-salsa-user
     (format "git@salsa.debian.org:~%s/%s.git"
-            deb-packaging-propagate-salsa-user pkg-name)))
+            deb-packaging-config-propagate-salsa-user pkg-name)))
 
 ;;; Patch file production
 
@@ -399,9 +401,9 @@ Git-am-friendly, one From:/Subject: block per item. Opens the result
 in view-mode."
   (interactive
    (let* ((items (deb-packaging-propagate--read-fix-source-multi nil t))
-          (pkg-dir (deb-packaging--find-package-dir nil t))
-          (name (deb-packaging--package-name pkg-dir))
-          (parent (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
+          (pkg-dir (deb-packaging-detect--find-package-dir nil t))
+          (name (deb-packaging-detect--package-name pkg-dir))
+          (parent (when pkg-dir (deb-packaging-detect--parent-dir pkg-dir)))
           (slug (deb-packaging-propagate--item-slug (car items)))
           (default-output (when (and name parent slug)
                             (expand-file-name
@@ -449,9 +451,9 @@ prompts for base and work branch, sets up the `personal' remote if
 configured, and hands off to `magit-status'. Press `P' afterwards to
 apply items."
   (interactive)
-  (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (pkg-name (deb-packaging--package-name pkg-dir))
-         (detected-url (or (deb-packaging--vcs-git pkg-dir) ""))
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (pkg-name (deb-packaging-detect--package-name pkg-dir))
+         (detected-url (or (deb-packaging-detect--vcs-git pkg-dir) ""))
          (vcs-url (read-string "Clone URL: " detected-url))
          (clone-dir (deb-packaging-propagate--clone-dir pkg-name)))
     (when (string-empty-p vcs-url)
@@ -542,7 +544,7 @@ commit (marking already-applied items), and opens the apply transient."
 (define-minor-mode deb-packaging-propagate-clone-mode
   "Minor mode for Magit status buffers backed by a propagate clone.
 Binds `P' to pick a fix item and open the apply transient."
-  :lighter deb-packaging-propagate-clone-mode-lighter
+  :lighter deb-packaging-config-propagate-clone-mode-lighter
   :keymap deb-packaging-propagate-clone-mode-map
   (if deb-packaging-propagate-clone-mode
       (setq header-line-format

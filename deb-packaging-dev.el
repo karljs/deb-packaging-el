@@ -4,6 +4,8 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -99,7 +101,7 @@ Best-effort install.")
   "Return cache file path for PKG/DISTRO language selection, or nil."
   (condition-case nil
       (let ((dir (expand-file-name "deb-packaging-dev"
-                                   (deb-packaging--cache-dir))))
+                                   (deb-packaging-detect--cache-dir))))
         (unless (file-directory-p dir)
           (make-directory dir t))
         (expand-file-name (format "%s-%s-langs" pkg distro) dir))
@@ -331,7 +333,7 @@ languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all."
 
 (defun deb-packaging-dev--open-on-success (proc tramp-path)
   "Open dired at TRAMP-PATH when PROC exits 0."
-  (deb-packaging--wrap-sentinel
+  (deb-packaging-commands--wrap-sentinel
    proc
    (lambda (p _event)
      (when (and (eq (process-status p) 'exit)
@@ -360,10 +362,10 @@ Must be visiting a file under /lxc:. Call manually or wire into your own
 Container must exist. C/C++ profile must have been selected (installs bear).
 Partial builds produce partial results. Re-run after changing build flags."
   (interactive)
-  (let* ((pkg-dir (or (deb-packaging--find-package-dir)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (pkg (deb-packaging--package-name pkg-dir))
-         (distro (deb-packaging--effective-distro))
+         (pkg (deb-packaging-detect--package-name pkg-dir))
+         (distro (deb-packaging-config--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg))
          (qname (shell-quote-argument name))
@@ -392,7 +394,7 @@ Partial builds produce partial results. Re-run after changing build flags."
              "\n"))
            (script (format "lxc exec %s -- sh -c %s"
                            qname (shell-quote-argument inner)))
-           (buf (deb-packaging--run-command
+           (buf (deb-packaging-commands--run-command
                  "compile-db" (list "sh" "-c" script) pkg-dir 'compile-db)))
       buf)))
 
@@ -401,10 +403,10 @@ Partial builds produce partial results. Re-run after changing build flags."
 (defun deb-packaging-dev--tramp-path-for-current ()
   "Return TRAMP path for current package's container. Starts if stopped.
 Errors if container doesn't exist."
-  (let* ((pkg-dir (or (deb-packaging--find-package-dir)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (pkg (deb-packaging--package-name pkg-dir))
-         (distro (deb-packaging--effective-distro))
+         (pkg (deb-packaging-detect--package-name pkg-dir))
+         (distro (deb-packaging-config--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg)))
     (unless (deb-packaging-dev--container-exists-p name)
@@ -422,10 +424,10 @@ Errors if container doesn't exist."
 (defun deb-packaging-dev-exec ()
   "Open a shell in the container via `lxc exec -- bash -l'."
   (interactive)
-  (let* ((pkg-dir (or (deb-packaging--find-package-dir)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (pkg (deb-packaging--package-name pkg-dir))
-         (distro (deb-packaging--effective-distro))
+         (pkg (deb-packaging-detect--package-name pkg-dir))
+         (distro (deb-packaging-config--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro)))
     (unless (deb-packaging-dev--container-exists-p name)
       (user-error "Container %s does not exist; run deb-packaging-dev-shell first"
@@ -456,7 +458,7 @@ Errors if container doesn't exist."
   "Return plists for dev containers matching PREFIX (default \"deb-dev-\").
 Each plist: :name, :status, :source."
   (let* ((filter (or prefix "deb-dev-"))
-         (output (deb-packaging--call-process-string
+         (output (deb-packaging-detect--call-process-string
                   "lxc" "list" filter "--format=json")))
     (when (and output (not (string-empty-p output)))
       (let ((entries (ignore-errors (json-read-from-string output))))
@@ -494,10 +496,10 @@ Prompts for languages only when the langs layer needs provisioning.
 C-u forces re-provision of all layers."
   (interactive "P")
   (deb-packaging-dev--ensure-tramp-method)
-  (let* ((pkg-dir (or (deb-packaging--find-package-dir)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
                       (user-error "Not in a Debian package directory")))
-         (pkg (deb-packaging--package-name pkg-dir))
-         (distro (deb-packaging--effective-distro))
+         (pkg (deb-packaging-detect--package-name pkg-dir))
+         (distro (deb-packaging-config--effective-distro))
          (name (deb-packaging-dev--container-name pkg distro))
          (mount (deb-packaging-dev--mount-path pkg))
          (control-fp (deb-packaging-dev--control-fingerprint pkg-dir))
@@ -513,7 +515,7 @@ C-u forces re-provision of all layers."
            (cached-fp (when cached-profiles
                         (deb-packaging-dev--langs-fingerprint cached-profiles)))
            (marker-val (when (deb-packaging-dev--container-exists-p name)
-                         (or (deb-packaging--call-process-string
+                         (or (deb-packaging-detect--call-process-string
                               "lxc" "exec" name "--" "cat"
                               "/root/.deb-dev-marker-langs")
                              "")))
@@ -528,7 +530,7 @@ C-u forces re-provision of all layers."
     (let* ((script (deb-packaging-dev--provision-script
                     name distro pkg-dir mount pkg
                     control-fp langs-fp tools-fp force profiles))
-           (buf (deb-packaging--run-command
+           (buf (deb-packaging-commands--run-command
                  "dev-shell" (list "sh" "-c" script) pkg-dir 'dev-shell))
            (tramp-path (format "/lxc:%s:%s" name mount)))
       (when-let ((proc (get-buffer-process buf)))
@@ -545,17 +547,17 @@ With arg or outside a package: prompts with completion."
          (names (mapcar (lambda (c) (plist-get c :name)) containers))
          (name
           (cond
-           ((and (not arg) (deb-packaging--find-package-dir))
-            (let* ((pkg-dir (deb-packaging--find-package-dir))
-                   (pkg (deb-packaging--package-name pkg-dir))
-                   (distro (deb-packaging--effective-distro)))
+           ((and (not arg) (deb-packaging-detect--find-package-dir))
+            (let* ((pkg-dir (deb-packaging-detect--find-package-dir))
+                   (pkg (deb-packaging-detect--package-name pkg-dir))
+                   (distro (deb-packaging-config--effective-distro)))
               (deb-packaging-dev--container-name pkg distro)))
            ((null names)
             (user-error "No dev containers found"))
            (t
             (completing-read "Delete container: " names nil t)))))
     (when (yes-or-no-p (format "Delete dev container %s? " name))
-      (deb-packaging--run-command
+      (deb-packaging-commands--run-command
        "dev-destroy"
        (list "sh" "-c" (format "lxc delete --force %s"
                                (shell-quote-argument name)))

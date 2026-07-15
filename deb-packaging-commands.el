@@ -4,6 +4,8 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -25,7 +27,7 @@
 
 ;;; Core Execution
 
-(defun deb-packaging--filter-osc-sequences (string)
+(defun deb-packaging-commands--filter-osc-sequences (string)
   "Filter OSC and terminal query sequences from STRING for comint."
   (setq string (replace-regexp-in-string "\e\\][^\a\e]*\\(\a\\|\e\\\\\\)" "" string))
   (setq string (replace-regexp-in-string "\e\\[\\?[0-9;]*[a-zA-Z]" "" string))
@@ -33,36 +35,36 @@
 
 ;;; Run-outcome tracking
 
-(defvar deb-packaging--run-history nil
+(defvar deb-packaging-commands--run-history nil
   "Alist mapping run KEY to its most recent record plist.
 Keys: :status (`running'/`success'/`failure'), :time, :buffer, :summary.
 Session-only.")
 
-(defun deb-packaging--record-run (key status buf-name &optional summary)
+(defun deb-packaging-commands--record-run (key status buf-name &optional summary)
   "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY."
   (when key
-    (let ((existing (alist-get key deb-packaging--run-history)))
-      (setf (alist-get key deb-packaging--run-history)
+    (let ((existing (alist-get key deb-packaging-commands--run-history)))
+      (setf (alist-get key deb-packaging-commands--run-history)
             (list :status status
                   :time (or (and existing (plist-get existing :time))
                             (format-time-string "%H:%M:%S"))
                   :buffer buf-name
                   :summary summary)))))
 
-(defun deb-packaging-run-record (key)
+(defun deb-packaging-commands-run-record (key)
   "Return the most recent run record plist for KEY, or nil."
-  (alist-get key deb-packaging--run-history))
+  (alist-get key deb-packaging-commands--run-history))
 
-(defun deb-packaging--run-summary (key)
+(defun deb-packaging-commands--run-summary (key)
   "Return the summary plist for KEY's last run, or nil."
-  (plist-get (deb-packaging-run-record key) :summary))
+  (plist-get (deb-packaging-commands-run-record key) :summary))
 
-(defun deb-packaging--notify-status-refresh ()
+(defun deb-packaging-commands--notify-status-refresh ()
   "Refresh the status buffer if it is live."
   (when (fboundp 'deb-packaging-status--maybe-refresh)
     (deb-packaging-status--maybe-refresh)))
 
-(defun deb-packaging--parse-lint-summary (buf-name)
+(defun deb-packaging-commands--parse-lint-summary (buf-name)
   "Parse lintian counts from comint buffer BUF-NAME.
 Return plist (:error N :warning N :info N) from E:/W:/I: line prefixes."
   (when (buffer-live-p (get-buffer buf-name))
@@ -77,7 +79,7 @@ Return plist (:error N :warning N :info N) from E:/W:/I: line prefixes."
               ("I" (cl-incf infos)))))
         (list :error errors :warning warnings :info infos)))))
 
-(defun deb-packaging--parse-ubuntu-lint-summary (buf-name)
+(defun deb-packaging-commands--parse-ubuntu-lint-summary (buf-name)
   "Parse ubuntu-lint counts from comint buffer BUF-NAME.
 Return plist (:ok N :skip N :warn N :error N :fail N) from the final
 `Summary: ran N lint checks (...)' line."
@@ -103,14 +105,14 @@ Return plist (:ok N :skip N :warn N :error N :fail N) from the final
                   :error (aref stats 3)
                   :fail (aref stats 4))))))))
 
-(defun deb-packaging--run-summary-parser (key)
+(defun deb-packaging-commands--run-summary-parser (key)
   "Return the summary parser for run KEY, or nil."
   (pcase key
-    ((or 'lintian-source 'lintian-binary) #'deb-packaging--parse-lint-summary)
-    ('ubuntu-lint #'deb-packaging--parse-ubuntu-lint-summary)
+    ((or 'lintian-source 'lintian-binary) #'deb-packaging-commands--parse-lint-summary)
+    ('ubuntu-lint #'deb-packaging-commands--parse-ubuntu-lint-summary)
     (_ nil)))
 
-(defun deb-packaging--wrap-sentinel (proc action)
+(defun deb-packaging-commands--wrap-sentinel (proc action)
   "Wrap PROC's sentinel, calling ACTION as (ACTION PROC EVENT) after exit.
 Original sentinel is preserved and runs first."
   (let ((old (process-sentinel proc)))
@@ -122,22 +124,22 @@ Original sentinel is preserved and runs first."
        (when (memq (process-status p) '(exit signal))
          (funcall action p event))))))
 
-(defun deb-packaging--attach-run-sentinel (proc key buf-name)
+(defun deb-packaging-commands--attach-run-sentinel (proc key buf-name)
   "Attach a sentinel to PROC that records the outcome for KEY.
 Lint-style keys also get findings counts stored as :summary."
-  (deb-packaging--wrap-sentinel
+  (deb-packaging-commands--wrap-sentinel
    proc
    (lambda (p _event)
      (let* ((status (if (and (eq (process-status p) 'exit)
                              (zerop (process-exit-status p)))
                         'success
                       'failure))
-            (parser (deb-packaging--run-summary-parser key))
+            (parser (deb-packaging-commands--run-summary-parser key))
             (summary (when parser (funcall parser buf-name))))
-       (deb-packaging--record-run key status buf-name summary)
-       (deb-packaging--notify-status-refresh)))))
+       (deb-packaging-commands--record-run key status buf-name summary)
+       (deb-packaging-commands--notify-status-refresh)))))
 
-(defun deb-packaging--run-command (name args &optional dir key)
+(defun deb-packaging-commands--run-command (name args &optional dir key)
   "Run command in a comint buffer.
 NAME forms the buffer name; ARGS is the full command list.
 DIR sets the process working directory.  KEY (a symbol) enables run tracking."
@@ -154,42 +156,42 @@ DIR sets the process working directory.  KEY (a symbol) enables run tracking."
       (when dir
         (setq default-directory dir))
       (add-hook 'comint-preoutput-filter-functions
-                #'deb-packaging--filter-osc-sequences nil t)
+                #'deb-packaging-commands--filter-osc-sequences nil t)
       (add-hook 'comint-output-filter-functions
                 #'ansi-color-process-output nil t))
     (when key
-      (deb-packaging--record-run key 'running buf-name)
+      (deb-packaging-commands--record-run key 'running buf-name)
       (when-let* ((proc (get-buffer-process buf-name)))
-        (deb-packaging--attach-run-sentinel proc key buf-name))
-      (deb-packaging--notify-status-refresh))
+        (deb-packaging-commands--attach-run-sentinel proc key buf-name))
+      (deb-packaging-commands--notify-status-refresh))
     (pop-to-buffer buf-name)
     buf-name))
 
 ;;; dpkg-buildpackage
 
-(defun deb-packaging-source-build (&optional args)
+(defun deb-packaging-commands-source-build (&optional args)
   "Run dpkg-buildpackage with ARGS from the source-build transient."
-  (interactive (list (transient-args 'deb-packaging-source-build-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
+  (interactive (list (transient-args 'deb-packaging-commands-source-build-transient)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (deb-packaging--run-command "source-build"
+    (deb-packaging-commands--run-command "source-build"
                                 (cons "dpkg-buildpackage" (or args '()))
                                 pkg-dir
                                 'source-build)))
 
 ;;; lintian
 
-(defconst deb-packaging--lintian-arg-prefixes
+(defconst deb-packaging-commands--lintian-arg-prefixes
   '("-i" "-I" "-P" "--pedantic" "--tag-display-limit=" "--color=")
-  "Lintian arg prefixes for `deb-packaging--filter-args'.
+  "Lintian arg prefixes for `deb-packaging-commands--filter-args'.
 Entries ending in `=' match by prefix; bare entries match exactly.")
 
-(defconst deb-packaging--ubuntu-lint-arg-prefixes
+(defconst deb-packaging-commands--ubuntu-lint-arg-prefixes
   '("--verbose" "--json" "--context=" "--all=")
-  "ubuntu-lint arg prefixes for `deb-packaging--filter-args'.")
+  "ubuntu-lint arg prefixes for `deb-packaging-commands--filter-args'.")
 
-(defun deb-packaging--filter-args (args prefixes)
+(defun deb-packaging-commands--filter-args (args prefixes)
   "Return the members of ARGS matching any prefix in PREFIXES.
 A prefix ending in `=' matches by string prefix; a bare prefix matches
 exactly.  Lets lintian and ubuntu-lint share one transient."
@@ -203,65 +205,65 @@ exactly.  Lets lintian and ubuntu-lint share one transient."
       prefixes))
    args))
 
-(defun deb-packaging--run-lintian (targets args &optional key)
+(defun deb-packaging-commands--run-lintian (targets args &optional key)
   "Run lintian on TARGETS (file paths) with ARGS, tracked as KEY.
 ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
 .debs, or a mix."
-  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let ((parent-dir (deb-packaging--parent-dir pkg-dir))
-          (lint-args (deb-packaging--filter-args
+    (let ((parent-dir (deb-packaging-detect--parent-dir pkg-dir))
+          (lint-args (deb-packaging-commands--filter-args
                       (or args '())
-                      deb-packaging--lintian-arg-prefixes)))
-      (deb-packaging--run-command "lintian"
+                      deb-packaging-commands--lintian-arg-prefixes)))
+      (deb-packaging-commands--run-command "lintian"
                                   (append (list "lintian") lint-args targets)
                                   parent-dir
                                   key))))
 
-(defun deb-packaging-lintian-source (&optional args)
+(defun deb-packaging-commands-lintian-source (&optional args)
   "Run lintian on the source .dsc file with ARGS."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
-  (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (info (deb-packaging--package-info pkg-dir))
-         (parent-dir (deb-packaging--parent-dir pkg-dir))
-         (artifacts (deb-packaging--scan-artifacts
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (info (deb-packaging-detect--package-info pkg-dir))
+         (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
+         (artifacts (deb-packaging-detect--scan-artifacts
                      (nth 0 info) (nth 1 info) parent-dir))
          (dsc (alist-get 'dsc artifacts)))
     (unless dsc
       (user-error "No .dsc file found; run a source build first"))
-    (deb-packaging--run-lintian (list dsc) (or args '()) 'lintian-source)))
+    (deb-packaging-commands--run-lintian (list dsc) (or args '()) 'lintian-source)))
 
-(defun deb-packaging--lintian-binary-artifacts ()
+(defun deb-packaging-commands--lintian-binary-artifacts ()
   "Return the .deb files for the current package.
 Signal `user-error' if none exist."
-  (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (info (deb-packaging--package-info pkg-dir))
-         (parent-dir (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (info (deb-packaging-detect--package-info pkg-dir))
+         (parent-dir (when pkg-dir (deb-packaging-detect--parent-dir pkg-dir)))
          (artifacts (when info
-                      (deb-packaging--scan-artifacts
+                      (deb-packaging-detect--scan-artifacts
                        (nth 0 info) (nth 1 info) parent-dir)))
          (debs (alist-get 'debs artifacts)))
     (unless debs
       (user-error "No .deb files found; run a binary build first"))
     debs))
 
-(defun deb-packaging-lintian-binary (&optional args)
+(defun deb-packaging-commands-lintian-binary (&optional args)
   "Run lintian on all .deb files with ARGS."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
-  (let ((debs (deb-packaging--lintian-binary-artifacts)))
-    (deb-packaging--run-lintian debs (or args '()) 'lintian-binary)))
+  (let ((debs (deb-packaging-commands--lintian-binary-artifacts)))
+    (deb-packaging-commands--run-lintian debs (or args '()) 'lintian-binary)))
 
-(defun deb-packaging-lintian-binary-one (&optional args)
+(defun deb-packaging-commands-lintian-binary-one (&optional args)
   "Run lintian on one .deb with ARGS, prompting for which."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
-  (let* ((debs (deb-packaging--lintian-binary-artifacts))
+  (let* ((debs (deb-packaging-commands--lintian-binary-artifacts))
          (target (completing-read "Deb to lint: " debs nil t)))
-    (deb-packaging--run-lintian (list target) (or args '()) 'lintian-binary)))
+    (deb-packaging-commands--run-lintian (list target) (or args '()) 'lintian-binary)))
 
 ;;; ubuntu-lint
 
-(defun deb-packaging--ubuntu-lint-context-args (mode pkg-dir)
+(defun deb-packaging-commands--ubuntu-lint-context-args (mode pkg-dir)
   "Return ubuntu-lint context flags for MODE rooted at PKG-DIR.
 MODE is `changes' (default), `source-dir', or `changelog'.  Default adds
 --source-dir and --changes-file when a source .changes exists."
@@ -270,35 +272,35 @@ MODE is `changes' (default), `source-dir', or `changelog'.  Default adds
     ("changelog" (list "--changelog"
                        (expand-file-name "debian/changelog" pkg-dir)))
     (_
-     (let* ((info (deb-packaging--package-info pkg-dir))
+     (let* ((info (deb-packaging-detect--package-info pkg-dir))
             (name (nth 0 info))
             (version (nth 1 info))
-            (parent-dir (deb-packaging--parent-dir pkg-dir))
+            (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
             (artifacts (when info
-                         (deb-packaging--scan-artifacts name version parent-dir)))
+                         (deb-packaging-detect--scan-artifacts name version parent-dir)))
             (changes (alist-get 'source-changes artifacts)))
        (if changes
            (list "--source-dir" pkg-dir "--changes-file" changes)
          (list "--source-dir" pkg-dir))))))
 
-(defun deb-packaging-ubuntu-lint (&optional args)
+(defun deb-packaging-commands-ubuntu-lint (&optional args)
   "Run ubuntu-lint with ARGS from the lint transient.
 ARGS is filtered to ubuntu-lint's own flags.  `--context=MODE' selects the
 context source (`changes' by default, or `source-dir' / `changelog')."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((effective-args (or args '()))
            (mode (or (transient-arg-value "--context=" effective-args) "changes"))
-           (ubuntu-args (deb-packaging--filter-args
+           (ubuntu-args (deb-packaging-commands--filter-args
                          effective-args
-                         deb-packaging--ubuntu-lint-arg-prefixes))
+                         deb-packaging-commands--ubuntu-lint-arg-prefixes))
            (passthrough (cl-remove-if
                          (lambda (a) (string-prefix-p "--context=" a))
                          ubuntu-args))
-           (context-args (deb-packaging--ubuntu-lint-context-args mode pkg-dir)))
-      (deb-packaging--run-command
+           (context-args (deb-packaging-commands--ubuntu-lint-context-args mode pkg-dir)))
+      (deb-packaging-commands--run-command
        "ubuntu-lint"
        (append (list "ubuntu-lint") passthrough context-args)
        pkg-dir
@@ -306,15 +308,15 @@ context source (`changes' by default, or `source-dir' / `changelog')."
 
 ;;; sbuild
 
-(defvar deb-packaging-sbuild-variants
+(defvar deb-packaging-commands-sbuild-variants
   '(("proposed"
      . "deb http://archive.ubuntu.com/ubuntu/ %s-proposed main"))
   "Alist of short name to extra-repository template for sbuild (%s = distro).
 Completion candidates for the binary-build --extra-repository option.
 Launchpad \"ppa:owner/name\" values need no entry; they expand
-automatically (see `deb-packaging--expand-extra-repo').")
+automatically (see `deb-packaging-commands--expand-extra-repo').")
 
-(defun deb-packaging--ppa-repo-line (ppa distro)
+(defun deb-packaging-commands--ppa-repo-line (ppa distro)
   "Expand PPA (a \"ppa:owner/name\" string) into a sbuild repo line for DISTRO.
 Return nil if PPA is not a recognisable ppa: address."
   (let ((owner (deb-packaging-infra--ppa-owner ppa))
@@ -323,40 +325,40 @@ Return nil if PPA is not a recognisable ppa: address."
       (format "deb [trusted=yes] http://ppa.launchpadcontent.net/%s/%s/ubuntu/ %s main"
               owner name distro))))
 
-(defun deb-packaging--expand-extra-repo (value distro)
+(defun deb-packaging-commands--expand-extra-repo (value distro)
   "Expand VALUE into an extra-repository string for DISTRO.
-A `deb-packaging-sbuild-variants' key expands its template; a
+A `deb-packaging-commands-sbuild-variants' key expands its template; a
 \"ppa:owner/name\" address expands to a Launchpad repo line; anything else
 is returned unchanged."
   (cond
-   ((cdr (assoc value deb-packaging-sbuild-variants))
-    (format (cdr (assoc value deb-packaging-sbuild-variants)) distro))
+   ((cdr (assoc value deb-packaging-commands-sbuild-variants))
+    (format (cdr (assoc value deb-packaging-commands-sbuild-variants)) distro))
    ((string-prefix-p "ppa:" value)
-    (or (deb-packaging--ppa-repo-line value distro) value))
+    (or (deb-packaging-commands--ppa-repo-line value distro) value))
    (t value)))
 
-(defun deb-packaging-sbuild (&optional args)
+(defun deb-packaging-commands-sbuild (&optional args)
   "Run sbuild with ARGS from the binary-build transient."
   (interactive (list (transient-args 'deb-packaging-binary-build-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((info (deb-packaging--package-info pkg-dir))
-           (parent-dir (deb-packaging--parent-dir pkg-dir))
+    (let* ((info (deb-packaging-detect--package-info pkg-dir))
+           (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
            (artifacts (when info
-                        (deb-packaging--scan-artifacts
+                        (deb-packaging-detect--scan-artifacts
                          (nth 0 info) (nth 1 info) parent-dir)))
            (dsc-file (alist-get 'dsc artifacts)))
       (unless dsc-file
         (user-error "No .dsc file found; run a source build first"))
       (let* ((effective-args (or args '()))
              (distro (or (transient-arg-value "--dist=" effective-args)
-                         (deb-packaging--effective-distro)))
+                         (deb-packaging-config--effective-distro)))
              (variant-name (transient-arg-value "--extra-repository=" effective-args))
              (extra-repo-arg
               (when variant-name
                 (list (concat "--extra-repository="
-                              (deb-packaging--expand-extra-repo variant-name distro)))))
+                              (deb-packaging-commands--expand-extra-repo variant-name distro)))))
              (passthrough (cl-remove-if
                            (lambda (a) (string-prefix-p "--extra-repository=" a))
                            effective-args)))
@@ -364,8 +366,8 @@ is returned unchanged."
         (unless (transient-arg-value "--dist=" passthrough)
           (setq passthrough (cons (format "--dist=%s" distro) passthrough)))
         ;; Keep the global distro in sync for the status buffer.
-        (deb-packaging--set-distro distro)
-        (deb-packaging--run-command
+        (deb-packaging-config--set-distro distro)
+        (deb-packaging-commands--run-command
          "sbuild"
          (append (list "sbuild")
                  passthrough
@@ -376,61 +378,61 @@ is returned unchanged."
 
 ;;; autopkgtest
 
-(defvar deb-packaging-test-runners
+(defvar deb-packaging-commands-test-runners
   '(("lxd"  . "autopkgtest/ubuntu/%s/amd64")
     ("qemu" . "/var/lib/adt-images/autopkgtest-%s-amd64.img"))
   "Alist of runner name to image path template (%s = distro).
 Also the source of --runner completion.  For Debian, add entries like
 (\"lxd\" . \"autopkgtest/debian/%s/amd64\").")
 
-(defvar deb-packaging-test-build-hints
+(defvar deb-packaging-commands-test-build-hints
   '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s")
     ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s"))
   "Alist of runner name to image-build command template (%s = distro).
 Shown when a test image is missing.")
 
-(defun deb-packaging--runner-choices ()
+(defun deb-packaging-commands--runner-choices ()
   "Return the configured autopkgtest runner names from
-`deb-packaging-test-runners'."
-  (mapcar #'car deb-packaging-test-runners))
+`deb-packaging-commands-test-runners'."
+  (mapcar #'car deb-packaging-commands-test-runners))
 
-(defun deb-packaging--lxd-image-exists-p (image)
+(defun deb-packaging-commands--lxd-image-exists-p (image)
   "Return non-nil if LXD IMAGE exists locally."
   (zerop (call-process "lxc" nil nil nil "image" "info" image)))
 
-(defun deb-packaging--test-image-info (&optional runner distro)
+(defun deb-packaging-commands--test-image-info (&optional runner distro)
   "Return a plist describing the test image for RUNNER and DISTRO.
-RUNNER defaults to \"lxd\", DISTRO to `deb-packaging--effective-distro'.
+RUNNER defaults to \"lxd\", DISTRO to `deb-packaging-config--effective-distro'.
 Keys: :runner, :image, :exists."
   (let* ((runner (or runner "lxd"))
-         (distro (or distro (deb-packaging--effective-distro)))
-         (template (cdr (assoc runner deb-packaging-test-runners)))
+         (distro (or distro (deb-packaging-config--effective-distro)))
+         (template (cdr (assoc runner deb-packaging-commands-test-runners)))
          (image (when template (format template distro)))
          (exists (when image
                    (cond
                     ((equal runner "lxd")
-                     (deb-packaging--lxd-image-exists-p image))
+                     (deb-packaging-commands--lxd-image-exists-p image))
                     ((equal runner "qemu")
                      (file-exists-p image))
                     (t nil)))))
     (list :runner runner :image image :exists exists)))
 
-(defun deb-packaging--test-image-build-hint (runner distro)
+(defun deb-packaging-commands--test-image-build-hint (runner distro)
   "Return the command string to build a missing test image for RUNNER, DISTRO.
 Return nil if RUNNER has no registered hint."
-  (when-let ((template (cdr (assoc runner deb-packaging-test-build-hints))))
+  (when-let ((template (cdr (assoc runner deb-packaging-commands-test-build-hints))))
     (format template distro)))
 
-(defun deb-packaging-autopkgtest (&optional args)
+(defun deb-packaging-commands-autopkgtest (&optional args)
   "Run autopkgtest with ARGS from the test transient."
   (interactive (list (transient-args 'deb-packaging-test-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((info (deb-packaging--package-info pkg-dir))
-           (parent-dir (deb-packaging--parent-dir pkg-dir))
+    (let* ((info (deb-packaging-detect--package-info pkg-dir))
+           (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
            (artifacts (when info
-                        (deb-packaging--scan-artifacts
+                        (deb-packaging-detect--scan-artifacts
                          (nth 0 info) (nth 1 info) parent-dir)))
            (debs (alist-get 'debs artifacts)))
       (unless debs
@@ -439,8 +441,8 @@ Return nil if RUNNER has no registered hint."
              (runner (or (transient-arg-value "--runner=" effective-args)
                          "lxd"))
               (distro (or (transient-arg-value "--dist=" effective-args)
-                          (deb-packaging--effective-distro)))
-             (image-info (deb-packaging--test-image-info runner distro))
+                          (deb-packaging-config--effective-distro)))
+             (image-info (deb-packaging-commands--test-image-info runner distro))
              (image (plist-get image-info :image))
              (image-exists (plist-get image-info :exists))
              (passthrough (cl-remove-if
@@ -452,9 +454,9 @@ Return nil if RUNNER has no registered hint."
           (user-error "%s image '%s' not found.\nBuild it with:\n  %s"
                       (capitalize runner)
                       image
-                      (or (deb-packaging--test-image-build-hint runner distro)
-                          "(unknown; add an entry to deb-packaging-test-build-hints)")))
-        (deb-packaging--run-command
+                      (or (deb-packaging-commands--test-image-build-hint runner distro)
+                          "(unknown; add an entry to deb-packaging-commands-test-build-hints)")))
+        (deb-packaging-commands--run-command
          "autopkgtest"
          (append (list "autopkgtest")
                  passthrough
@@ -466,74 +468,74 @@ Return nil if RUNNER has no registered hint."
 
 ;;; PPA upload (dput)
 
-(defun deb-packaging-dput-upload (&optional args)
+(defun deb-packaging-commands-dput-upload (&optional args)
   "Upload source .changes to a PPA with dput.
 ARGS comes from `deb-packaging-upload-transient'.  PPA is mandatory."
   (interactive (list (transient-args 'deb-packaging-upload-transient)))
   (let* ((effective-args (or args '()))
          (ppa (transient-arg-value "--ppa=" effective-args))
          (distro (or (transient-arg-value "--dist=" effective-args)
-                     (deb-packaging--effective-distro))))
+                     (deb-packaging-config--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA set; choose one with the -p option"))
-    (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-           (info (deb-packaging--package-info pkg-dir))
+    (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+           (info (deb-packaging-detect--package-info pkg-dir))
            (name (nth 0 info))
            (version (nth 1 info))
-           (parent-dir (when pkg-dir (deb-packaging--parent-dir pkg-dir)))
+           (parent-dir (when pkg-dir (deb-packaging-detect--parent-dir pkg-dir)))
            (artifacts (when (and name version parent-dir)
-                        (deb-packaging--scan-artifacts
+                        (deb-packaging-detect--scan-artifacts
                          name version parent-dir)))
            (changes (alist-get 'source-changes artifacts)))
       (unless changes
         (user-error "No source .changes file found; run a source build first"))
       (let* ((changes-file (if (consp changes) (car changes) changes))
              (cmd-args (list "dput" ppa changes-file)))
-        (deb-packaging--set-distro distro)
-        (deb-packaging--run-command "dput" cmd-args
+        (deb-packaging-config--set-distro distro)
+        (deb-packaging-commands--run-command "dput" cmd-args
                                     (or parent-dir default-directory)
                                     'dput)))))
 
 ;;; PPA (Launchpad) testing
 
-(defun deb-packaging-ppa-tests (&optional args)
+(defun deb-packaging-commands-ppa-tests (&optional args)
   "Show autopkgtest results for a PPA.
 ARGS is the argument list from `deb-packaging-upload-transient'."
   (interactive (list (transient-args 'deb-packaging-upload-transient)))
   (let* ((effective-args (or args '()))
          (ppa (transient-arg-value "--ppa=" effective-args))
          (distro (or (transient-arg-value "--dist=" effective-args)
-                     (deb-packaging--effective-distro))))
+                     (deb-packaging-config--effective-distro))))
     (unless (and ppa (not (string-empty-p ppa)))
       (user-error "No PPA set; choose one with the -p option"))
-    (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-           (name (deb-packaging--package-name pkg-dir))
+    (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+           (name (deb-packaging-detect--package-name pkg-dir))
            (cmd-args (append (list "ppa" "tests" ppa)
                              (when name (list "-p" name))
                              (list "-r" distro))))
-      (deb-packaging--run-command "ppa-tests" cmd-args
+      (deb-packaging-commands--run-command "ppa-tests" cmd-args
                                   (or pkg-dir default-directory)
                                   'ppa-tests))))
 
 ;;; Clean artifacts
 
-(defun deb-packaging-clean (&optional args)
-  "Remove build artifacts with ARGS from `deb-packaging-clean-transient'.
+(defun deb-packaging-commands-clean (&optional args)
+  "Remove build artifacts with ARGS from `deb-packaging-commands-clean-transient'.
 Moves files to trash from the output (parent) directory only."
-  (interactive (list (transient-args 'deb-packaging-clean-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
+  (interactive (list (transient-args 'deb-packaging-commands-clean-transient)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((effective-args (or args '()))
            (do-artifacts (member "--artifacts" effective-args))
            (do-stale     (member "--stale"     effective-args))
-           (name (deb-packaging--package-name pkg-dir))
-           (version (deb-packaging--package-version pkg-dir))
-           (parent-dir (deb-packaging--parent-dir pkg-dir))
-           (file-version (deb-packaging--version-to-filename version))
+           (name (deb-packaging-detect--package-name pkg-dir))
+           (version (deb-packaging-detect--package-version pkg-dir))
+           (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
+           (file-version (deb-packaging-detect--version-to-filename version))
            (files nil))
       (when do-artifacts
-        (let* ((prefixes (or (deb-packaging--owned-package-prefixes pkg-dir)
+        (let* ((prefixes (or (deb-packaging-detect--owned-package-prefixes pkg-dir)
                              (list name)))
                (prefix-regex
                 (mapconcat (lambda (p)
@@ -543,7 +545,7 @@ Moves files to trash from the output (parent) directory only."
           (dolist (f (directory-files parent-dir nil prefix-regex))
             (push (expand-file-name f parent-dir) files))))
       (when do-stale
-        (let ((stale (deb-packaging--scan-stale-artifacts
+        (let ((stale (deb-packaging-detect--scan-stale-artifacts
                       name version parent-dir pkg-dir)))
           (dolist (f stale)
             (push (expand-file-name f parent-dir) files))))
@@ -552,17 +554,17 @@ Moves files to trash from the output (parent) directory only."
         (dolist (f files)
           (when (file-exists-p f)
             (move-file-to-trash f)))
-        (deb-packaging--record-run 'clean 'success nil)
-        (deb-packaging--notify-status-refresh)
+        (deb-packaging-commands--record-run 'clean 'success nil)
+        (deb-packaging-commands--notify-status-refresh)
         (message "Moved %d file(s) to trash" (length files))))))
 
 ;;; Reset source tree
 
-(defun deb-packaging-reset (&optional args)
-  "Reset the source tree with ARGS from `deb-packaging-reset-transient'.
+(defun deb-packaging-commands-reset (&optional args)
+  "Reset the source tree with ARGS from `deb-packaging-commands-reset-transient'.
 Pops quilt patches, removes .pc/, and/or removes debian/files."
-  (interactive (list (transient-args 'deb-packaging-reset-transient)))
-  (let ((pkg-dir (deb-packaging--find-package-dir nil t)))
+  (interactive (list (transient-args 'deb-packaging-commands-reset-transient)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (let* ((effective-args (or args '()))
@@ -587,7 +589,7 @@ Pops quilt patches, removes .pc/, and/or removes debian/files."
                        (string-join (nreverse steps) " && ")
                        (format " && echo 'Reset complete (%s)'"
                                (string-join (nreverse desc) ", ")))))
-          (deb-packaging--run-command
+          (deb-packaging-commands--run-command
            "reset"
            (list "sh" "-c" script)
            pkg-dir

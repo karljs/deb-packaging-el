@@ -4,13 +4,14 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
-;; Package-Requires: ((emacs "28.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
 ;; Context-aware interface for Debian/Ubuntu packaging.
 ;; Entry points: `deb-packaging-status' (status buffer) and
-;; `deb-packaging-dispatch' (transient hub). Default key: C-c d.
+;; `deb-packaging-dispatch' (transient hub). Default key: C-c C-d.
 
 ;;; Code:
 
@@ -30,7 +31,7 @@
 (defun deb-packaging--dispatch-header ()
   "Header for the dispatch transient, showing the target distro."
   (format "Debian Packaging\nTarget distro: %s"
-          (deb-packaging--effective-distro)))
+          (deb-packaging-config--effective-distro)))
 
 ;;;###autoload
 (defun deb-packaging-set-distro (distro)
@@ -39,9 +40,9 @@ Propagated to all per-tool transients and the status buffer."
   (interactive
    (list (completing-read
           "Target distro: "
-          (deb-packaging--distro-choices)
-          nil t (deb-packaging--effective-distro))))
-  (deb-packaging--set-distro distro)
+          (deb-packaging-config--distro-choices)
+          nil t (deb-packaging-config--effective-distro))))
+  (deb-packaging-config--set-distro distro)
   (message "Target distro set to %s" distro))
 
 (transient-define-prefix deb-packaging-dispatch ()
@@ -51,7 +52,7 @@ Set the target distro with `d'; other transients inherit it."
   ["Config"
    ("d" "Set target distro..." deb-packaging-set-distro)]
   ["Build"
-   ("s" "Source build..."  deb-packaging-source-build-transient)
+   ("s" "Source build..."  deb-packaging-commands-source-build-transient)
    ("b" "Binary build..."  deb-packaging-binary-build-transient)]
   ["Check & Test"
    ("l" "Lint..."           deb-packaging-lint-transient)
@@ -63,8 +64,8 @@ Set the target distro with `d'; other transients inherit it."
   ["Publish"
    ("p" "PPA upload..."   deb-packaging-upload-transient)]
   ["Cleanup"
-   ("c" "Clean artifacts..." deb-packaging-clean-transient)
-   ("r" "Reset source tree..." deb-packaging-reset-transient)]
+   ("c" "Clean artifacts..." deb-packaging-commands-clean-transient)
+   ("r" "Reset source tree..." deb-packaging-commands-reset-transient)]
   ["Other"
    ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
    ("q" "Quit"             transient-quit-one)])
@@ -73,13 +74,13 @@ Set the target distro with `d'; other transients inherit it."
 
 ;;;###autoload
 (defun deb-packaging-setup-keys ()
-  "Bind `C-c d' to `deb-packaging-status'.
-Skips and warns if `C-c d' is already bound to another command."
-  (let* ((key (kbd "C-c d"))
+  "Bind `C-c C-d' to `deb-packaging-status'.
+Skips and warns if `C-c C-d' is already bound to another command."
+  (let* ((key (kbd "C-c C-d"))
          (cmd (key-binding key t)))
     (if (or (null cmd) (eq cmd #'deb-packaging-status))
         (global-set-key key #'deb-packaging-status)
-      (message "deb-packaging: C-c d already bound to %s; bind deb-packaging-status manually"
+      (message "deb-packaging: C-c C-d already bound to %s; bind deb-packaging-status manually"
                cmd))))
 
 ;;;###autoload

@@ -30,7 +30,7 @@ LOADPATH = --eval '(dolist (d (directory-files "~/.emacs.d/elpa" t "^[^.]")) \
            --eval "(add-to-list 'load-path default-directory)" \
            --eval "(add-to-list 'load-path (expand-file-name \"test\" default-directory))"
 
-.PHONY: all test compile clean
+.PHONY: all test compile lint clean
 
 all: compile test
 
@@ -46,6 +46,13 @@ compile:
 	  --eval '(setq byte-compile-error-on-warn t)' \
 	  -f batch-byte-compile $(SRC) $(TEST_SRC)
 	@$(MAKE) clean
+
+## Run package-lint on source files (excludes auto-generated pkg.el).
+lint:
+	$(EMACS) -Q --batch $(LOADPATH) \
+	  --eval "(require 'package-lint)" \
+	  -f package-lint-batch-and-exit \
+	  $(SRC)
 
 ## Remove byte-compiled output.
 clean:

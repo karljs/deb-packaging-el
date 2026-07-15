@@ -4,6 +4,8 @@
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -12,7 +14,7 @@
 ;; heading ending in a colored status word. The next actionable phase and
 ;; any running/failed phase expand by default; the rest fold.
 ;;
-;; No cache: every render re-scans via `deb-packaging--scan-context'
+;; No cache: every render re-scans via `deb-packaging-detect--scan-context'
 ;; (shared with the dispatch transient) and on window selection.
 ;;
 ;; Entry point: `deb-packaging-status'.
@@ -49,9 +51,9 @@ Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
   "Gather fresh package context from `default-directory'.
 Return a plist, or nil outside a Debian package tree. Seeds the target
 distro once without clobbering user choice."
-  (let ((ctx (deb-packaging--scan-context)))
+  (let ((ctx (deb-packaging-detect--scan-context)))
     (when ctx
-      (deb-packaging--maybe-seed-distro (plist-get ctx :distro)))
+      (deb-packaging-config--maybe-seed-distro (plist-get ctx :distro)))
     ctx))
 
 (defun deb-packaging-status--current-context ()
@@ -72,12 +74,12 @@ Does not create or refresh a buffer."
 ;; matching command. Mnemonic keys are shortcuts to the same commands.
 
 (defconst deb-packaging-status--section-actions
-  '((deb-packaging-source         . deb-packaging-source-build-transient)
+  '((deb-packaging-source         . deb-packaging-commands-source-build-transient)
     (deb-packaging-binary         . deb-packaging-binary-build-transient)
     (deb-packaging-check          . deb-packaging-lint-transient)
     (deb-packaging-test           . deb-packaging-test-transient)
     (deb-packaging-upload         . deb-packaging-upload-transient)
-    (deb-packaging-stale          . deb-packaging-clean-transient)
+    (deb-packaging-stale          . deb-packaging-commands-clean-transient)
     (deb-packaging-dev            . deb-packaging-dev-transient)
     (deb-packaging-pq             . deb-packaging-pq-transient))
   "Map status-buffer section types to the transient RET opens.")
@@ -101,7 +103,7 @@ Does not create or refresh a buffer."
 
 (defun deb-packaging-status--run-time-note (key)
   "Return a dimmed \" (HH:MM:SS)\" note for KEY's last run, or empty string."
-  (if-let* ((record (deb-packaging-run-record key))
+  (if-let* ((record (deb-packaging-commands-run-record key))
             (time (plist-get record :time)))
       (propertize (format " %s" time) 'font-lock-face 'shadow)
     ""))
@@ -109,7 +111,7 @@ Does not create or refresh a buffer."
 (defun deb-packaging-status--lint-summary-note (key)
   "Return a colored findings summary for KEY's last lint run, or empty.
 Counts colored by severity, e.g. \" 2E 5W 12I\" or \" 1F 2E 3W\"."
-  (if-let* ((summary (deb-packaging--run-summary key)))
+  (if-let* ((summary (deb-packaging-commands--run-summary key)))
       (let ((fmt (lambda (n face)
                    (propertize (format "%d" n) 'font-lock-face face))))
         (pcase key
@@ -137,7 +139,7 @@ Counts colored by severity, e.g. \" 2E 5W 12I\" or \" 1F 2E 3W\"."
 DONE means artifacts exist or the phase succeeded. READY means
 prerequisites are met, else blocked. Precedence: running, failed,
 done, ready. KEEP-READY keeps success as ready so it can re-run (lint)."
-  (let ((status (plist-get (deb-packaging-run-record key) :status)))
+  (let ((status (plist-get (deb-packaging-commands-run-record key) :status)))
     (cond ((eq status 'running) 'running)
           ((eq status 'failure) 'failed)
           ((and (not keep-ready) (or done (eq status 'success))) 'done)
@@ -274,7 +276,7 @@ Renders each as \"Label: value\"."
             " "
             (propertize version 'font-lock-face 'deb-packaging-status-version)
             "  "
-            (propertize (or distro deb-packaging-target-distro)
+            (propertize (or distro deb-packaging-config-target-distro)
                         'font-lock-face 'deb-packaging-status-distro)
             "\n")
     (insert (propertize (abbreviate-file-name pkg-dir)
@@ -349,9 +351,9 @@ Defensive: a missing prefix yields nil rather than signaling."
          (bin-changes (alist-get 'binary-changes arts))
          (debs (alist-get 'debs arts))
          (arch (plist-get ctx :arch))
-         (distro (deb-packaging--effective-distro))
+         (distro (deb-packaging-config--effective-distro))
          (schroot (when (and distro arch)
-                    (deb-packaging--schroot-exists-p distro arch)))
+                    (deb-packaging-detect--schroot-exists-p distro arch)))
          (done (and bin-changes debs))
          (state (deb-packaging-status--phase-state 'sbuild done dsc))
          (detail (when debs
@@ -385,7 +387,7 @@ Defensive: a missing prefix yields nil rather than signaling."
           (deb-packaging-status--insert-note "waiting on source build")))
         (when (deb-packaging-status--transient-flag-p
                'deb-packaging-binary-build-transient
-               deb-packaging-sbuild-shell-flag)
+               deb-packaging-transients-sbuild-shell-flag)
           (deb-packaging-status--insert-note
            "Drops into a chroot shell on build failure"))))))
 
@@ -437,7 +439,7 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
 Always ready inside a package. Like lintian, KEEP-READY keeps success
 as ready."
   (let ((state (deb-packaging-status--phase-state 'ubuntu-lint nil t t)))
-    (magit-insert-section (deb-packaging-ubuntu-lint)
+    (magit-insert-section (deb-packaging-commands-ubuntu-lint)
       (magit-insert-heading
         (concat "  "
                 (propertize (deb-packaging-status--pad
@@ -461,10 +463,10 @@ as ready."
                (dsc (alist-get 'dsc arts))
                (debs (alist-get 'debs arts)))
           (deb-packaging-status--insert-lintian-child
-           'deb-packaging-lintian-source 'lintian-source "Source"
+           'deb-packaging-commands-lintian-source 'lintian-source "Source"
            (when dsc (list dsc)))
           (deb-packaging-status--insert-lintian-child
-           'deb-packaging-lintian-binary 'lintian-binary "Binary" debs)
+           'deb-packaging-commands-lintian-binary 'lintian-binary "Binary" debs)
           (deb-packaging-status--insert-ubuntu-lint-child))))))
 
 (defun deb-packaging-status--insert-test (ctx hide)
@@ -479,7 +481,7 @@ as ready."
       (magit-insert-section-body
         (if (not debs)
             (deb-packaging-status--insert-note "waiting on binary build")
-          (let* ((info (deb-packaging--test-image-info))
+          (let* ((info (deb-packaging-commands--test-image-info))
                  (runner (plist-get info :runner))
                  (image (plist-get info :image))
                  (exists (plist-get info :exists)))
@@ -498,8 +500,8 @@ as ready."
                                           'font-lock-face
                                           'deb-packaging-status-running)))))))
             (when (and image (not exists))
-              (when-let ((hint (deb-packaging--test-image-build-hint
-                                 runner (deb-packaging--effective-distro))))
+              (when-let ((hint (deb-packaging-commands--test-image-build-hint
+                                 runner (deb-packaging-config--effective-distro))))
                 (deb-packaging-status--insert-note
                  (format "Build it with: %s" hint))))
             (dolist (d debs)
@@ -547,7 +549,7 @@ Returns nil if the flag is unset or the prefix is unavailable."
 Unparseable versions group under \"unknown\"."
   (let ((groups nil))
     (dolist (f stale-files)
-      (let ((ver (or (deb-packaging--filename-version f) "unknown")))
+      (let ((ver (or (deb-packaging-detect--filename-version f) "unknown")))
         (setf (alist-get ver groups nil 'remove)
               (nconc (alist-get ver groups nil 'remove)
                      (list f)))))
@@ -819,7 +821,7 @@ Walks up the section tree to the nearest registered type."
 (defun deb-packaging-status-build-source ()
   "Open the source-build transient."
   (interactive)
-  (deb-packaging-status--open #'deb-packaging-source-build-transient))
+  (deb-packaging-status--open #'deb-packaging-commands-source-build-transient))
 
 (defun deb-packaging-status-build-binary ()
   "Open the binary-build transient."
@@ -844,12 +846,12 @@ Walks up the section tree to the nearest registered type."
 (defun deb-packaging-status-clean ()
   "Open the clean artifacts transient."
   (interactive)
-  (deb-packaging-status--open #'deb-packaging-clean-transient))
+  (deb-packaging-status--open #'deb-packaging-commands-clean-transient))
 
 (defun deb-packaging-status-reset ()
   "Open the source-tree reset transient."
   (interactive)
-  (deb-packaging-status--open #'deb-packaging-reset-transient))
+  (deb-packaging-status--open #'deb-packaging-commands-reset-transient))
 
 (defun deb-packaging-status-dev ()
   "Open the dev shell transient."
@@ -895,8 +897,8 @@ Navigation and folding come from `magit-section-mode'."
 (defun deb-packaging-status ()
   "Open the Debian packaging status buffer."
   (interactive)
-  (let* ((pkg-dir (deb-packaging--find-package-dir nil t))
-         (name (deb-packaging--package-name pkg-dir))
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (name (deb-packaging-detect--package-name pkg-dir))
          (buf (get-buffer-create (deb-packaging-status--buffer-name name))))
     (with-current-buffer buf
       (when pkg-dir

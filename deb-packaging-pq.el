@@ -1,9 +1,11 @@
-;;; deb-packaging-pq.el --- gbp pq patch-queue management -*- lexical-binding: t; -*-
+;;; deb-packaging-pq.el --- Gbp pq patch-queue management -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Karl Smeltzer
 ;; Author: Karl Smeltzer
 ;; Version: 0.1.0
 ;; Keywords: tools, debian, ubuntu, packaging
+;; URL: https://github.com/karljs/deb-packaging-el
+;; Package-Requires: ((emacs "29.1") (transient "0.4.0") (magit "3.3") (magit-section "3.3"))
 
 ;;; Commentary:
 
@@ -28,7 +30,7 @@
   "Signal `user-error' unless in a 3.0 (quilt) git repository."
   (unless (magit-toplevel)
     (user-error "Not in a git repository"))
-  (unless (string= (or (deb-packaging--source-format) "") "3.0 (quilt)")
+  (unless (string= (or (deb-packaging-detect--source-format) "") "3.0 (quilt)")
     (user-error "Source format is not 3.0 (quilt); gbp pq requires it")))
 
 ;;; Branch state
@@ -133,7 +135,7 @@ packaging branch, deletes the patch-queue branch."
   (deb-packaging-pq--after-compile
    (compile "gbp pq export --commit --drop")
    (lambda ()
-     (deb-packaging--notify-status-refresh)
+     (deb-packaging-commands--notify-status-refresh)
      (message "Exported patches to debian/patches/"))))
 
 ;;;###autoload
@@ -144,7 +146,7 @@ Useful to abort an edit session and start over."
   (deb-packaging-pq--ensure-quilt-repo)
   (deb-packaging-pq--after-compile
    (compile "gbp pq drop")
-   #'deb-packaging--notify-status-refresh))
+   #'deb-packaging-commands--notify-status-refresh))
 
 ;;; Transient
 
