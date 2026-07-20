@@ -11,6 +11,7 @@ SRC = deb-packaging-detect.el \
       deb-packaging-propagate.el \
       deb-packaging-pq.el \
       deb-packaging-status.el \
+      deb-packaging-clone.el \
       deb-packaging.el
 
 # Test files, in load order (helpers first).
@@ -23,7 +24,8 @@ TEST_SRC = test/deb-packaging-test-version.el \
            test/deb-packaging-test-status.el \
            test/deb-packaging-test-run.el \
            test/deb-packaging-test-pq.el \
-           test/deb-packaging-test-dev.el
+           test/deb-packaging-test-dev.el \
+           test/deb-packaging-test-clone.el
 
 # Put installed ELPA packages (magit, transient, magit-section, deps) plus
 # the package root and test/ on the load-path.

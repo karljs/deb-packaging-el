@@ -26,6 +26,7 @@
 (require 'deb-packaging-propagate)
 (require 'deb-packaging-pq)
 (require 'deb-packaging-status)
+(require 'deb-packaging-clone)
 
 ;;; Top-level dispatch hub
 
