@@ -18,6 +18,7 @@
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
+(require 'deb-packaging-repos)
 (require 'deb-packaging-commands)
 (require 'deb-packaging-transients)
 (require 'deb-packaging-infra)
