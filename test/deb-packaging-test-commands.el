@@ -15,6 +15,7 @@
 (require 'deb-packaging-infra)
 (require 'deb-packaging-transients)
 (require 'deb-packaging-repos)
+(require 'deb-packaging-ppa)
 
 ;;; deb-packaging-commands--filter-args
 
@@ -293,6 +294,59 @@
       (list :name "foo" :version "1.2-3")
     (should (equal (deb-packaging-commands--ubuntu-lint-context-args "changes" pkg-dir)
                    (list "--source-dir" pkg-dir)))))
+
+;;; Transient --ppa= seeding
+
+(ert-deftest deb-packaging-test-commands/upload-default-value-seeds-ppa ()
+  "The upload default value includes the saved PPA."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-ppa-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (deb-packaging-config-target-distro "noble")
+           (deb-packaging-config--distro-user-set t))
+      (unwind-protect
+          (progn
+            (deb-packaging-ppa-save "mypkg" "noble" "ppa:me/x")
+            (let ((default (deb-packaging-transients--upload-default-value)))
+              (should (member "--ppa=ppa:me/x" default))
+              (should (member "--dist=noble" default))))
+        (delete-directory tmp t)))))
+
+(ert-deftest deb-packaging-test-commands/upload-default-value-no-saved-ppa ()
+  "With no saved PPA, the upload default value has no --ppa= arg."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-ppa-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (deb-packaging-config-target-distro "noble")
+           (deb-packaging-config--distro-user-set t))
+      (unwind-protect
+          (let ((default (deb-packaging-transients--upload-default-value)))
+            (should (member "--dist=noble" default))
+            (should-not (cl-some (lambda (a) (string-prefix-p "--ppa=" a))
+                                 default)))
+        (delete-directory tmp t)))))
+
+(ert-deftest deb-packaging-test-commands/test-default-value-seeds-ppa ()
+  "The test default value includes the saved PPA."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-ppa-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (deb-packaging-config-target-distro "noble")
+           (deb-packaging-config--distro-user-set t))
+      (unwind-protect
+          (progn
+            (deb-packaging-ppa-save "mypkg" "noble" "ppa:me/x")
+            (let ((default (deb-packaging-transients--test-default-value)))
+              (should (member "--ppa=ppa:me/x" default))
+              (should (member "--runner=lxd" default))
+              (should (member "--dist=noble" default))))
+        (delete-directory tmp t)))))
 
 (provide 'deb-packaging-test-commands)
 ;;; deb-packaging-test-commands.el ends here

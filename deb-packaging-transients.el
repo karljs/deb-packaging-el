@@ -18,6 +18,7 @@
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
+(require 'deb-packaging-ppa)
 
 ;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging-commands--runner-choices "deb-packaging-commands")
@@ -231,11 +232,19 @@ Each action reads only its own flags."
 
 ;;; 4. Autopkgtest
 
+(defun deb-packaging-transients--saved-ppa-arg ()
+  "Return a one-element --ppa= list seeded from the saved PPA, or nil."
+  (when-let* ((pkg-name (deb-packaging-detect--package-name))
+              (ppa (deb-packaging-ppa-load
+                    pkg-name (deb-packaging-config--effective-distro))))
+    (list (concat "--ppa=" ppa))))
+
 (defun deb-packaging-transients--test-default-value ()
   "Dynamic default for the test transient."
-  (list "--apt-upgrade"
-        "--runner=lxd"
-        (format "--dist=%s" (deb-packaging-config--effective-distro))))
+  (append (deb-packaging-transients--saved-ppa-arg)
+          (list "--apt-upgrade"
+                "--runner=lxd"
+                (format "--dist=%s" (deb-packaging-config--effective-distro)))))
 
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()
@@ -263,7 +272,8 @@ Each action reads only its own flags."
 
 (defun deb-packaging-transients--upload-default-value ()
   "Dynamic default for the upload transient."
-  (list (format "--dist=%s" (deb-packaging-config--effective-distro))))
+  (append (deb-packaging-transients--saved-ppa-arg)
+          (list (format "--dist=%s" (deb-packaging-config--effective-distro)))))
 
 (defun deb-packaging-transients--read-ppa (prompt initial-input _history)
   "Read a PPA name, completing against the user's known PPAs."
