@@ -13,6 +13,8 @@
 (require 'deb-packaging-test)
 (require 'deb-packaging-commands)
 (require 'deb-packaging-infra)
+(require 'deb-packaging-transients)
+(require 'deb-packaging-repos)
 
 ;;; deb-packaging-commands--filter-args
 
@@ -167,6 +169,44 @@
                    (setq captured-save (list pkg distro entries)))))
         (deb-packaging-commands-sbuild '("--dist=noble")))
       (should (equal captured-save '("mypkg" "noble" nil))))))
+
+;;; deb-packaging-transients--binary-default-value restore
+
+(ert-deftest deb-packaging-test-commands/binary-default-value-seeds-repos ()
+  "The binary-build default value includes saved extra-repo entries."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-repos-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (deb-packaging-config-target-distro "noble")
+           (deb-packaging-config--distro-user-set t))
+      (unwind-protect
+          (progn
+            (deb-packaging-repos-save "mypkg" "noble"
+                                      '("ppa:me/x" "proposed"))
+            (let ((default (deb-packaging-transients--binary-default-value)))
+              (should (member "--extra-repository=ppa:me/x" default))
+              (should (member "--extra-repository=proposed" default))
+              (should (member "--dist=noble" default))))
+        (delete-directory tmp t)))))
+
+(ert-deftest deb-packaging-test-commands/binary-default-value-no-saved-repos ()
+  "With no saved repos, the default value has no --extra-repository= entries."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-repos-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (deb-packaging-config-target-distro "noble")
+           (deb-packaging-config--distro-user-set t))
+      (unwind-protect
+          (let ((default (deb-packaging-transients--binary-default-value)))
+            (should (member "--dist=noble" default))
+            (should-not (cl-some (lambda (a)
+                                   (string-prefix-p "--extra-repository=" a))
+                                 default)))
+        (delete-directory tmp t)))))
 
 ;;; deb-packaging-commands--ppa-repo-line
 

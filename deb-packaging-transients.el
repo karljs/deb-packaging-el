@@ -74,9 +74,15 @@
 ;;; 2. Binary build (sbuild)
 
 (defun deb-packaging-transients--binary-default-value ()
-  "Dynamic default for the binary-build transient, seeding distro from changelog."
-  (list (format "--dist=%s" (deb-packaging-config--effective-distro))
-        "-A"))
+  "Dynamic default for the binary-build transient, seeding distro from changelog.
+Also restores the saved extra-repository set for the current package and distro."
+  (let* ((distro (deb-packaging-config--effective-distro))
+         (pkg-name (deb-packaging-detect--package-name))
+         (repos (when pkg-name
+                  (deb-packaging-repos-load pkg-name distro))))
+    (append (list (format "--dist=%s" distro) "-A")
+            (mapcar (lambda (r) (concat "--extra-repository=" r))
+                    repos))))
 
 (defclass deb-packaging-transients--extra-repo-argument (transient-option) ()
   "sbuild --extra-repository= option, expanded to a repo string at build time.")
