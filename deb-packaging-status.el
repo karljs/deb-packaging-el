@@ -26,6 +26,7 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-commands)
+(require 'deb-packaging-ppa)
 (require 'deb-packaging-transients)
 
 ;; Cross-file references not pulled in by require (avoids load cycles).
@@ -128,6 +129,41 @@ Counts colored by severity, e.g. \" 2E 5W 12I\" or \" 1F 2E 3W\"."
             (funcall fmt (plist-get summary :warning) 'deb-packaging-status-running) "W "
             (funcall fmt (plist-get summary :info)    'shadow) "I"))))
     ""))
+
+(defun deb-packaging-status--ppa-tests-summary-note ()
+  "Return a colored PPA-test counts string, or empty.
+Counts come from the last ppa-tests run summary: \" 3P 1F 0B\"."
+  (if-let* ((summary (deb-packaging-commands--run-summary 'ppa-tests)))
+      (concat "  "
+              (propertize (format "%dP" (plist-get summary :pass))
+                          'font-lock-face 'deb-packaging-status-done)
+              " "
+              (propertize (format "%dF" (plist-get summary :fail))
+                          'font-lock-face 'deb-packaging-status-failed)
+              " "
+              (propertize (format "%dB" (plist-get summary :bad))
+                          'font-lock-face 'deb-packaging-status-failed))
+    ""))
+
+(defun deb-packaging-status--insert-ppa-tests-row ()
+  "Insert the PPA tests row: saved PPA, last run time, result counts.
+Builds the row directly rather than via `--insert-state-row', whose
+whole-value re-propertizing would flatten the inner faces."
+  (let* ((pkg-name (deb-packaging-detect--package-name))
+         (ppa (and pkg-name
+                   (deb-packaging-ppa-load
+                    pkg-name (deb-packaging-config--effective-distro))))
+         (record (deb-packaging-commands-run-record 'ppa-tests))
+         (time (plist-get record :time)))
+    (insert "    "
+            (propertize "PPA tests" 'font-lock-face 'shadow)
+            ": "
+            (or ppa (propertize "not set" 'font-lock-face 'shadow))
+            (if time
+                (propertize (format " (%s)" time) 'font-lock-face 'shadow)
+              "")
+            (deb-packaging-status--ppa-tests-summary-note)
+            "\n")))
 
 ;;; Phase state and fold decisions
 ;;
@@ -510,7 +546,8 @@ as ready."
                    'deb-packaging-test-transient
                    "--shell-fail")
               (deb-packaging-status--insert-note
-               "Drops into a testbed shell on test failure"))))))))
+               "Drops into a testbed shell on test failure")))))
+        (deb-packaging-status--insert-ppa-tests-row))))
 
 (defun deb-packaging-status--transient-arg-value (prefix flag)
   "Return the value of FLAG from PREFIX's saved/default transient args.

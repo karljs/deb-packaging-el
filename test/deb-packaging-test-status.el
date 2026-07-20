@@ -275,5 +275,17 @@
       (should (> (length note) 0))
       (should (string-match-p ":" (substring-no-properties note))))))
 
+;;; PPA tests summary note
+
+(ert-deftest deb-packaging-test-status/ppa-tests-summary-note ()
+  "Counts from the last ppa-tests run summary, empty without one."
+  (let ((deb-packaging-commands--run-history nil))
+    (should (equal (deb-packaging-status--ppa-tests-summary-note) ""))
+    (deb-packaging-commands--record-run
+     'ppa-tests 'success nil (list :pass 3 :fail 1 :bad 0))
+    (should (string-match-p "3P" (deb-packaging-status--ppa-tests-summary-note)))
+    (should (string-match-p "1F" (deb-packaging-status--ppa-tests-summary-note)))
+    (should (string-match-p "0B" (deb-packaging-status--ppa-tests-summary-note)))))
+
 (provide 'deb-packaging-test-status)
 ;;; deb-packaging-test-status.el ends here
