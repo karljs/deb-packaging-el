@@ -4,6 +4,7 @@ EMACS ?= emacs
 SRC = deb-packaging-detect.el \
       deb-packaging-config.el \
       deb-packaging-repos.el \
+      deb-packaging-ppa.el \
       deb-packaging-commands.el \
       deb-packaging-transients.el \
       deb-packaging-infra.el \
@@ -20,6 +21,7 @@ TEST_SRC = test/deb-packaging-test-version.el \
            test/deb-packaging-test-commands.el \
            test/deb-packaging-test-config.el \
            test/deb-packaging-test-repos.el \
+           test/deb-packaging-test-ppa.el \
            test/deb-packaging-test-propagate.el \
            test/deb-packaging-test-status.el \
            test/deb-packaging-test-run.el \
