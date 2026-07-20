@@ -18,6 +18,13 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'magit-section)
+(require 'url)
+(require 'transient)
+(require 'deb-packaging-detect)
+(require 'deb-packaging-config)
+(require 'deb-packaging-ppa)
+(require 'deb-packaging-commands)
 
 ;;; Parsing
 
@@ -136,6 +143,264 @@ Return a plist with :triggers, :results, :running, :waiting."
           :bad bad
           :running (length (plist-get parsed :running))
           :waiting (length (plist-get parsed :waiting)))))
+
+;;; Report buffer
+
+(defvar-local deb-packaging-ppa-tests--ppa nil
+  "PPA shown in the current report buffer.")
+
+(defvar-local deb-packaging-ppa-tests--package nil
+  "Source package filter of the current report buffer.")
+
+(defvar-local deb-packaging-ppa-tests--distro nil
+  "Release filter of the current report buffer.")
+
+(defun deb-packaging-ppa-tests--buffer-name (ppa)
+  "Return the report buffer name for PPA."
+  (format "*deb-ppa-tests: %s*" ppa))
+
+(defvar-keymap deb-packaging-ppa-tests-mode-map
+  :doc "Keymap for `deb-packaging-ppa-tests-mode'."
+  :parent magit-section-mode-map
+  "t"   #'deb-packaging-ppa-tests-trigger-basic
+  "T"   #'deb-packaging-ppa-tests-trigger-all-proposed
+  "RET" #'deb-packaging-ppa-tests-open-log
+  "g"   #'deb-packaging-ppa-tests-refresh
+  "q"   #'quit-window)
+
+(define-derived-mode deb-packaging-ppa-tests-mode magit-section-mode
+  "Deb-PPA-Tests"
+  "Major mode for the parsed PPA autopkgtest report."
+  :interactive nil)
+
+(defconst deb-packaging-ppa-tests--status-icons
+  '((pass . "✅") (fail . "❌") (bad . "⛔")))
+
+(defun deb-packaging-ppa-tests--insert-note (text)
+  "Insert an indented, dimmed note TEXT."
+  (insert (format "    %s\n" (propertize text 'font-lock-face 'shadow))))
+
+(defun deb-packaging-ppa-tests--insert-results (results)
+  "Insert the Results section for RESULTS."
+  (magit-insert-section (deb-packaging-ppa-tests-results)
+    (magit-insert-heading "Results")
+    (magit-insert-section-body
+      (if (null results)
+          (deb-packaging-ppa-tests--insert-note "none")
+        (dolist (r results)
+          (let ((status (plist-get r :status)))
+            (magit-insert-section
+                (deb-packaging-ppa-tests-result nil (eq status 'pass))
+              (magit-insert-heading
+                (concat "  "
+                        (cdr (assq status
+                                   deb-packaging-ppa-tests--status-icons))
+                        " "
+                        (propertize
+                         (format "%s on %s for %s @ %s"
+                                 (plist-get r :source)
+                                 (plist-get r :series)
+                                 (plist-get r :arch)
+                                 (plist-get r :timestamp))
+                         'font-lock-face
+                         (if (eq status 'pass) 'success 'error))))
+              (magit-insert-section-body
+                (dolist (st (plist-get r :subtests))
+                  (insert (format "      %-36s %s\n"
+                                  (car st)
+                                  (propertize
+                                   (cdr st)
+                                   'font-lock-face
+                                   (if (member (cdr st) '("PASS" "SKIP"))
+                                       'success
+                                     'error)))))
+                (when-let ((url (plist-get r :log-url)))
+                  (insert "      "
+                          (propertize "Log: " 'font-lock-face 'shadow)
+                          (propertize
+                           url
+                           'font-lock-face 'link
+                           'deb-packaging-ppa-tests-log-url url)
+                          "\n"))))))))))
+
+(defun deb-packaging-ppa-tests--insert-triggers (triggers)
+  "Insert the Triggers section for TRIGGERS."
+  (magit-insert-section (deb-packaging-ppa-tests-triggers)
+    (magit-insert-heading "Triggers")
+    (magit-insert-section-body
+      (if (null triggers)
+          (deb-packaging-ppa-tests--insert-note "none")
+        (dolist (pub triggers)
+          (magit-insert-section (deb-packaging-ppa-tests-publication)
+            (magit-insert-heading
+              (format "  %s/%s/%s: %s"
+                      (plist-get pub :series)
+                      (plist-get pub :package)
+                      (plist-get pub :version)
+                      (plist-get pub :status)))
+            (magit-insert-section-body
+              (dolist (entry (plist-get pub :arches))
+                (let ((arch (car entry))
+                      (start (point)))
+                  (insert (format "    %-8s %s   %s\n"
+                                  arch
+                                  (propertize "t: trigger basic"
+                                              'font-lock-face 'shadow)
+                                  (propertize "T: trigger all-proposed"
+                                              'font-lock-face 'shadow)))
+                  (add-text-properties
+                   start (1- (point))
+                   (list 'deb-packaging-ppa-tests-basic-url
+                         (plist-get (cdr entry) :basic)
+                         'deb-packaging-ppa-tests-all-proposed-url
+                         (plist-get (cdr entry) :all-proposed)
+                         'deb-packaging-ppa-tests-desc
+                         (format "%s on %s/%s"
+                                 (plist-get pub :package)
+                                 (plist-get pub :series)
+                                 arch))))))))))))
+
+(defun deb-packaging-ppa-tests--insert-queue (title rows)
+  "Insert a Running/Waiting section titled TITLE for ROWS, when non-nil."
+  (when rows
+    (magit-insert-section (deb-packaging-ppa-tests-queue)
+      (magit-insert-heading title)
+      (magit-insert-section-body
+        (dolist (row rows)
+          (insert "    " (propertize row 'font-lock-face 'shadow) "\n"))))))
+
+(defun deb-packaging-ppa-tests--render (parsed ppa)
+  "Render PARSED report for PPA into the current buffer."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (magit-insert-section (deb-packaging-ppa-tests-root)
+      (magit-insert-heading (format "PPA tests: %s" ppa))
+      (deb-packaging-ppa-tests--insert-results (plist-get parsed :results))
+      (deb-packaging-ppa-tests--insert-triggers (plist-get parsed :triggers))
+      (deb-packaging-ppa-tests--insert-queue
+       "Running" (plist-get parsed :running))
+      (deb-packaging-ppa-tests--insert-queue
+       "Waiting" (plist-get parsed :waiting))))
+  (goto-char (point-min)))
+
+;;; Triggering
+
+(defun deb-packaging-ppa-tests--trigger (prop what)
+  "GET the trigger URL in text property PROP at point, after confirm.
+WHAT (\"basic\"/\"all-proposed\") is used in prompts and messages."
+  (let ((url (get-text-property (point) prop))
+        (desc (get-text-property (point) 'deb-packaging-ppa-tests-desc)))
+    (unless url
+      (user-error "No %s trigger on this line" what))
+    (when (y-or-n-p (format "Trigger %s test for %s? " what desc))
+      (url-retrieve
+       url
+       (lambda (status)
+         (if (plist-get status :error)
+             (message "Trigger failed: %s" (plist-get status :error))
+           (message "Triggered %s test for %s" what desc)))))))
+
+(defun deb-packaging-ppa-tests-trigger-basic ()
+  "Trigger the basic autopkgtest run for the trigger row at point."
+  (interactive)
+  (deb-packaging-ppa-tests--trigger 'deb-packaging-ppa-tests-basic-url
+                                    "basic"))
+
+(defun deb-packaging-ppa-tests-trigger-all-proposed ()
+  "Trigger the all-proposed autopkgtest run for the trigger row at point."
+  (interactive)
+  (deb-packaging-ppa-tests--trigger
+   'deb-packaging-ppa-tests-all-proposed-url "all-proposed"))
+
+(defun deb-packaging-ppa-tests-open-log ()
+  "Open the log URL at point in a browser."
+  (interactive)
+  (if-let ((url (get-text-property
+                 (point) 'deb-packaging-ppa-tests-log-url)))
+      (browse-url url)
+    (user-error "No log URL at point")))
+
+;;; Runner
+
+(defun deb-packaging-ppa-tests--fetch (ppa name distro)
+  "Run `ppa tests' for PPA/NAME/DISTRO; render the report when done."
+  (let ((report-buf (get-buffer-create
+                     (deb-packaging-ppa-tests--buffer-name ppa)))
+        (out-buf (generate-new-buffer " *deb-ppa-tests-output*")))
+    (with-current-buffer report-buf
+      (unless (derived-mode-p 'deb-packaging-ppa-tests-mode)
+        (deb-packaging-ppa-tests-mode))
+      (setq deb-packaging-ppa-tests--ppa ppa
+            deb-packaging-ppa-tests--package name
+            deb-packaging-ppa-tests--distro distro)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize (format "Fetching tests for %s...\n" ppa)
+                            'font-lock-face 'shadow))))
+    (deb-packaging-commands--record-run 'ppa-tests 'running nil)
+    (deb-packaging-commands--notify-status-refresh)
+    (make-process
+     :name "deb-ppa-tests"
+     :buffer out-buf
+     :command (append (list "ppa" "tests" "-L" ppa)
+                      (when name (list "-p" name))
+                      (list "-r" distro))
+     :sentinel
+     (lambda (proc _event)
+       (when (memq (process-status proc) '(exit signal))
+         (unwind-protect
+             (deb-packaging-ppa-tests--fetch-done proc out-buf report-buf ppa)
+           (kill-buffer out-buf)))))))
+
+(defun deb-packaging-ppa-tests--fetch-done (proc out-buf report-buf ppa)
+  "Handle `ppa tests' exit: parse and render, or dump raw output on failure."
+  (if (and (eq (process-status proc) 'exit)
+           (zerop (process-exit-status proc)))
+      (let* ((parsed (deb-packaging-ppa-tests--parse
+                      (with-current-buffer out-buf (buffer-string))))
+             (summary (deb-packaging-ppa-tests--summary parsed)))
+        (deb-packaging-commands--record-run
+         'ppa-tests 'success (buffer-name report-buf) summary)
+        (with-current-buffer report-buf
+          (deb-packaging-ppa-tests--render parsed ppa)))
+    (deb-packaging-commands--record-run
+     'ppa-tests 'failure (buffer-name report-buf))
+    (with-current-buffer report-buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize (format "ppa tests failed for %s:\n\n" ppa)
+                            'font-lock-face 'error))
+        (insert-buffer-substring out-buf))))
+  (deb-packaging-commands--notify-status-refresh))
+
+(defun deb-packaging-ppa-tests-refresh ()
+  "Re-run `ppa tests' for the current report buffer."
+  (interactive)
+  (unless deb-packaging-ppa-tests--ppa
+    (user-error "No PPA associated with this buffer"))
+  (deb-packaging-ppa-tests--fetch
+   deb-packaging-ppa-tests--ppa
+   deb-packaging-ppa-tests--package
+   deb-packaging-ppa-tests--distro))
+
+;;;###autoload
+(defun deb-packaging-ppa-tests-show (&optional args)
+  "Show the parsed autopkgtest report for a PPA.
+ARGS comes from `deb-packaging-test-transient'.  Prompts when no PPA is
+set; the used PPA is saved per package+distro."
+  (interactive (list (transient-args 'deb-packaging-test-transient)))
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
+    (unless pkg-dir
+      (user-error "Not in a Debian package directory"))
+    (let* ((effective-args (or args '()))
+           (ppa (deb-packaging-commands--resolve-ppa effective-args))
+           (distro (or (transient-arg-value "--dist=" effective-args)
+                       (deb-packaging-config--effective-distro)))
+           (name (deb-packaging-detect--package-name pkg-dir)))
+      (when name
+        (deb-packaging-ppa-save name distro ppa))
+      (deb-packaging-ppa-tests--fetch ppa name distro)
+      (pop-to-buffer (deb-packaging-ppa-tests--buffer-name ppa)))))
 
 (provide 'deb-packaging-ppa-tests)
 ;;; deb-packaging-ppa-tests.el ends here

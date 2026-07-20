@@ -123,5 +123,78 @@
     (should (equal (plist-get summary :running) 0))
     (should (equal (plist-get summary :waiting) 0))))
 
+;;; Report rendering and triggering
+
+;; `text-property-any' compares values with `eq', which cannot match a
+;; parsed string against a literal, so compare with `equal' instead.
+(defun deb-packaging-test-ppa-tests--has-prop-value-p (prop value)
+  "Return non-nil if any character in the buffer has PROP `equal' to VALUE."
+  (cl-loop for pos from (point-min) below (point-max)
+           thereis (equal (get-text-property pos prop) value)))
+
+(ert-deftest deb-packaging-test-ppa-tests/render-smoke ()
+  "The rendered report contains the key lines and text properties."
+  (let ((parsed (deb-packaging-ppa-tests--parse
+                 deb-packaging-test-ppa-tests--fixture)))
+    (with-temp-buffer
+      (deb-packaging-ppa-tests-mode)
+      (deb-packaging-ppa-tests--render parsed "ppa:me/x")
+      (let ((text (buffer-string)))
+        (should (string-match-p "PPA tests: ppa:me/x" text))
+        (should (string-match-p "llvm-toolchain-19 on noble for amd64" text))
+        (should (string-match-p "command1" text))
+        (should (string-match-p "t: trigger basic" text))
+        (should (string-match-p "Log:" text)))
+      (should (deb-packaging-test-ppa-tests--has-prop-value-p
+               'deb-packaging-ppa-tests-log-url
+               "https://autopkgtest.ubuntu.com/results/autopkgtest-noble-karljs-sru-llvm-19-noble/noble/amd64/l/llvm-toolchain-19/20260209_232105_b52c9@/log.gz"))
+      (should (deb-packaging-test-ppa-tests--has-prop-value-p
+               'deb-packaging-ppa-tests-desc
+               "llvm-toolchain-19 on noble/amd64")))))
+
+(ert-deftest deb-packaging-test-ppa-tests/trigger-basic-confirmed ()
+  (let (requested)
+    (cl-letf (((symbol-function 'url-retrieve)
+               (lambda (url &rest _) (setq requested url)))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+      (with-temp-buffer
+        (insert (propertize "amd64   t: trigger basic"
+                            'deb-packaging-ppa-tests-basic-url
+                            "https://example.com/basic"
+                            'deb-packaging-ppa-tests-desc
+                            "mypkg on noble/amd64"))
+        (goto-char (point-min))
+        (deb-packaging-ppa-tests-trigger-basic)))
+    (should (equal requested "https://example.com/basic"))))
+
+(ert-deftest deb-packaging-test-ppa-tests/trigger-declined ()
+  (let (requested)
+    (cl-letf (((symbol-function 'url-retrieve)
+               (lambda (url &rest _) (setq requested url)))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) nil)))
+      (with-temp-buffer
+        (insert (propertize "x"
+                            'deb-packaging-ppa-tests-basic-url
+                            "https://example.com/basic"))
+        (goto-char (point-min))
+        (deb-packaging-ppa-tests-trigger-basic)))
+    (should (null requested))))
+
+(ert-deftest deb-packaging-test-ppa-tests/trigger-no-url-errors ()
+  (with-temp-buffer
+    (insert "plain line")
+    (goto-char (point-min))
+    (should-error (deb-packaging-ppa-tests-trigger-basic) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-ppa-tests/fetch-command ()
+  "The fetch runs ppa tests -L with package and release filters."
+  (let (captured)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest props) (setq captured props) nil)))
+      (deb-packaging-ppa-tests--fetch "ppa:me/x" "mypkg" "noble"))
+    (should (equal (plist-get captured :command)
+                   '("ppa" "tests" "-L" "ppa:me/x" "-p" "mypkg"
+                     "-r" "noble")))))
+
 (provide 'deb-packaging-test-ppa-tests)
 ;;; deb-packaging-test-ppa-tests.el ends here
