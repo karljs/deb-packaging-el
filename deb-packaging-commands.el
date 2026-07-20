@@ -526,27 +526,6 @@ set; the used PPA is saved per package+distro."
                                      (or parent-dir default-directory)
                                      'dput)))))
 
-;;; PPA (Launchpad) testing
-
-(defun deb-packaging-commands-ppa-tests (&optional args)
-  "Show autopkgtest results for a PPA.
-ARGS is the argument list from `deb-packaging-upload-transient'."
-  (interactive (list (transient-args 'deb-packaging-upload-transient)))
-  (let* ((effective-args (or args '()))
-         (ppa (transient-arg-value "--ppa=" effective-args))
-         (distro (or (transient-arg-value "--dist=" effective-args)
-                     (deb-packaging-config--effective-distro))))
-    (unless (and ppa (not (string-empty-p ppa)))
-      (user-error "No PPA set; choose one with the -p option"))
-    (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
-           (name (deb-packaging-detect--package-name pkg-dir))
-           (cmd-args (append (list "ppa" "tests" ppa)
-                             (when name (list "-p" name))
-                             (list "-r" distro))))
-      (deb-packaging-commands--run-command "ppa-tests" cmd-args
-                                  (or pkg-dir default-directory)
-                                  'ppa-tests))))
-
 ;;; Clean artifacts
 
 (defun deb-packaging-commands-clean (&optional args)

@@ -44,7 +44,7 @@
 (declare-function deb-packaging-commands-ubuntu-lint "deb-packaging-commands")
 (declare-function deb-packaging-commands-autopkgtest "deb-packaging-commands")
 (declare-function deb-packaging-commands-dput-upload "deb-packaging-commands")
-(declare-function deb-packaging-commands-ppa-tests "deb-packaging-commands")
+(declare-function deb-packaging-ppa-tests-show "deb-packaging-ppa-tests")
 (declare-function deb-packaging-commands-clean "deb-packaging-commands")
 (declare-function deb-packaging-commands-reset "deb-packaging-commands")
 (declare-function deb-packaging-infra--list-ppas "deb-packaging-infra")
@@ -248,9 +248,11 @@ Each action reads only its own flags."
 
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()
-  "Run autopkgtest against locally built .debs."
+  "Run autopkgtest locally, or view PPA test results.
+Local flags apply only to \"Run autopkgtest\"; the PPA group applies only
+to \"PPA test report\" (the lint-transient pattern)."
   :value #'deb-packaging-transients--test-default-value
-  ["Arguments"
+  ["Local autopkgtest"
    ("-u"  "Upgrade packages before test"  "--apt-upgrade")
    ("-f"  "Drop to shell on failure"      "--shell-fail")
     ("-r"  "Test runner"
@@ -265,8 +267,16 @@ Each action reads only its own flags."
     :choices deb-packaging-config--distro-choices
     :always-read t
     :allow-empty nil)]
+  ["PPA tests"
+   ("-p" "PPA"
+    "--ppa="
+    :class transient-option
+    :prompt "PPA (e.g. ppa:user/name): "
+    :reader deb-packaging-transients--read-ppa
+    :always-read t)]
   ["Run"
-   ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)])
+   ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)
+   ("p" "PPA test report" deb-packaging-ppa-tests-show)])
 
 ;;; 5. Upload / PPA
 
@@ -282,7 +292,7 @@ Each action reads only its own flags."
 
 ;;;###autoload(autoload 'deb-packaging-upload-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-upload-transient ()
-  "Upload to a Launchpad PPA with dput, or view test results."
+  "Upload to a Launchpad PPA with dput."
   :value #'deb-packaging-transients--upload-default-value
   ["PPA"
    ("-p"  "PPA (required)"
@@ -300,8 +310,7 @@ Each action reads only its own flags."
     :always-read t
     :allow-empty nil)]
   ["Upload"
-   ("p" "Upload with dput"     deb-packaging-commands-dput-upload)
-   ("r" "PPA test results"     deb-packaging-commands-ppa-tests)])
+   ("p" "Upload with dput" deb-packaging-commands-dput-upload)])
 
 ;;; 6. Clean artifacts
 
