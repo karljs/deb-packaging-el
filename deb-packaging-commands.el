@@ -16,6 +16,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'comint)
 (require 'ansi-color)
 (require 'transient)
@@ -24,6 +25,7 @@
 
 (declare-function deb-packaging-infra--ppa-owner "deb-packaging-infra")
 (declare-function deb-packaging-infra--ppa-name "deb-packaging-infra")
+(declare-function deb-packaging-repos-save "deb-packaging-repos")
 
 ;;; Core Execution
 
@@ -354,11 +356,16 @@ is returned unchanged."
       (let* ((effective-args (or args '()))
              (distro (or (transient-arg-value "--dist=" effective-args)
                          (deb-packaging-config--effective-distro)))
-             (variant-name (transient-arg-value "--extra-repository=" effective-args))
+             (repo-args (cl-remove-if-not
+                         (lambda (a) (string-prefix-p "--extra-repository=" a))
+                         effective-args))
              (extra-repo-arg
-              (when variant-name
-                (list (concat "--extra-repository="
-                              (deb-packaging-commands--expand-extra-repo variant-name distro)))))
+              (mapcar (lambda (a)
+                        (concat "--extra-repository="
+                                (deb-packaging-commands--expand-extra-repo
+                                 (string-remove-prefix "--extra-repository=" a)
+                                 distro)))
+                      repo-args))
              (passthrough (cl-remove-if
                            (lambda (a) (string-prefix-p "--extra-repository=" a))
                            effective-args)))
@@ -367,6 +374,11 @@ is returned unchanged."
           (setq passthrough (cons (format "--dist=%s" distro) passthrough)))
         ;; Keep the global distro in sync for the status buffer.
         (deb-packaging-config--set-distro distro)
+        (when (nth 0 info)
+          (deb-packaging-repos-save
+           (nth 0 info) distro
+           (mapcar (lambda (a) (string-remove-prefix "--extra-repository=" a))
+                   repo-args)))
         (deb-packaging-commands--run-command
          "sbuild"
          (append (list "sbuild")

@@ -125,6 +125,49 @@
   (let ((raw "deb http://example.com/ubuntu noble main"))
     (should (string= (deb-packaging-commands--expand-extra-repo raw "noble") raw))))
 
+;;; deb-packaging-commands-sbuild multi-value
+
+(ert-deftest deb-packaging-test-commands/sbuild-multiple-extra-repos ()
+  "sbuild receives one expanded --extra-repository= flag per entry."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (captured-args captured-save)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &optional _dir _key)
+                   (setq captured-args args)))
+                ((symbol-function 'deb-packaging-repos-save)
+                 (lambda (pkg distro entries)
+                   (setq captured-save (list pkg distro entries)))))
+        (deb-packaging-commands-sbuild
+         '("--dist=noble"
+           "--extra-repository=ppa:me/x"
+           "--extra-repository=proposed"
+           "--extra-repository=deb http://example.com/ubuntu noble main")))
+      (should (member "--extra-repository=deb [trusted=yes] http://ppa.launchpadcontent.net/me/x/ubuntu/ noble main"
+                      captured-args))
+      (should (member "--extra-repository=deb http://archive.ubuntu.com/ubuntu/ noble-proposed main"
+                      captured-args))
+      (should (member "--extra-repository=deb http://example.com/ubuntu noble main"
+                      captured-args))
+      (should (equal captured-save
+                     '("mypkg" "noble"
+                       ("ppa:me/x" "proposed" "deb http://example.com/ubuntu noble main")))))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-no-extra-repos-saves-empty ()
+  "sbuild with no --extra-repository saves an empty set."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (captured-save)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name _args &optional _dir _key)))
+                ((symbol-function 'deb-packaging-repos-save)
+                 (lambda (pkg distro entries)
+                   (setq captured-save (list pkg distro entries)))))
+        (deb-packaging-commands-sbuild '("--dist=noble")))
+      (should (equal captured-save '("mypkg" "noble" nil))))))
+
 ;;; deb-packaging-commands--ppa-repo-line
 
 (ert-deftest deb-packaging-test-commands/ppa-repo-line-valid ()

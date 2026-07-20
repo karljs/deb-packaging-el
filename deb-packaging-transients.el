@@ -26,6 +26,9 @@
 ;; Tool-specific variables live in deb-packaging-commands.el.
 (defvar deb-packaging-commands-sbuild-variants)
 
+(defvar deb-packaging-config-extra-ppas)
+(declare-function deb-packaging-repos-load "deb-packaging-repos")
+
 ;; Shared with the status buffer so it can detect this flag without
 ;; duplicating the literal.
 (defconst deb-packaging-transients-sbuild-shell-flag
@@ -80,27 +83,37 @@
 
 (cl-defmethod transient-infix-read ((obj deb-packaging-transients--extra-repo-argument))
   "Read an extra-repository value.
-Completes against `deb-packaging-commands-sbuild-variants' names and known PPAs.
-A variant name or ppa: address expands at build time; anything else is
-passed to sbuild verbatim."
+Completes against `deb-packaging-commands-sbuild-variants' names, known
+PPAs, and `deb-packaging-config-extra-ppas'.  A variant name or ppa:
+address expands at build time; anything else is passed to sbuild verbatim.
+Returns nil on empty input to end multi-value entry."
+  (ignore obj)
   (let* ((variants (mapcar #'car deb-packaging-commands-sbuild-variants))
          (ppas (deb-packaging-infra--list-ppas))
-         (choices (delete-dups (append variants ppas))))
-    (completing-read
-     "Extra apt repo (variant, ppa:owner/name, or full deb line): "
-     choices nil nil (oref obj value))))
+         (choices (delete-dups
+                   (append variants ppas deb-packaging-config-extra-ppas))))
+    (let ((choice (completing-read
+                   "Extra apt repo (empty to stop): "
+                   choices nil nil nil)))
+      (when (and choice (not (string-empty-p choice)))
+        choice))))
 
 (cl-defmethod transient-format-value ((obj deb-packaging-transients--extra-repo-argument))
-  "Show the chosen value and, when it differs, the expanded repo line."
-  (if-let ((v (oref obj value)))
-      (let ((expanded (deb-packaging-commands--expand-extra-repo
-                       v (deb-packaging-config--effective-distro))))
-        (if (string= v expanded)
-            (propertize v 'face 'transient-value)
-          (concat (propertize v 'face 'transient-value)
-                  (propertize (format " → %s" expanded)
-                              'face 'transient-inactive-value))))
-    (propertize "none" 'face 'transient-inactive-value)))
+  "Show each chosen value and, when it differs, its expanded repo line."
+  (let ((v (oref obj value)))
+    (if v
+        (mapconcat
+         (lambda (entry)
+           (let ((expanded (deb-packaging-commands--expand-extra-repo
+                            entry (deb-packaging-config--effective-distro))))
+             (if (string= entry expanded)
+                 (propertize entry 'face 'transient-value)
+               (concat (propertize entry 'face 'transient-value)
+                       (propertize (format " → %s" expanded)
+                                   'face 'transient-inactive-value)))))
+         (if (listp v) v (list v))
+         (propertize "," 'face 'transient-inactive-value))
+      (propertize "none" 'face 'transient-inactive-value))))
 
 (defclass deb-packaging-transients--extra-package-argument (transient-option) ()
   "sbuild --extra-package= option.
@@ -156,10 +169,11 @@ resolves it regardless of working directory."
    ("-u" "apt upgrade"              "--apt-upgrade")
     ("-F" "Shell on build failure"
      "--build-failed-commands=%SBUILD_SHELL")
-   ("-e" "Extra repository"
-    "--extra-repository="
-    :class deb-packaging-transients--extra-repo-argument
-    :description "Extra apt repo")
+    ("-e" "Extra repository"
+     "--extra-repository="
+     :class deb-packaging-transients--extra-repo-argument
+     :multi-value t
+     :description "Extra apt repo")
    ("-p" "Extra package"
     "--extra-package="
     :class deb-packaging-transients--extra-package-argument

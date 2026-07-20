@@ -78,6 +78,15 @@ Under $XDG_CACHE_HOME/deb-packaging/propagate (or ~/.cache).")
 (defvar deb-packaging-config-propagate-clone-mode-lighter " Prop"
   "Lighter for `deb-packaging-propagate-clone-mode'.")
 
+;;; Extra PPA candidates
+
+(defvar deb-packaging-config-extra-ppas nil
+  "List of ppa:owner/name strings for binary-build completion candidates.
+Merged into the --extra-repository completion list alongside owned PPAs
+and sbuild variants.  Defaults to nil; per-package persistence handles
+remembering across sessions.  Set in your init file if you want certain
+dependency PPAs always available as candidates.")
+
 (defun deb-packaging-config--distro-choices ()
   "Return distro completion list, prepending the changelog distro if unknown."
   (let ((current (deb-packaging-config--effective-distro))
