@@ -348,5 +348,57 @@
               (should (member "--dist=noble" default))))
         (delete-directory tmp t)))))
 
+;;; dput PPA save + auto-prompt
+
+(ert-deftest deb-packaging-test-commands/dput-upload-saves-ppa ()
+  "dput-upload runs dput and saves the PPA per package+distro."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1_source.changes" . "")))
+    (let (captured-args captured-save)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &optional _dir _key)
+                   (setq captured-args args)))
+                ((symbol-function 'deb-packaging-ppa-save)
+                 (lambda (pkg distro ppa)
+                   (setq captured-save (list pkg distro ppa)))))
+        (deb-packaging-commands-dput-upload '("--ppa=ppa:me/x" "--dist=noble")))
+      (should (equal (car captured-args) "dput"))
+      (should (equal (cadr captured-args) "ppa:me/x"))
+      (should (string-suffix-p "_source.changes" (caddr captured-args)))
+      (should (equal captured-save '("mypkg" "noble" "ppa:me/x"))))))
+
+(ert-deftest deb-packaging-test-commands/dput-upload-prompts-when-unset ()
+  "dput-upload with no --ppa= prompts and uses the answer."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1_source.changes" . "")))
+    (let (captured-args captured-save)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &optional _dir _key)
+                   (setq captured-args args)))
+                ((symbol-function 'deb-packaging-infra--list-ppas)
+                 (lambda () '("ppa:me/x")))
+                ((symbol-function 'completing-read)
+                 (lambda (&rest _) "ppa:me/y"))
+                ((symbol-function 'deb-packaging-ppa-save)
+                 (lambda (pkg distro ppa)
+                   (setq captured-save (list pkg distro ppa)))))
+        (deb-packaging-commands-dput-upload '("--dist=noble")))
+      (should (equal (cadr captured-args) "ppa:me/y"))
+      (should (equal captured-save '("mypkg" "noble" "ppa:me/y"))))))
+
+(ert-deftest deb-packaging-test-commands/dput-upload-empty-prompt-errors ()
+  "An empty answer at the PPA prompt is a user-error."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1_source.changes" . "")))
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-ppas)
+               (lambda () nil))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) "")))
+      (should-error (deb-packaging-commands-dput-upload '("--dist=noble"))
+                    :type 'user-error))))
+
 (provide 'deb-packaging-test-commands)
 ;;; deb-packaging-test-commands.el ends here

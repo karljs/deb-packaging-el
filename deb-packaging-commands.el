@@ -22,9 +22,11 @@
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
+(require 'deb-packaging-ppa)
 
 (declare-function deb-packaging-infra--ppa-owner "deb-packaging-infra")
 (declare-function deb-packaging-infra--ppa-name "deb-packaging-infra")
+(declare-function deb-packaging-infra--list-ppas "deb-packaging-infra")
 (declare-function deb-packaging-repos-save "deb-packaging-repos")
 
 ;;; Core Execution
@@ -478,18 +480,31 @@ Return nil if RUNNER has no registered hint."
          pkg-dir
          'autopkgtest)))))
 
+(defun deb-packaging-commands--resolve-ppa (args)
+  "Return the --ppa= value from ARGS, prompting when unset.
+Completion candidates come from `deb-packaging-infra--list-ppas'.
+Signals `user-error' on empty input."
+  (let ((ppa (transient-arg-value "--ppa=" args)))
+    (if (and ppa (not (string-empty-p ppa)))
+        ppa
+      (let ((choice (completing-read "PPA: "
+                                     (deb-packaging-infra--list-ppas)
+                                     nil nil)))
+        (if (or (null choice) (string-empty-p choice))
+            (user-error "No PPA set")
+          choice)))))
+
 ;;; PPA upload (dput)
 
 (defun deb-packaging-commands-dput-upload (&optional args)
   "Upload source .changes to a PPA with dput.
-ARGS comes from `deb-packaging-upload-transient'.  PPA is mandatory."
+ARGS comes from `deb-packaging-upload-transient'.  Prompts when no PPA is
+set; the used PPA is saved per package+distro."
   (interactive (list (transient-args 'deb-packaging-upload-transient)))
   (let* ((effective-args (or args '()))
-         (ppa (transient-arg-value "--ppa=" effective-args))
+         (ppa (deb-packaging-commands--resolve-ppa effective-args))
          (distro (or (transient-arg-value "--dist=" effective-args)
                      (deb-packaging-config--effective-distro))))
-    (unless (and ppa (not (string-empty-p ppa)))
-      (user-error "No PPA set; choose one with the -p option"))
     (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
            (info (deb-packaging-detect--package-info pkg-dir))
            (name (nth 0 info))
@@ -504,9 +519,11 @@ ARGS comes from `deb-packaging-upload-transient'.  PPA is mandatory."
       (let* ((changes-file (if (consp changes) (car changes) changes))
              (cmd-args (list "dput" ppa changes-file)))
         (deb-packaging-config--set-distro distro)
+        (when name
+          (deb-packaging-ppa-save name distro ppa))
         (deb-packaging-commands--run-command "dput" cmd-args
-                                    (or parent-dir default-directory)
-                                    'dput)))))
+                                     (or parent-dir default-directory)
+                                     'dput)))))
 
 ;;; PPA (Launchpad) testing
 
