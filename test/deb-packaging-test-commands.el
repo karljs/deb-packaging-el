@@ -400,5 +400,30 @@
       (should-error (deb-packaging-commands-dput-upload '("--dist=noble"))
                     :type 'user-error))))
 
+;;; autopkgtest --ppa= filtering
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-filters-ppa-arg ()
+  "autopkgtest never receives the transient's --ppa= arg."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts
+              (("mypkg_1.0-1_amd64.changes"
+                . "Format: 1.8\n\nFiles:\n d41d8cd98f00b204e9800998ecf8427e 1234 admin optional mypkg_1.0-1_amd64.deb\n")
+                ("mypkg_1.0-1_amd64.deb" . "")))
+    (let (captured-args)
+      (cl-letf (((symbol-function 'deb-packaging-commands--test-image-info)
+                 (lambda (&optional _runner _distro)
+                   (list :runner "lxd"
+                         :image "autopkgtest/ubuntu/noble/amd64"
+                         :exists t)))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &optional _dir _key)
+                   (setq captured-args args))))
+        (deb-packaging-commands-autopkgtest
+         '("--apt-upgrade" "--runner=lxd" "--dist=noble" "--ppa=ppa:me/x")))
+      (should-not (cl-some (lambda (a) (string-prefix-p "--ppa=" a))
+                           captured-args))
+      (should (member "--apt-upgrade" captured-args)))))
+
 (provide 'deb-packaging-test-commands)
 ;;; deb-packaging-test-commands.el ends here

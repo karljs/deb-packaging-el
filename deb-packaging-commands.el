@@ -459,11 +459,12 @@ Return nil if RUNNER has no registered hint."
              (image-info (deb-packaging-commands--test-image-info runner distro))
              (image (plist-get image-info :image))
              (image-exists (plist-get image-info :exists))
-             (passthrough (cl-remove-if
-                           (lambda (a)
-                             (or (string-prefix-p "--runner=" a)
-                                 (string-prefix-p "--dist=" a)))
-                           effective-args)))
+              (passthrough (cl-remove-if
+                            (lambda (a)
+                              (or (string-prefix-p "--runner=" a)
+                                  (string-prefix-p "--dist=" a)
+                                  (string-prefix-p "--ppa=" a)))
+                            effective-args)))
         (when (and image (not image-exists))
           (user-error "%s image '%s' not found.\nBuild it with:\n  %s"
                       (capitalize runner)
