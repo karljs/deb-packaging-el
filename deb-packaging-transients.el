@@ -240,6 +240,14 @@ strings and so doubles the argument when the value is re-emitted."
    ("-A" "Build arch-all packages"  "-A")
    ("-v" "Verbose"                  "-v")
    ("-u" "apt upgrade"              "--apt-upgrade")
+    ("-S" "Purge session"
+     "--purge-session="
+     :class transient-option
+     :choices ("always" "successful" "never"))
+    ("-P" "Purge build dir"
+     "--purge-build="
+     :class transient-option
+     :choices ("always" "successful" "never"))
     ("-F" "Shell on build failure"
      "--build-failed-commands=%SBUILD_SHELL")
     ("-e" "Extra repository"

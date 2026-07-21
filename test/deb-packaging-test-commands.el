@@ -308,6 +308,21 @@ and re-emit without doubling the argument."
         (deb-packaging-commands-sbuild '("--dist=noble")))
       (should (equal captured-save '("mypkg" "noble" nil))))))
 
+(ert-deftest deb-packaging-test-commands/sbuild-purge-flags-pass-through ()
+  "sbuild receives --purge-session= and --purge-build= verbatim."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (captured-args)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &optional _dir _key)
+                   (setq captured-args args)))
+                ((symbol-function 'deb-packaging-repos-save) #'ignore))
+        (deb-packaging-commands-sbuild
+         '("--dist=noble" "--purge-session=always" "--purge-build=never")))
+      (should (member "--purge-session=always" captured-args))
+      (should (member "--purge-build=never" captured-args)))))
+
 ;;; deb-packaging-transients--binary-default-value restore
 
 (ert-deftest deb-packaging-test-commands/binary-default-value-seeds-repos ()
