@@ -52,6 +52,7 @@ Propagated to all per-tool transients and the status buffer."
 (transient-define-prefix deb-packaging-dispatch ()
   "Debian packaging commands.
 Set the target distro with `d'; other transients inherit it."
+  :environment #'deb-packaging-transients--env
   [:description deb-packaging--dispatch-header]
   ["Config"
    ("d" "Set target distro..." deb-packaging-set-distro)]

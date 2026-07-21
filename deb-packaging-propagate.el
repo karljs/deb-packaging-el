@@ -27,6 +27,7 @@
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
+(require 'deb-packaging-transients)
 
 ;;; Slug and description helpers
 
@@ -375,6 +376,7 @@ Buffer-local to the clone's Magit status buffer. Set by
   "Apply a propagate patch file with git-apply flags.
 The patch file is pre-filled by `deb-packaging-propagate-apply'."
   :value '("--index")
+  :environment #'deb-packaging-transients--env
   ["Arguments"
    ("-i" "Apply to index and worktree" "--index")
    ("-c" "Only apply to index"         "--cached")
@@ -557,6 +559,7 @@ Binds `P' to pick a fix item and open the apply transient."
 ;;;###autoload(autoload 'deb-packaging-propagate-transient "deb-packaging-propagate" nil t)
 (transient-define-prefix deb-packaging-propagate-transient ()
   "Propagate fixes to Debian and upstream."
+  :environment #'deb-packaging-transients--env
   [:description "Propagate fixes across distros"]
   ["Actions"
    ("e" "Export .patch (upstream)..."   deb-packaging-propagate-export-patch)

@@ -20,6 +20,7 @@
 (require 'transient)
 (require 'deb-packaging-config)
 (require 'deb-packaging-dev)
+(require 'deb-packaging-transients)
 
 ;;; Shared table helpers
 
@@ -753,6 +754,7 @@ BUF is the PPAs list buffer; TEMP-BUF holds output."
 
 (transient-define-prefix deb-packaging-infra-dispatch ()
   "Manage build and test infrastructure."
+  :environment #'deb-packaging-transients--env
   [:description deb-packaging-infra--header]
   ["Infrastructure"
    ("s" "Schroots (sbuild)..."          deb-packaging-infra-schroots)

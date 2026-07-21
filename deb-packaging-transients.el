@@ -35,6 +35,22 @@
 (defconst deb-packaging-transients-sbuild-shell-flag
   "--build-failed-commands=%SBUILD_SHELL")
 
+(defconst deb-packaging-transients-display-action
+  '(display-buffer-in-side-window (side . bottom) (slot . -1)
+                                  (dedicated . t) (inhibit-same-window . t))
+  "Side-window action for this package's transients.
+Slot -1 avoids reusing the slot-0 side window that user
+`display-buffer-alist' rules commonly assign to comint buffers.
+Reusing such a window makes transient mangle it: on minibuffer
+suspend/resume it grows to fit the wrong buffer's contents.")
+
+(defun deb-packaging-transients--env (fn)
+  "Run FN with the package's transient display action bound.
+Used as :environment for the prefixes in this package."
+  (let ((transient-display-buffer-action
+         deb-packaging-transients-display-action))
+    (funcall fn)))
+
 ;; Forward-declare command functions.
 (declare-function deb-packaging-commands-source-build "deb-packaging-commands")
 (declare-function deb-packaging-commands-sbuild "deb-packaging-commands")
@@ -62,6 +78,7 @@
 (transient-define-prefix deb-packaging-commands-source-build-transient ()
   "Build a Debian source package with dpkg-buildpackage."
   :value '("-S" "-d" "-nc" "-sa" "-I" "-i")
+  :environment #'deb-packaging-transients--env
   ["Arguments"
    ("-S" "Source build"            "-S")
    ("-d" "Skip build-dep check"    "-d")
@@ -164,6 +181,7 @@ resolves it regardless of working directory."
 (transient-define-prefix deb-packaging-binary-build-transient ()
   "Build a Debian binary package with sbuild."
   :value #'deb-packaging-transients--binary-default-value
+  :environment #'deb-packaging-transients--env
   ["Arguments"
    ("-d" "Distribution"
     "--dist="
@@ -197,6 +215,7 @@ resolves it regardless of working directory."
 lintian inspects built artifacts; ubuntu-lint checks Ubuntu policy.
 Each action reads only its own flags."
   :value '("-i" "--tag-display-limit=0" "--context=changes" "--all=warn")
+  :environment #'deb-packaging-transients--env
   ["Lintian arguments"
    ("-i"  "Show informational tags"   "-i")
    ("-I"  "Pedantic (info+)"          "-I")
@@ -252,6 +271,7 @@ Each action reads only its own flags."
 Local flags apply only to \"Run autopkgtest\"; the PPA group applies only
 to \"PPA test report\" (the lint-transient pattern)."
   :value #'deb-packaging-transients--test-default-value
+  :environment #'deb-packaging-transients--env
   ["Local autopkgtest"
    ("-u"  "Upgrade packages before test"  "--apt-upgrade")
    ("-f"  "Drop to shell on failure"      "--shell-fail")
@@ -294,6 +314,7 @@ to \"PPA test report\" (the lint-transient pattern)."
 (transient-define-prefix deb-packaging-upload-transient ()
   "Upload to a Launchpad PPA with dput."
   :value #'deb-packaging-transients--upload-default-value
+  :environment #'deb-packaging-transients--env
   ["PPA"
    ("-p"  "PPA (required)"
     "--ppa="
@@ -318,6 +339,7 @@ to \"PPA test report\" (the lint-transient pattern)."
 (transient-define-prefix deb-packaging-commands-clean-transient ()
   "Remove build artifacts from the output directory."
   :value '("--stale")
+  :environment #'deb-packaging-transients--env
   ["What to remove"
    ("-a" "Current-version artifacts" "--artifacts")
    ("-S" "Stale artifacts (other versions)" "--stale")]
@@ -330,6 +352,7 @@ to \"PPA test report\" (the lint-transient pattern)."
 (transient-define-prefix deb-packaging-commands-reset-transient ()
   "Reset the source tree to a pristine state."
   :value '("--quilt" "--pc" "--files")
+  :environment #'deb-packaging-transients--env
   ["Reset source tree"
    ("-q" "Pop quilt patches"     "--quilt")
    ("-p" "Remove .pc/ directory" "--pc")
@@ -342,6 +365,7 @@ to \"PPA test report\" (the lint-transient pattern)."
 ;;;###autoload(autoload 'deb-packaging-dev-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-dev-transient ()
   "Develop upstream source in an LXD container with LSP."
+  :environment #'deb-packaging-transients--env
   ["Dev shell"
    ("e" "Dev shell (C-u=reprovision)" deb-packaging-dev-shell)
    ("o" "Open existing container (dired)" deb-packaging-dev-open)

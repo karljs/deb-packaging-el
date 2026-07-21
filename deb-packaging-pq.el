@@ -23,6 +23,7 @@
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-commands)
+(require 'deb-packaging-transients)
 
 ;;; Pre-flight checks
 
@@ -171,6 +172,7 @@ Useful to abort an edit session and start over."
 ;;;###autoload(autoload 'deb-packaging-pq-transient "deb-packaging-pq" nil t)
 (transient-define-prefix deb-packaging-pq-transient ()
   "Manage Debian quilt patches as git commits via gbp pq."
+  :environment #'deb-packaging-transients--env
   [:description deb-packaging-pq--transient-header]
   ["Patch queue"
    ("i" "Import (quilt -> patch-queue)"  deb-packaging-pq-import)
