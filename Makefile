@@ -5,6 +5,7 @@ SRC = deb-packaging-detect.el \
       deb-packaging-config.el \
       deb-packaging-repos.el \
       deb-packaging-ppa.el \
+      deb-packaging-display.el \
       deb-packaging-commands.el \
       deb-packaging-ppa-tests.el \
       deb-packaging-transients.el \
@@ -20,6 +21,7 @@ SRC = deb-packaging-detect.el \
 TEST_SRC = test/deb-packaging-test-version.el \
            test/deb-packaging-test-detect.el \
            test/deb-packaging-test-commands.el \
+           test/deb-packaging-test-display.el \
            test/deb-packaging-test-ppa-tests.el \
            test/deb-packaging-test-config.el \
            test/deb-packaging-test-repos.el \
