@@ -110,11 +110,22 @@ Return plist (:ok N :skip N :warn N :error N :fail N) from the final
                   :error (aref stats 3)
                   :fail (aref stats 4))))))))
 
+(defun deb-packaging-commands--parse-sbuild-summary (buf-name)
+  "Parse a kept schroot session from sbuild buffer BUF-NAME.
+Return plist (:kept-session NAME), or nil when the session was ended."
+  (when (buffer-live-p (get-buffer buf-name))
+    (with-current-buffer buf-name
+      (save-excursion
+        (goto-char (point-min))
+        (when (re-search-forward "^Keeping session: \\(\\S-+\\)" nil t)
+          (list :kept-session (match-string 1)))))))
+
 (defun deb-packaging-commands--run-summary-parser (key)
   "Return the summary parser for run KEY, or nil."
   (pcase key
     ((or 'lintian-source 'lintian-binary) #'deb-packaging-commands--parse-lint-summary)
     ('ubuntu-lint #'deb-packaging-commands--parse-ubuntu-lint-summary)
+    ('sbuild #'deb-packaging-commands--parse-sbuild-summary)
     (_ nil)))
 
 (defun deb-packaging-commands--wrap-sentinel (proc action)

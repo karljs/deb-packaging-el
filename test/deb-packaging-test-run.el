@@ -68,6 +68,10 @@
               #'deb-packaging-commands--parse-ubuntu-lint-summary))
   (should (null (deb-packaging-commands--run-summary-parser 'source-build))))
 
+(ert-deftest deb-packaging-test-run/run-summary-parser-sbuild ()
+  (should (eq (deb-packaging-commands--run-summary-parser 'sbuild)
+              #'deb-packaging-commands--parse-sbuild-summary)))
+
 (ert-deftest deb-packaging-test-run/wrap-sentinel-runs-action-on-exit ()
   (let* ((fired nil)
          (proc (make-process :name "deb-test-true"

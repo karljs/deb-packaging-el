@@ -96,6 +96,21 @@
           (should (null (deb-packaging-commands--parse-ubuntu-lint-summary (buffer-name buf)))))
       (kill-buffer buf))))
 
+;;; deb-packaging-commands--parse-sbuild-summary
+
+(ert-deftest deb-packaging-test-commands/parse-sbuild-summary-kept-session ()
+  "The sbuild parser extracts a kept session name."
+  (with-temp-buffer
+    (insert "noise\nKeeping session: stonking-amd64-cb3ccddc-8ae0\nmore\n")
+    (should (equal (deb-packaging-commands--parse-sbuild-summary (buffer-name))
+                   '(:kept-session "stonking-amd64-cb3ccddc-8ae0")))))
+
+(ert-deftest deb-packaging-test-commands/parse-sbuild-summary-none ()
+  "The sbuild parser returns nil when no session was kept."
+  (with-temp-buffer
+    (insert "Status: successful\n")
+    (should (null (deb-packaging-commands--parse-sbuild-summary (buffer-name))))))
+
 ;;; deb-packaging-commands--run-summary-parser
 
 (ert-deftest deb-packaging-test-commands/run-summary-parser-lintian-source ()

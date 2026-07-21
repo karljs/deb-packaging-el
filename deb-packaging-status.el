@@ -110,6 +110,13 @@ Does not create or refresh a buffer."
       (propertize (format " %s" time) 'font-lock-face 'shadow)
     ""))
 
+(defun deb-packaging-status--kept-session-note ()
+  "Return a note naming the session kept by the last sbuild run, or nil."
+  (when-let* ((summary (deb-packaging-commands--run-summary 'sbuild))
+              (kept (plist-get summary :kept-session)))
+    (format "Session kept: %s ('e' on it in the infra schroots list ends it)"
+            kept)))
+
 (defun deb-packaging-status--lint-summary-note (key)
   "Return a colored findings summary for KEY's last lint run, or empty.
 Counts colored by severity, e.g. \" 2E 5W 12I\" or \" 1F 2E 3W\"."
@@ -442,7 +449,9 @@ Defensive: a missing prefix yields nil rather than signaling."
                'deb-packaging-binary-build-transient
                deb-packaging-transients-sbuild-shell-flag)
           (deb-packaging-status--insert-note
-           "Drops into a chroot shell on build failure"))))))
+           "Drops into a chroot shell on build failure"))
+        (when-let ((note (deb-packaging-status--kept-session-note)))
+          (deb-packaging-status--insert-note note))))))
 
 (defun deb-packaging-status--insert-lintian-child (section-type key label artifacts)
   "Insert one Lint child section of SECTION-TYPE for run key KEY.

@@ -301,6 +301,16 @@
       (should (> (length note) 0))
       (should (string-match-p ":" (substring-no-properties note))))))
 
+;;; Kept session note
+
+(ert-deftest deb-packaging-test-status/kept-session-note ()
+  (let ((deb-packaging-commands--run-history nil))
+    (should (null (deb-packaging-status--kept-session-note)))
+    (deb-packaging-commands--record-run
+     'sbuild 'failure "*buf*" '(:kept-session "sess-1"))
+    (should (string-match-p
+             "sess-1" (deb-packaging-status--kept-session-note)))))
+
 ;;; Mode map
 
 (ert-deftest deb-packaging-test-status/mode-map-keeps-p-for-navigation ()
