@@ -21,6 +21,7 @@
 (require 'deb-packaging-config)
 (require 'deb-packaging-dev)
 (require 'deb-packaging-transients)
+(require 'deb-packaging-display)
 
 ;;; Shared table helpers
 
@@ -335,7 +336,9 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
       (deb-packaging-dev--ensure-tramp-method)
       (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
                               "exec" name "--" "bash" "-l")))
-        (pop-to-buffer buf)))))
+        (with-current-buffer buf
+          (setq deb-packaging-display-category 'shell))
+        (deb-packaging-display-buffer buf 'shell)))))
 
 ;;; LXD list buffer
 

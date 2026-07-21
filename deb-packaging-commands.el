@@ -23,6 +23,7 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-ppa)
+(require 'deb-packaging-display)
 
 (declare-function deb-packaging-infra--ppa-owner "deb-packaging-infra")
 (declare-function deb-packaging-infra--ppa-name "deb-packaging-infra")
@@ -159,6 +160,7 @@ DIR sets the process working directory.  KEY (a symbol) enables run tracking."
     (with-current-buffer buf-name
       (when dir
         (setq default-directory dir))
+      (setq deb-packaging-display-category 'output)
       (add-hook 'comint-preoutput-filter-functions
                 #'deb-packaging-commands--filter-osc-sequences nil t)
       (add-hook 'comint-output-filter-functions
@@ -168,7 +170,7 @@ DIR sets the process working directory.  KEY (a symbol) enables run tracking."
       (when-let* ((proc (get-buffer-process buf-name)))
         (deb-packaging-commands--attach-run-sentinel proc key buf-name))
       (deb-packaging-commands--notify-status-refresh))
-    (pop-to-buffer buf-name)
+    (deb-packaging-display-buffer buf-name 'output)
     buf-name))
 
 ;;; dpkg-buildpackage

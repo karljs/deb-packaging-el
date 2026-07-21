@@ -15,6 +15,9 @@
 (require 'deb-packaging-test)
 (require 'deb-packaging-display)
 (require 'deb-packaging-transients)
+(require 'deb-packaging-commands)
+(require 'deb-packaging-dev)
+(require 'deb-packaging-infra)
 
 ;;; Action mapping
 
@@ -135,6 +138,60 @@ CATEGORY.  Buffers are killed afterwards."
   "Package transients use display-buffer-below-selected, not side windows."
   (should (eq (car deb-packaging-transients-display-action)
               'display-buffer-below-selected)))
+
+;;; Call-site wiring: output and shell
+
+(ert-deftest deb-packaging-test-display/run-command-displays-output ()
+  "Build output displays in a regular window and is category-marked."
+  (save-window-excursion
+    (cl-letf (((symbol-function 'make-comint-in-buffer)
+               (lambda (_name buf-name _program &rest _args)
+                 (get-buffer-create buf-name))))
+      (let ((buf-name (deb-packaging-commands--run-command "test" '("true"))))
+        (unwind-protect
+            (let ((win (get-buffer-window buf-name)))
+              (should win)
+              (should (eq (selected-window) win))
+              (should-not (window-parameter win 'window-side))
+              (should (eq (buffer-local-value 'deb-packaging-display-category
+                                              (get-buffer buf-name))
+                          'output)))
+          (kill-buffer buf-name))))))
+
+(ert-deftest deb-packaging-test-display/dev-exec-displays-shell ()
+  "The dev container shell displays via the shell category."
+  (deb-packaging-test--with-package-tree '(:name "mypkg" :version "1.0-1")
+    (let (seen)
+      (cl-letf (((symbol-function 'deb-packaging-dev--container-exists-p)
+                 (lambda (_) t))
+                ((symbol-function 'call-process) (lambda (&rest _) 0))
+                ((symbol-function 'deb-packaging-dev--ensure-tramp-method)
+                 #'ignore)
+                ((symbol-function 'make-comint)
+                 (lambda (name &rest _)
+                   (get-buffer-create (format "*%s*" name))))
+                ((symbol-function 'deb-packaging-display-buffer)
+                 (lambda (_buf cat) (setq seen cat) (selected-window))))
+        (unwind-protect
+            (deb-packaging-dev-exec)
+          (kill-buffer "*lxc:deb-dev-mypkg-noble*")))
+      (should (eq seen 'shell)))))
+
+(ert-deftest deb-packaging-test-display/infra-shell-displays-shell ()
+  "The infra container shell displays via the shell category."
+  (let (seen)
+    (cl-letf (((symbol-function 'call-process) (lambda (&rest _) 0))
+              ((symbol-function 'deb-packaging-dev--ensure-tramp-method)
+               #'ignore)
+              ((symbol-function 'make-comint)
+               (lambda (name &rest _)
+                 (get-buffer-create (format "*%s*" name))))
+              ((symbol-function 'deb-packaging-display-buffer)
+               (lambda (_buf cat) (setq seen cat) (selected-window))))
+      (unwind-protect
+          (deb-packaging-infra-shell-lxd-entry '(:type container :name "c1"))
+        (kill-buffer "*lxc:c1*")))
+    (should (eq seen 'shell))))
 
 (provide 'deb-packaging-test-display)
 ;;; deb-packaging-test-display.el ends here

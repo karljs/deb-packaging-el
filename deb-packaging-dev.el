@@ -26,6 +26,7 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-commands)
+(require 'deb-packaging-display)
 
 ;;; Variables
 
@@ -435,7 +436,9 @@ Errors if container doesn't exist."
     (call-process "lxc" nil nil nil "start" name)
     (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
                             "exec" name "--" "bash" "-l")))
-      (pop-to-buffer buf))))
+      (with-current-buffer buf
+        (setq deb-packaging-display-category 'shell))
+      (deb-packaging-display-buffer buf 'shell))))
 
 (defun deb-packaging-dev-project ()
   "Find file in the container. Uses projectile or project.el, else dired."
