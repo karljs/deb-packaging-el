@@ -123,6 +123,8 @@
   "Distro constants include the expected Ubuntu and Debian entries."
   (should (member "noble" deb-packaging-config-ubuntu-distros))
   (should (member "jammy" deb-packaging-config-ubuntu-distros))
+  (should (member "resolute" deb-packaging-config-ubuntu-distros))
+  (should (member "stonking" deb-packaging-config-ubuntu-distros))
   (should (member "sid" deb-packaging-config-debian-distros)))
 
 (provide 'deb-packaging-test-config)

@@ -92,6 +92,22 @@
 
 ;;; Next actionable key
 
+(ert-deftest deb-packaging-test-status/source-ready-p-native-without-orig ()
+  (should (deb-packaging-status--source-ready-p
+           (list :version "1.2" :orig-tarball nil))))
+
+(ert-deftest deb-packaging-test-status/source-ready-p-non-native-with-orig ()
+  (should (deb-packaging-status--source-ready-p
+           (list :version "1.2-3" :orig-tarball "/x/foo_1.2.orig.tar.gz"))))
+
+(ert-deftest deb-packaging-test-status/source-ready-p-non-native-missing-orig ()
+  (should-not (deb-packaging-status--source-ready-p
+               (list :version "1.2-3" :orig-tarball nil))))
+
+(ert-deftest deb-packaging-test-status/source-ready-p-no-version ()
+  ;; A partial context without a version must not block the phase.
+  (should (deb-packaging-status--source-ready-p (list :artifacts nil))))
+
 (ert-deftest deb-packaging-test-status/next-actionable-key-source-build-ready ()
   (let ((deb-packaging-commands--run-history nil)
         (ctx (deb-packaging-test-status--ctx
@@ -137,6 +153,16 @@
     (deb-packaging-commands--record-run 'autopkgtest 'success nil)
     (deb-packaging-commands--record-run 'dput 'success nil)
     (should-not (deb-packaging-status--next-actionable-key ctx))))
+
+(ert-deftest deb-packaging-test-status/next-actionable-key-source-blocked-missing-orig ()
+  ;; Non-native with no orig tarball: source is blocked, so the walk
+  ;; skips to dput, which is always ready.
+  (let ((deb-packaging-commands--run-history nil)
+        (ctx (append (deb-packaging-test-status--ctx
+                      '((dsc . nil) (source-changes . nil)
+                        (binary-changes . nil) (debs . nil)))
+                     (list :version "1.2-3" :orig-tarball nil))))
+    (should (eq (deb-packaging-status--next-actionable-key ctx) 'dput))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-running-not-ready ()
   ;; source-build is running so it is not `ready'.  dput is always ready,
@@ -274,6 +300,17 @@
     (let ((note (deb-packaging-status--run-time-note 'source-build)))
       (should (> (length note) 0))
       (should (string-match-p ":" (substring-no-properties note))))))
+
+;;; Mode map
+
+(ert-deftest deb-packaging-test-status/mode-map-keeps-p-for-navigation ()
+  "\"p\"/\"n\" stay section navigation; upload lives on \"U\"."
+  (should (eq (lookup-key deb-packaging-status-mode-map "p")
+              #'magit-section-backward))
+  (should (eq (lookup-key deb-packaging-status-mode-map "n")
+              #'magit-section-forward))
+  (should (eq (lookup-key deb-packaging-status-mode-map "U")
+              #'deb-packaging-status-upload)))
 
 ;;; PPA tests summary note
 

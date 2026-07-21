@@ -180,9 +180,23 @@ DIR sets the process working directory.  KEY (a symbol) enables run tracking."
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (deb-packaging-commands--run-command "source-build"
-                                (cons "dpkg-buildpackage" (or args '()))
-                                pkg-dir
-                                'source-build)))
+                                 (cons "dpkg-buildpackage" (or args '()))
+                                 pkg-dir
+                                 'source-build)))
+
+;;;###autoload
+(defun deb-packaging-commands-export-orig ()
+  "Fetch the orig tarball with `git ubuntu export-orig'."
+  (interactive)
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
+    (unless pkg-dir
+      (user-error "Not in a Debian package directory"))
+    (unless (executable-find "git-ubuntu")
+      (user-error "git-ubuntu not found in `exec-path'"))
+    (deb-packaging-commands--run-command "export-orig"
+                                 '("git" "ubuntu" "export-orig")
+                                 pkg-dir
+                                 'export-orig)))
 
 ;;; lintian
 

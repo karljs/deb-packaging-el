@@ -207,6 +207,10 @@ Strips epoch and Debian revision.  Native packages return VERSION."
         (match-string 1 file-version)
       file-version)))
 
+(defun deb-packaging-detect--native-version-p (version)
+  "Return non-nil when VERSION is native (no Debian revision)."
+  (not (string-match-p "-" (deb-packaging-detect--version-to-filename version))))
+
 (defun deb-packaging-detect--parse-changes-file (changes-file)
   "Parse CHANGES-FILE and return list of files it references."
   (when (file-readable-p changes-file)

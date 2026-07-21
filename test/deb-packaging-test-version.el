@@ -36,6 +36,14 @@
 (ert-deftest deb-packaging-test-version/upstream-version-multiple-dashes ()
   (should (string= (deb-packaging-detect--upstream-version "2.0-1-2") "2.0-1")))
 
+(ert-deftest deb-packaging-test-version/native-version-p-native ()
+  (should (deb-packaging-detect--native-version-p "1.2"))
+  (should (deb-packaging-detect--native-version-p "1:1.2")))
+
+(ert-deftest deb-packaging-test-version/native-version-p-non-native ()
+  (should-not (deb-packaging-detect--native-version-p "1.2-3"))
+  (should-not (deb-packaging-detect--native-version-p "1:1.2-3ubuntu1")))
+
 (ert-deftest deb-packaging-test-version/filename-version-three-field-deb ()
   (should (string= (deb-packaging-detect--filename-version "foo_1.2-3_amd64.deb") "1.2-3")))
 

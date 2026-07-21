@@ -128,6 +128,143 @@
   (let ((raw "deb http://example.com/ubuntu noble main"))
     (should (string= (deb-packaging-commands--expand-extra-repo raw "noble") raw))))
 
+;;; extra-repo multi-value reader and format
+
+(defun deb-packaging-test-commands--repo-obj (&optional value)
+  "Return an extra-repo infix object, its value slot set to VALUE if given."
+  (let ((obj (make-instance 'deb-packaging-transients--extra-repo-argument)))
+    (when value
+      (oset obj value value))
+    obj))
+
+(defmacro deb-packaging-test-commands--with-repo-read (choice &rest body)
+  "Run BODY with repo candidates mocked and `completing-read' returning CHOICE."
+  (declare (indent 1) (debug (form body)))
+  `(cl-letf (((symbol-function 'deb-packaging-infra--list-ppas)
+              (lambda () nil))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) ,choice))
+             (deb-packaging-config-extra-ppas nil))
+     ,@body))
+
+(ert-deftest deb-packaging-test-commands/extra-repo-reader-adds-first ()
+  (deb-packaging-test-commands--with-repo-read "ppa:me/x"
+    (should (equal (deb-packaging-transients--extra-repo-read nil)
+                   '("ppa:me/x")))))
+
+(ert-deftest deb-packaging-test-commands/extra-repo-reader-accumulates ()
+  "A second selection adds to the set rather than replacing it."
+  (deb-packaging-test-commands--with-repo-read "proposed"
+    (should (equal (deb-packaging-transients--extra-repo-read '("ppa:me/x"))
+                   '("ppa:me/x" "proposed")))))
+
+(ert-deftest deb-packaging-test-commands/extra-repo-reader-toggles-off ()
+  "Selecting a present entry removes it."
+  (deb-packaging-test-commands--with-repo-read "ppa:me/x"
+    (should (equal (deb-packaging-transients--extra-repo-read
+                    '("ppa:me/x" "proposed"))
+                   '("proposed")))))
+
+(ert-deftest deb-packaging-test-commands/extra-repo-reader-empty-keeps-set ()
+  (deb-packaging-test-commands--with-repo-read ""
+    (should (equal (deb-packaging-transients--extra-repo-read '("ppa:me/x"))
+                   '("ppa:me/x")))
+    (should (null (deb-packaging-transients--extra-repo-read nil)))))
+
+(ert-deftest deb-packaging-test-commands/extra-repo-reader-legacy-string ()
+  "A pre-multi-value string value is treated as a one-entry set."
+  (deb-packaging-test-commands--with-repo-read "proposed"
+    (should (equal (deb-packaging-transients--extra-repo-read "ppa:me/x")
+                   '("ppa:me/x" "proposed")))))
+
+(ert-deftest deb-packaging-test-commands/extra-repo-init-value-roundtrip ()
+  "Flat --extra-repository= args in the prefix value restore as entries,
+and re-emit without doubling the argument."
+  (let ((obj (make-instance 'deb-packaging-transients--extra-repo-argument
+                            :argument "--extra-repository="
+                            :multi-value 'repeat))
+        (transient--prefix (make-instance 'transient-prefix)))
+    (oset transient--prefix value
+          '("--dist=noble"
+            "--extra-repository=ppa:me/x"
+            "--extra-repository=proposed"))
+    (transient-init-value obj)
+    (should (equal (oref obj value) '("ppa:me/x" "proposed")))
+    (should (equal (transient-infix-value obj)
+                   '("--extra-repository=ppa:me/x"
+                     "--extra-repository=proposed")))))
+
+;;; extra-package multi-value reader and init-value
+
+(defmacro deb-packaging-test-commands--with-pkg-read (choice &rest body)
+  "Run BODY in a package tree with one .deb, `completing-read' returning CHOICE."
+  (declare (indent 1) (debug (form body)))
+  `(deb-packaging-test--with-package-tree
+       '(:name "mypkg" :version "1.0-1" :distro "noble"
+               :artifacts (("mypkg_1.0-1_amd64.deb" . "")))
+     (let ((deb-path (expand-file-name "mypkg_1.0-1_amd64.deb"
+                                       pkg-parent-dir)))
+       (cl-letf (((symbol-function 'completing-read)
+                  (lambda (&rest _) ,choice)))
+         ,@body))))
+
+(ert-deftest deb-packaging-test-commands/extra-pkg-reader-adds-first ()
+  (deb-packaging-test-commands--with-pkg-read deb-path
+    (should (equal (deb-packaging-transients--extra-package-read nil)
+                   (list deb-path)))))
+
+(ert-deftest deb-packaging-test-commands/extra-pkg-reader-accumulates ()
+  "A second selection adds to the set rather than replacing it."
+  (deb-packaging-test-commands--with-pkg-read deb-path
+    (should (equal (deb-packaging-transients--extra-package-read
+                    '("/other/dep_1.0-1_amd64.deb"))
+                   (list "/other/dep_1.0-1_amd64.deb" deb-path)))))
+
+(ert-deftest deb-packaging-test-commands/extra-pkg-reader-toggles-off ()
+  "Selecting a present entry removes it."
+  (deb-packaging-test-commands--with-pkg-read deb-path
+    (should (equal (deb-packaging-transients--extra-package-read
+                    (list "/other/dep_1.0-1_amd64.deb" deb-path))
+                   '("/other/dep_1.0-1_amd64.deb")))))
+
+(ert-deftest deb-packaging-test-commands/extra-pkg-reader-empty-keeps-set ()
+  (deb-packaging-test-commands--with-pkg-read ""
+    (should (equal (deb-packaging-transients--extra-package-read
+                    (list deb-path))
+                   (list deb-path)))
+    (should (null (deb-packaging-transients--extra-package-read nil)))))
+
+(ert-deftest deb-packaging-test-commands/extra-pkg-init-value-roundtrip ()
+  "Flat --extra-package= args in the prefix value restore as paths,
+and re-emit without doubling the argument."
+  (let ((obj (make-instance 'deb-packaging-transients--extra-package-argument
+                            :argument "--extra-package="
+                            :multi-value 'repeat))
+        (transient--prefix (make-instance 'transient-prefix)))
+    (oset transient--prefix value
+          '("--dist=noble"
+            "--extra-package=/a/dep_1.0-1_amd64.deb"
+            "--extra-package=/b/lib_2.0-1_amd64.deb"))
+    (transient-init-value obj)
+    (should (equal (oref obj value)
+                   '("/a/dep_1.0-1_amd64.deb" "/b/lib_2.0-1_amd64.deb")))
+    (should (equal (transient-infix-value obj)
+                   '("--extra-package=/a/dep_1.0-1_amd64.deb"
+                     "--extra-package=/b/lib_2.0-1_amd64.deb")))))
+
+(ert-deftest deb-packaging-test-commands/extra-repo-format-compact ()
+  "Formatting shows entries only: no expansion, no full deb line."
+  (let* ((obj (deb-packaging-test-commands--repo-obj
+               '("ppa:me/x" "proposed")))
+         (text (substring-no-properties (transient-format-value obj))))
+    (should (string-match-p "ppa:me/x" text))
+    (should (string-match-p "proposed" text))
+    (should-not (string-match-p "deb " text))
+    (should-not (string-match-p "launchpadcontent" text)))
+  (should (string-match-p
+           "none"
+           (transient-format-value (deb-packaging-test-commands--repo-obj)))))
+
 ;;; deb-packaging-commands-sbuild multi-value
 
 (ert-deftest deb-packaging-test-commands/sbuild-multiple-extra-repos ()
@@ -424,6 +561,28 @@
       (should-not (cl-some (lambda (a) (string-prefix-p "--ppa=" a))
                            captured-args))
       (should (member "--apt-upgrade" captured-args)))))
+
+;;; git ubuntu export-orig
+
+(ert-deftest deb-packaging-test-commands/export-orig-runs-git-ubuntu ()
+  "export-orig runs `git ubuntu export-orig' in the package dir."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let (captured)
+      (cl-letf (((symbol-function 'executable-find) (lambda (_) "git-ubuntu"))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (name args &optional dir key)
+                   (setq captured (list name args dir key)))))
+        (deb-packaging-commands-export-orig))
+      (should (equal (nth 1 captured) '("git" "ubuntu" "export-orig")))
+      (should (string= (nth 2 captured) pkg-dir))
+      (should (eq (nth 3 captured) 'export-orig)))))
+
+(ert-deftest deb-packaging-test-commands/export-orig-missing-git-ubuntu-errors ()
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (cl-letf (((symbol-function 'executable-find) (lambda (_) nil)))
+      (should-error (deb-packaging-commands-export-orig) :type 'user-error))))
 
 (provide 'deb-packaging-test-commands)
 ;;; deb-packaging-test-commands.el ends here

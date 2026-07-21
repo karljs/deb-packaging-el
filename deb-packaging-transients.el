@@ -16,13 +16,13 @@
 ;;; Code:
 
 (require 'transient)
+(require 'subr-x)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-ppa)
 
 ;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging-commands--runner-choices "deb-packaging-commands")
-(declare-function deb-packaging-commands--expand-extra-repo "deb-packaging-commands")
 
 ;; Tool-specific variables live in deb-packaging-commands.el.
 (defvar deb-packaging-commands-sbuild-variants)
@@ -53,6 +53,7 @@ Used as :environment for the prefixes in this package."
 
 ;; Forward-declare command functions.
 (declare-function deb-packaging-commands-source-build "deb-packaging-commands")
+(declare-function deb-packaging-commands-export-orig "deb-packaging-commands")
 (declare-function deb-packaging-commands-sbuild "deb-packaging-commands")
 (declare-function deb-packaging-commands-lintian-source "deb-packaging-commands")
 (declare-function deb-packaging-commands-lintian-binary "deb-packaging-commands")
@@ -76,18 +77,21 @@ Used as :environment for the prefixes in this package."
 
 ;;;###autoload(autoload 'deb-packaging-commands-source-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-commands-source-build-transient ()
-  "Build a Debian source package with dpkg-buildpackage."
+  "Build a Debian source package, or fetch its orig tarball.
+dpkg-buildpackage arguments apply only to \"Build source\" (the
+lint-transient pattern)."
   :value '("-S" "-d" "-nc" "-sa" "-I" "-i")
   :environment #'deb-packaging-transients--env
-  ["Arguments"
+  ["dpkg-buildpackage arguments"
    ("-S" "Source build"            "-S")
    ("-d" "Skip build-dep check"    "-d")
    ("-nc" "No pre-clean"           "-nc")
    ("-sa" "Include orig tarball"   "-sa")
    ("-I"  "Tar ignore pattern"     "-I")
    ("-i"  "Diff ignore pattern"    "-i")]
-  ["Build"
-   ("s" "Build source" deb-packaging-commands-source-build)])
+  ["Run"
+   ("s" "Build source" deb-packaging-commands-source-build)
+   ("e" "Export orig (git ubuntu)" deb-packaging-commands-export-orig)])
 
 ;;; 2. Binary build (sbuild)
 
@@ -105,38 +109,55 @@ Also restores the saved extra-repository set for the current package and distro.
 (defclass deb-packaging-transients--extra-repo-argument (transient-option) ()
   "sbuild --extra-repository= option, expanded to a repo string at build time.")
 
-(cl-defmethod transient-infix-read ((obj deb-packaging-transients--extra-repo-argument))
-  "Read an extra-repository value.
+(defun deb-packaging-transients--extra-repo-read (current)
+  "Read one extra-repository entry and toggle it against CURRENT.
+CURRENT is the entry list, a legacy single-entry string, or nil.
 Completes against `deb-packaging-commands-sbuild-variants' names, known
-PPAs, and `deb-packaging-config-extra-ppas'.  A variant name or ppa:
-address expands at build time; anything else is passed to sbuild verbatim.
-Returns nil on empty input to end multi-value entry."
-  (ignore obj)
-  (let* ((variants (mapcar #'car deb-packaging-commands-sbuild-variants))
+PPAs, and `deb-packaging-config-extra-ppas'.  Selecting an entry already
+in the set removes it; empty input keeps the set.  Returns the new list
+of entries, or nil when empty.  A variant name or ppa: address expands
+at build time; anything else is passed to sbuild verbatim."
+  (let* ((current (cond ((listp current) current)
+                        (current (list current))))
+         (variants (mapcar #'car deb-packaging-commands-sbuild-variants))
          (ppas (deb-packaging-infra--list-ppas))
          (choices (delete-dups
-                   (append variants ppas deb-packaging-config-extra-ppas))))
-    (let ((choice (completing-read
-                   "Extra apt repo (empty to stop): "
-                   choices nil nil nil)))
-      (when (and choice (not (string-empty-p choice)))
-        choice))))
+                   (append variants ppas deb-packaging-config-extra-ppas)))
+         (prompt (if current
+                     (format "Extra apt repo (%s): "
+                             (mapconcat #'identity current ", "))
+                   "Extra apt repo: "))
+         (choice (completing-read prompt choices nil nil)))
+    (cond
+     ((or (null choice) (string-empty-p choice)) current)
+     ((member choice current) (remove choice current))
+     (t (append current (list choice))))))
+
+(cl-defmethod transient-infix-read ((obj deb-packaging-transients--extra-repo-argument))
+  "Toggle one extra-repository entry against OBJ's current set."
+  (deb-packaging-transients--extra-repo-read
+   (and (slot-boundp obj 'value) (oref obj value))))
+
+(cl-defmethod transient-init-value ((obj deb-packaging-transients--extra-repo-argument))
+  "Seed OBJ's entries from flat --extra-repository= args in the prefix value.
+Works around upstream repeat-mode init-value, which keeps whole arg
+strings and so doubles the argument when the value is re-emitted."
+  (oset obj value
+        (mapcar (lambda (a) (string-remove-prefix "--extra-repository=" a))
+                (seq-filter
+                 (lambda (a)
+                   (and (stringp a)
+                        (string-prefix-p "--extra-repository=" a)))
+                 (oref transient--prefix value)))))
 
 (cl-defmethod transient-format-value ((obj deb-packaging-transients--extra-repo-argument))
-  "Show each chosen value and, when it differs, its expanded repo line."
-  (let ((v (oref obj value)))
+  "Show the chosen entries, comma-separated."
+  (let ((v (and (slot-boundp obj 'value) (oref obj value))))
     (if v
-        (mapconcat
-         (lambda (entry)
-           (let ((expanded (deb-packaging-commands--expand-extra-repo
-                            entry (deb-packaging-config--effective-distro))))
-             (if (string= entry expanded)
-                 (propertize entry 'face 'transient-value)
-               (concat (propertize entry 'face 'transient-value)
-                       (propertize (format " → %s" expanded)
-                                   'face 'transient-inactive-value)))))
-         (if (listp v) v (list v))
-         (propertize "," 'face 'transient-inactive-value))
+        (mapconcat (lambda (entry)
+                     (propertize entry 'face 'transient-value))
+                   (if (listp v) v (list v))
+                   (propertize "," 'face 'transient-inactive-value))
       (propertize "none" 'face 'transient-inactive-value))))
 
 (defclass deb-packaging-transients--extra-package-argument (transient-option) ()
@@ -145,26 +166,53 @@ Completes against .deb files in the build-output directory but accepts
 any path.  Multi-valued: each .deb becomes a separate --extra-package=.")
 
 (cl-defmethod transient-infix-read ((obj deb-packaging-transients--extra-package-argument))
-  "Read an extra-package .deb file path.
-Completes against .deb files in the build-output (parent) directory,
-falling back to file-name completion.  Result is made absolute so sbuild
-resolves it regardless of working directory."
-  (ignore obj)
-  (let* ((pkg-dir (deb-packaging-detect--find-package-dir))
+  "Toggle one extra-package .deb against OBJ's current set."
+  (deb-packaging-transients--extra-package-read
+   (and (slot-boundp obj 'value) (oref obj value))))
+
+(defun deb-packaging-transients--extra-package-read (current)
+  "Read one extra-package .deb and toggle it against CURRENT.
+CURRENT is the path list, a legacy single-path string, or nil.
+Completes against .deb files in the build-output directory, falling
+back to file-name reading.  Selecting a path already in the set
+removes it; empty input keeps the set.  Returns absolute paths, or
+nil when empty."
+  (let* ((current (cond ((listp current) current)
+                        (current (list current))))
+         (pkg-dir (deb-packaging-detect--find-package-dir))
          (parent-dir (when pkg-dir (deb-packaging-detect--parent-dir pkg-dir)))
          (debs (when (and parent-dir (file-directory-p parent-dir))
                  (directory-files parent-dir t "\\.deb\\'")))
          (choice (if debs
                      (completing-read
-                      "Extra package (.deb, empty to stop): "
-                      debs nil nil nil nil "")
+                      (if current
+                          (format "Extra package .deb (%s): "
+                                  (mapconcat #'file-name-nondirectory
+                                             current ", "))
+                        "Extra package .deb: ")
+                      debs nil nil)
                    (read-file-name "Extra package (.deb): "
                                    (file-name-as-directory
                                     (or parent-dir default-directory))
                                    nil t))))
     (if (or (null choice) (string-empty-p choice))
-        nil
-      (expand-file-name choice))))
+        current
+      (let ((path (expand-file-name choice)))
+        (if (member path current)
+            (remove path current)
+          (append current (list path)))))))
+
+(cl-defmethod transient-init-value ((obj deb-packaging-transients--extra-package-argument))
+  "Seed OBJ's paths from flat --extra-package= args in the prefix value.
+Works around upstream repeat-mode init-value, which keeps whole arg
+strings and so doubles the argument when the value is re-emitted."
+  (oset obj value
+        (mapcar (lambda (a) (string-remove-prefix "--extra-package=" a))
+                (seq-filter
+                 (lambda (a)
+                   (and (stringp a)
+                        (string-prefix-p "--extra-package=" a)))
+                 (oref transient--prefix value)))))
 
 (cl-defmethod transient-format-value ((obj deb-packaging-transients--extra-package-argument))
   "Show the selected .deb file(s) by base name."
@@ -197,13 +245,13 @@ resolves it regardless of working directory."
     ("-e" "Extra repository"
      "--extra-repository="
      :class deb-packaging-transients--extra-repo-argument
-     :multi-value t
+     :multi-value repeat
      :description "Extra apt repo")
-   ("-p" "Extra package"
-    "--extra-package="
-    :class deb-packaging-transients--extra-package-argument
-    :multi-value t
-    :description "Local .deb to install in chroot")]
+    ("-p" "Extra package"
+     "--extra-package="
+     :class deb-packaging-transients--extra-package-argument
+     :multi-value repeat
+     :description "Local .deb to install in chroot")]
   ["Build"
    ("b" "Build binary" deb-packaging-commands-sbuild)])
 

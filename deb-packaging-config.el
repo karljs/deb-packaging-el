@@ -56,7 +56,7 @@ Falls back to \"noble\"."
 ;;; Distribution choices
 
 (defconst deb-packaging-config-ubuntu-distros
-  '("focal" "jammy" "noble" "oracular" "plucky" "questing")
+  '("focal" "jammy" "noble" "oracular" "plucky" "questing" "resolute" "stonking")
   "Known Ubuntu distribution codenames, alphabetical.")
 
 (defconst deb-packaging-config-debian-distros

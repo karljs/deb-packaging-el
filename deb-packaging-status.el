@@ -195,6 +195,17 @@ NEXT-KEY); collapse the rest."
    ((eq key next-key) nil)
    (t t)))
 
+(defun deb-packaging-status--source-ready-p (ctx)
+  "Return non-nil when the source build inputs are in place.
+A non-native package needs its .orig.tar.* beside the tree; a native
+package builds from the tree alone.  A missing version means a partial
+context, which must not block."
+  (let ((version (plist-get ctx :version))
+        (orig (plist-get ctx :orig-tarball)))
+    (or orig
+        (null version)
+        (deb-packaging-detect--native-version-p version))))
+
 ;;; Rendering helpers
 ;;
 ;; magit-section-mode sets font-lock-defaults, so use `font-lock-face' on
@@ -345,7 +356,8 @@ last-run time, DETAIL is an optional dimmed fragment."
          (orig-tarball (plist-get ctx :orig-tarball))
          (parent-dir (plist-get ctx :parent-dir))
          (done (and dsc src-changes))
-         (state (deb-packaging-status--phase-state 'source-build done t)))
+         (ready (deb-packaging-status--source-ready-p ctx))
+         (state (deb-packaging-status--phase-state 'source-build done ready)))
     (magit-insert-section (deb-packaging-source nil hide)
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Source build" 'source-build))
@@ -363,12 +375,16 @@ last-run time, DETAIL is an optional dimmed fragment."
                         (propertize "none" 'font-lock-face 'shadow)))
                 (when source-format
                   (cons "Format" source-format)))))
-        (when done
+        (cond
+         (done
           (when dsc (deb-packaging-status--insert-file-line dsc))
           (when src-changes (deb-packaging-status--insert-file-line src-changes))
           (dolist (b buildinfo)
             (when (string-match-p "_source\\.buildinfo$" b)
-              (deb-packaging-status--insert-file-line b))))))))
+              (deb-packaging-status--insert-file-line b))))
+         ((not ready)
+          (deb-packaging-status--insert-note
+           "missing orig tarball; run git ubuntu export-orig")))))))
 
 (defun deb-packaging-status--transient-args (prefix)
   "Return PREFIX's saved/default transient args, or nil.
@@ -722,7 +738,8 @@ Walks phases in flow order; picks which phase smart-fold expands."
          (phases
           (list (cons 'source-build
                       (deb-packaging-status--phase-state
-                       'source-build (and dsc src-changes) t))
+                       'source-build (and dsc src-changes)
+                       (deb-packaging-status--source-ready-p ctx)))
                 (cons 'sbuild
                       (deb-packaging-status--phase-state
                        'sbuild (and bin-changes debs) dsc))
@@ -755,7 +772,9 @@ Point ends on the first phase heading."
           (deb-packaging-status--insert-header ctx)
           (deb-packaging-status--insert-source
            ctx (deb-packaging-status--hide-phase-p
-                (deb-packaging-status--phase-state 'source-build src-done t)
+                (deb-packaging-status--phase-state
+                 'source-build src-done
+                 (deb-packaging-status--source-ready-p ctx))
                 next 'source-build))
           (deb-packaging-status--insert-binary
            ctx (deb-packaging-status--hide-phase-p
@@ -912,7 +931,7 @@ Navigation and folding come from `magit-section-mode'."
   "b"   #'deb-packaging-status-build-binary
   "l"   #'deb-packaging-status-lint
   "t"   #'deb-packaging-status-test
-  "p"   #'deb-packaging-status-upload
+  "U"   #'deb-packaging-status-upload
   "c"   #'deb-packaging-status-clean
   "r"   #'deb-packaging-status-reset
   "e"   #'deb-packaging-status-dev
