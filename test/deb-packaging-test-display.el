@@ -136,10 +136,42 @@ CATEGORY.  Buffers are killed afterwards."
 
 ;;; Transient display action
 
-(ert-deftest deb-packaging-test-display/transient-action-is-below-selected ()
-  "Package transients use display-buffer-below-selected, not side windows."
-  (should (eq (car deb-packaging-transients-display-action)
-              'display-buffer-below-selected)))
+(ert-deftest deb-packaging-test-display/transient-action-reuses-process-window ()
+  "The transient menu replaces a visible output/shell window, no new split."
+  (save-window-excursion
+    (deb-packaging-test-display--with-marked-buffers ((log-buf 'output))
+      (let ((menu-buf (get-buffer-create "*dp-test-menu*"))
+            (status-buf (get-buffer-create "*dp-test-status*")))
+        (unwind-protect
+            (progn
+              (set-window-buffer (selected-window) status-buf)
+              (let ((log-win (split-window (selected-window) nil 'below)))
+                (set-window-buffer log-win log-buf)
+                (select-window (get-buffer-window status-buf))
+                (display-buffer menu-buf deb-packaging-transients-display-action)
+                (should (eq (get-buffer-window menu-buf) log-win))
+                (should (= (length (window-list)) 2))
+                ;; Transient exit kills the menu buffer; the log returns.
+                (kill-buffer menu-buf)
+                (should (eq (window-buffer log-win) log-buf))))
+          (when (buffer-live-p menu-buf)
+            (kill-buffer menu-buf)))))))
+
+(ert-deftest deb-packaging-test-display/transient-action-fallback-below ()
+  "With no output/shell window visible, the menu opens below, dedicated."
+  (save-window-excursion
+    (let ((menu-buf (get-buffer-create "*dp-test-menu*"))
+          (start (selected-window)))
+      (unwind-protect
+          (progn
+            (display-buffer menu-buf deb-packaging-transients-display-action)
+            (let ((win (get-buffer-window menu-buf)))
+              (should win)
+              (should-not (eq win start))
+              (should (window-dedicated-p win))
+              (should-not (window-parameter win 'window-side))))
+        (when (buffer-live-p menu-buf)
+          (kill-buffer menu-buf))))))
 
 ;;; Call-site wiring: output and shell
 

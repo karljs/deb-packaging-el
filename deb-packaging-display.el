@@ -54,6 +54,26 @@ Return the window used, or nil when no category window is visible."
                        (window-list nil 'nomini))))
     (window--display-buffer buffer window 'reuse alist)))
 
+(defun deb-packaging-display--transient-window (buffer alist)
+  "Display the transient menu BUFFER without adding a split.
+Reuse a visible, non-dedicated, non-side window showing an output or
+shell buffer; the menu replaces the process buffer and transient
+restores it on exit.  Otherwise open a new dedicated window below the
+selected one."
+  (if-let ((window (seq-find
+                    (lambda (w)
+                      (and (not (window-dedicated-p w))
+                           (not (window-parameter w 'window-side))
+                           (memq (buffer-local-value
+                                  'deb-packaging-display-category
+                                  (window-buffer w))
+                                 '(output shell))))
+                    (window-list nil 'nomini))))
+      (window--display-buffer buffer window 'reuse alist)
+    (when-let ((window (display-buffer-below-selected buffer alist)))
+      (set-window-dedicated-p window t)
+      window)))
+
 (defun deb-packaging-display--action (category)
   "Return the `display-buffer' action for CATEGORY.
 CATEGORY is one of status, list, report, output, or shell."

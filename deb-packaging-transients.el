@@ -20,6 +20,7 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-ppa)
+(require 'deb-packaging-display)
 
 ;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging-commands--runner-choices "deb-packaging-commands")
@@ -36,13 +37,12 @@
   "--build-failed-commands=%SBUILD_SHELL")
 
 (defconst deb-packaging-transients-display-action
-  '(display-buffer-below-selected (dedicated . t) (inhibit-same-window . t))
+  '(deb-packaging-display--transient-window (inhibit-same-window . t))
   "Display action for this package's transients.
-A regular window below the invoking window, sized to fit by transient.
-Side windows are avoided so the transient never shares the bottom side
-area with user `display-buffer-alist' rules (e.g. comint buffers); that
-sharing previously caused horizontal splits and size mangling on
-minibuffer suspend/resume.")
+The menu replaces a visible build-output or shell window instead of
+adding a split; with none visible it opens below the invoking window.
+Side windows are avoided so the menu never shares the bottom side area
+with user `display-buffer-alist' rules (e.g. comint buffers).")
 
 (defun deb-packaging-transients--env (fn)
   "Run FN with the package's transient display action bound.
