@@ -25,6 +25,7 @@
 (require 'deb-packaging-config)
 (require 'deb-packaging-ppa)
 (require 'deb-packaging-commands)
+(require 'deb-packaging-display)
 
 ;;; Parsing
 
@@ -410,7 +411,8 @@ set; the used PPA is saved per package+distro."
       (when name
         (deb-packaging-ppa-save name distro ppa))
       (deb-packaging-ppa-tests--fetch ppa name distro)
-      (pop-to-buffer (deb-packaging-ppa-tests--buffer-name ppa)))))
+      (deb-packaging-display-buffer
+       (deb-packaging-ppa-tests--buffer-name ppa) 'report))))
 
 (provide 'deb-packaging-ppa-tests)
 ;;; deb-packaging-ppa-tests.el ends here

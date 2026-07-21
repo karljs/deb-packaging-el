@@ -208,7 +208,7 @@ Use schroot at point, or prompt."
       (unless (derived-mode-p 'deb-packaging-infra-schroots-mode)
         (deb-packaging-infra-schroots-mode))
       (deb-packaging-infra-refresh-schroots))
-    (pop-to-buffer buf)))
+    (deb-packaging-display-buffer buf 'list)))
 
 ;;; LXD Management (autopkgtest images and dev containers)
 
@@ -402,7 +402,7 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
       (unless (derived-mode-p 'deb-packaging-infra-lxd-mode)
         (deb-packaging-infra-lxd-mode))
       (deb-packaging-infra-refresh-lxd))
-    (pop-to-buffer buf)))
+    (deb-packaging-display-buffer buf 'list)))
 
 ;;; QEMU Management
 
@@ -499,7 +499,7 @@ Use image at point, or prompt."
       (unless (derived-mode-p 'deb-packaging-infra-qemu-images-mode)
         (deb-packaging-infra-qemu-images-mode))
       (deb-packaging-infra-refresh-qemu-images))
-    (pop-to-buffer buf)))
+    (deb-packaging-display-buffer buf 'list)))
 
 ;;; PPA (Launchpad) Management
 
@@ -747,7 +747,7 @@ BUF is the PPAs list buffer; TEMP-BUF holds output."
       (unless (derived-mode-p 'deb-packaging-infra-ppas-mode)
         (deb-packaging-infra-ppas-mode))
       (deb-packaging-infra-refresh-ppas))
-    (pop-to-buffer buf)))
+    (deb-packaging-display-buffer buf 'list)))
 
 ;;; Infrastructure dispatch
 

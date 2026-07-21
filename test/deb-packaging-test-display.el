@@ -18,6 +18,8 @@
 (require 'deb-packaging-commands)
 (require 'deb-packaging-dev)
 (require 'deb-packaging-infra)
+(require 'deb-packaging-status)
+(require 'deb-packaging-ppa-tests)
 
 ;;; Action mapping
 
@@ -192,6 +194,51 @@ CATEGORY.  Buffers are killed afterwards."
           (deb-packaging-infra-shell-lxd-entry '(:type container :name "c1"))
         (kill-buffer "*lxc:c1*")))
     (should (eq seen 'shell))))
+
+;;; Call-site wiring: same-window categories
+
+(ert-deftest deb-packaging-test-display/status-displays-status ()
+  "The status buffer displays via the status category."
+  (deb-packaging-test--with-package-tree '(:name "mypkg" :version "1.0-1")
+    (let (seen)
+      (cl-letf (((symbol-function 'deb-packaging-status--render) #'ignore)
+                ((symbol-function 'deb-packaging-status--goto-first-phase)
+                 #'ignore)
+                ((symbol-function 'deb-packaging-display-buffer)
+                 (lambda (_buf cat) (setq seen cat) (selected-window))))
+        (deb-packaging-status))
+      (should (eq seen 'status)))))
+
+(ert-deftest deb-packaging-test-display/infra-schroots-displays-list ()
+  "The schroots list displays via the list category."
+  (let (seen)
+    (cl-letf (((symbol-function 'deb-packaging-infra-refresh-schroots) #'ignore)
+              ((symbol-function 'deb-packaging-display-buffer)
+               (lambda (_buf cat) (setq seen cat) (selected-window))))
+      (deb-packaging-infra-schroots))
+    (should (eq seen 'list))))
+
+(ert-deftest deb-packaging-test-display/infra-ppas-displays-list ()
+  "The PPAs list displays via the list category."
+  (let (seen)
+    (cl-letf (((symbol-function 'deb-packaging-infra-refresh-ppas) #'ignore)
+              ((symbol-function 'deb-packaging-display-buffer)
+               (lambda (_buf cat) (setq seen cat) (selected-window))))
+      (deb-packaging-infra-ppas))
+    (should (eq seen 'list))))
+
+(ert-deftest deb-packaging-test-display/ppa-tests-show-displays-report ()
+  "The PPA test report displays via the report category."
+  (deb-packaging-test--with-package-tree '(:name "mypkg" :version "1.0-1")
+    (let (seen)
+      (cl-letf (((symbol-function 'deb-packaging-commands--resolve-ppa)
+                 (lambda (_) "ppa:test/ppa"))
+                ((symbol-function 'deb-packaging-ppa-save) #'ignore)
+                ((symbol-function 'deb-packaging-ppa-tests--fetch) #'ignore)
+                ((symbol-function 'deb-packaging-display-buffer)
+                 (lambda (_buf cat) (setq seen cat) (selected-window))))
+        (deb-packaging-ppa-tests-show '("--ppa=ppa:test/ppa"))
+        (should (eq seen 'report))))))
 
 (provide 'deb-packaging-test-display)
 ;;; deb-packaging-test-display.el ends here

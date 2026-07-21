@@ -28,6 +28,7 @@
 (require 'deb-packaging-commands)
 (require 'deb-packaging-ppa)
 (require 'deb-packaging-transients)
+(require 'deb-packaging-display)
 
 ;; Cross-file references not pulled in by require (avoids load cycles).
 (declare-function deb-packaging-dispatch "deb-packaging")
@@ -963,7 +964,7 @@ Navigation and folding come from `magit-section-mode'."
         (deb-packaging-status-mode))
       (deb-packaging-status--render)
       (deb-packaging-status--goto-first-phase))
-    (pop-to-buffer buf)))
+    (deb-packaging-display-buffer buf 'status)))
 
 (provide 'deb-packaging-status)
 ;;; deb-packaging-status.el ends here
