@@ -36,13 +36,13 @@
   "--build-failed-commands=%SBUILD_SHELL")
 
 (defconst deb-packaging-transients-display-action
-  '(display-buffer-in-side-window (side . bottom) (slot . -1)
-                                  (dedicated . t) (inhibit-same-window . t))
-  "Side-window action for this package's transients.
-Slot -1 avoids reusing the slot-0 side window that user
-`display-buffer-alist' rules commonly assign to comint buffers.
-Reusing such a window makes transient mangle it: on minibuffer
-suspend/resume it grows to fit the wrong buffer's contents.")
+  '(display-buffer-below-selected (dedicated . t) (inhibit-same-window . t))
+  "Display action for this package's transients.
+A regular window below the invoking window, sized to fit by transient.
+Side windows are avoided so the transient never shares the bottom side
+area with user `display-buffer-alist' rules (e.g. comint buffers); that
+sharing previously caused horizontal splits and size mangling on
+minibuffer suspend/resume.")
 
 (defun deb-packaging-transients--env (fn)
   "Run FN with the package's transient display action bound.

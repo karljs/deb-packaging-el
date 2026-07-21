@@ -14,6 +14,7 @@
 (require 'ert)
 (require 'deb-packaging-test)
 (require 'deb-packaging-display)
+(require 'deb-packaging-transients)
 
 ;;; Action mapping
 
@@ -127,6 +128,13 @@ CATEGORY.  Buffers are killed afterwards."
         (let ((win (get-buffer-window buf)))
           (should win)
           (should-not (window-parameter win 'window-side)))))))
+
+;;; Transient display action
+
+(ert-deftest deb-packaging-test-display/transient-action-is-below-selected ()
+  "Package transients use display-buffer-below-selected, not side windows."
+  (should (eq (car deb-packaging-transients-display-action)
+              'display-buffer-below-selected)))
 
 (provide 'deb-packaging-test-display)
 ;;; deb-packaging-test-display.el ends here
