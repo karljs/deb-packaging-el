@@ -112,6 +112,16 @@ Each plist has keys: :name, :config-file, :description, :directory."
                       result))))))
     (nreverse result))))
 
+(defun deb-packaging-infra--list-sessions ()
+  "Return names of active schroot sessions."
+  (when-let ((output (deb-packaging-detect--call-process-string
+                      "schroot" "--list" "--all-sessions")))
+    (delq nil
+          (mapcar (lambda (line)
+                    (when (string-prefix-p "session:" line)
+                      (string-remove-prefix "session:" line)))
+                  (split-string output "\n" t)))))
+
 (defun deb-packaging-infra-create-schroot ()
   "Create a schroot with mk-sbuild."
   (interactive)
@@ -133,6 +143,20 @@ Use schroot at point, or prompt."
   "End all active schroot sessions."
   (interactive)
   (compile "schroot -e --all-sessions"))
+
+(defun deb-packaging-infra-end-session-at-point ()
+  "End the schroot session whose row is at point."
+  (interactive)
+  (let ((id (tabulated-list-get-id)))
+    (if (and (consp id) (eq (car id) :session))
+        (let ((name (cdr id)))
+          (when (y-or-n-p (format "End schroot session %s? " name))
+            (if (zerop (call-process "schroot" nil nil nil "-e" "-c" name))
+                (progn
+                  (message "Ended session %s" name)
+                  (deb-packaging-infra-refresh-schroots))
+              (message "Failed to end session %s" name))))
+      (message "No schroot session at point"))))
 
 (defun deb-packaging-infra-delete-schroot (&optional name)
   "Delete a schroot (config and directory).
@@ -161,7 +185,8 @@ Use schroot at point, or prompt."
   :doc "Keymap for the schroots list buffer."
   :parent tabulated-list-mode-map
   "u" #'deb-packaging-infra-update-schroot
-  "e" #'deb-packaging-infra-end-sessions
+  "e" #'deb-packaging-infra-end-session-at-point
+  "E" #'deb-packaging-infra-end-sessions
   "d" #'deb-packaging-infra-delete-schroot
   "c" #'deb-packaging-infra-create-schroot
   "g" #'deb-packaging-infra-refresh-schroots
@@ -181,17 +206,28 @@ Use schroot at point, or prompt."
   (interactive)
   (when (derived-mode-p 'deb-packaging-infra-schroots-mode)
     (setq tabulated-list-entries
-          (mapcar (lambda (schroot)
-                    (list schroot
-                          (vector
-                           (deb-packaging-infra--format-cell
-                            (plist-get schroot :name) 25 'left
-                            'magit-section-heading)
-                           (deb-packaging-infra--format-cell
-                            (plist-get schroot :description) 25)
-                           (deb-packaging-infra--format-cell
-                            (plist-get schroot :directory) 50 nil 'shadow t))))
-                  (deb-packaging-infra--list-schroots)))
+          (nconc
+           (mapcar (lambda (schroot)
+                     (list schroot
+                           (vector
+                            (deb-packaging-infra--format-cell
+                             (plist-get schroot :name) 25 'left
+                             'magit-section-heading)
+                            (deb-packaging-infra--format-cell
+                             (plist-get schroot :description) 25)
+                            (deb-packaging-infra--format-cell
+                             (plist-get schroot :directory) 50 nil 'shadow t))))
+                   (deb-packaging-infra--list-schroots))
+           (mapcar (lambda (session)
+                     (list (cons :session session)
+                           (vector
+                            (deb-packaging-infra--format-cell
+                             session 25 'left 'magit-section-heading)
+                            (deb-packaging-infra--format-cell
+                             "active session" 25)
+                            (deb-packaging-infra--format-cell
+                             "" 50 nil 'shadow t))))
+                   (deb-packaging-infra--list-sessions))))
     (tabulated-list-init-header)
     (tabulated-list-print t)
     (when (null tabulated-list-entries)

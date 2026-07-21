@@ -250,6 +250,46 @@ CATEGORY.  Buffers are killed afterwards."
       (deb-packaging-infra-schroots))
     (should (eq seen 'list))))
 
+(ert-deftest deb-packaging-test-display/infra-list-sessions-parses ()
+  "Only session: lines become session names."
+  (cl-letf (((symbol-function 'deb-packaging-detect--call-process-string)
+             (lambda (_prog &rest _args)
+               "session:alpha\nchroot:noble-amd64\nsource:noble-amd64\nsession:beta")))
+    (should (equal (deb-packaging-infra--list-sessions) '("alpha" "beta")))))
+
+(ert-deftest deb-packaging-test-display/infra-sessions-appear-as-rows ()
+  "Active sessions are appended to the schroots list as session rows."
+  (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+             (lambda () nil))
+            ((symbol-function 'deb-packaging-infra--list-sessions)
+             (lambda () '("stonking-amd64-abc"))))
+    (with-temp-buffer
+      (deb-packaging-infra-schroots-mode)
+      (deb-packaging-infra-refresh-schroots)
+      (should (equal (car (nth 0 tabulated-list-entries))
+                     '(:session . "stonking-amd64-abc"))))))
+
+(ert-deftest deb-packaging-test-display/infra-end-session-at-point ()
+  "Ending a session row runs schroot -e -c NAME."
+  (let (calls)
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (program &optional _infile _dest _display &rest args)
+                 (push (cons program args) calls)
+                 0))
+              ((symbol-function 'y-or-n-p) #'always)
+              ((symbol-function 'deb-packaging-infra-refresh-schroots) #'ignore))
+      (with-temp-buffer
+        (deb-packaging-infra-schroots-mode)
+        (setq tabulated-list-entries
+              (list (list '(:session . "sess-1")
+                          (vector "sess-1" "active session" ""))))
+        (tabulated-list-init-header)
+        (tabulated-list-print t)
+        (goto-char (point-min))
+        (search-forward "sess-1")
+        (deb-packaging-infra-end-session-at-point)))
+    (should (equal (car calls) '("schroot" "-e" "-c" "sess-1")))))
+
 (ert-deftest deb-packaging-test-display/infra-ppas-displays-list ()
   "The PPAs list displays via the list category."
   (let (seen)
