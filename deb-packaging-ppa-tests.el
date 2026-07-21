@@ -74,7 +74,7 @@ Return a plist with :triggers, :results, :running, :waiting."
          (t
           (pcase section
             ('triggers
-             (if (string-match "^  - Source \\(.+\\): \\(\\S.+\\)$" line)
+             (if (string-match "^  - Source \\(.+\\): \\(\\S-.+\\)$" line)
                  (let ((parts (save-match-data
                                (split-string (match-string 1 line) "/"))))
                    (when (= (length parts) 3)
@@ -339,18 +339,25 @@ WHAT (\"basic\"/\"all-proposed\") is used in prompts and messages."
                             'font-lock-face 'shadow))))
     (deb-packaging-commands--record-run 'ppa-tests 'running nil)
     (deb-packaging-commands--notify-status-refresh)
-    (make-process
-     :name "deb-ppa-tests"
-     :buffer out-buf
-     :command (append (list "ppa" "tests" "-L" ppa)
-                      (when name (list "-p" name))
-                      (list "-r" distro))
-     :sentinel
-     (lambda (proc _event)
-       (when (memq (process-status proc) '(exit signal))
-         (unwind-protect
-             (deb-packaging-ppa-tests--fetch-done proc out-buf report-buf ppa)
-           (kill-buffer out-buf)))))))
+    (condition-case err
+        (make-process
+         :name "deb-ppa-tests"
+         :buffer out-buf
+         :command (append (list "ppa" "tests" "-L" ppa)
+                          (when name (list "-p" name))
+                          (list "-r" distro))
+         :sentinel
+         (lambda (proc _event)
+           (when (memq (process-status proc) '(exit signal))
+             (unwind-protect
+                 (deb-packaging-ppa-tests--fetch-done proc out-buf report-buf ppa)
+               (kill-buffer out-buf)))))
+      ;; Spawn itself can signal (e.g. ppa not installed); don't leak the
+      ;; buffer or leave the run record stuck on `running'.
+      (error (kill-buffer out-buf)
+             (deb-packaging-commands--record-run 'ppa-tests 'failure nil)
+             (deb-packaging-commands--notify-status-refresh)
+             (signal (car err) (cdr err))))))
 
 (defun deb-packaging-ppa-tests--fetch-done (proc out-buf report-buf ppa)
   "Handle `ppa tests' exit: parse and render, or dump raw output on failure."
@@ -361,16 +368,19 @@ WHAT (\"basic\"/\"all-proposed\") is used in prompts and messages."
              (summary (deb-packaging-ppa-tests--summary parsed)))
         (deb-packaging-commands--record-run
          'ppa-tests 'success (buffer-name report-buf) summary)
-        (with-current-buffer report-buf
-          (deb-packaging-ppa-tests--render parsed ppa)))
+        ;; The user may have killed the report buffer while we ran.
+        (when (buffer-live-p report-buf)
+          (with-current-buffer report-buf
+            (deb-packaging-ppa-tests--render parsed ppa))))
     (deb-packaging-commands--record-run
      'ppa-tests 'failure (buffer-name report-buf))
-    (with-current-buffer report-buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (propertize (format "ppa tests failed for %s:\n\n" ppa)
-                            'font-lock-face 'error))
-        (insert-buffer-substring out-buf))))
+    (when (buffer-live-p report-buf)
+      (with-current-buffer report-buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (propertize (format "ppa tests failed for %s:\n\n" ppa)
+                              'font-lock-face 'error))
+          (insert-buffer-substring out-buf)))))
   (deb-packaging-commands--notify-status-refresh))
 
 (defun deb-packaging-ppa-tests-refresh ()

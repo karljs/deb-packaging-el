@@ -196,5 +196,30 @@
                    '("ppa" "tests" "-L" "ppa:me/x" "-p" "mypkg"
                      "-r" "noble")))))
 
+(ert-deftest deb-packaging-test-ppa-tests/fetch-done-failure-raw-dump ()
+  "A failed fetch dumps the raw output and records :status 'failure."
+  (let ((deb-packaging-commands--run-history nil)
+        (proc (make-symbol "proc")))
+    (cl-letf (((symbol-function 'process-status) (lambda (_) 'exit))
+              ((symbol-function 'process-exit-status) (lambda (_) 1)))
+      (let ((out-buf (generate-new-buffer " *test-ppa-tests-out*"))
+            (report-buf (generate-new-buffer " *test-ppa-tests-report*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer out-buf
+                (insert "boom output"))
+              (deb-packaging-ppa-tests--fetch-done
+               proc out-buf report-buf "ppa:me/x")
+              (with-current-buffer report-buf
+                (should (string-match-p "boom output" (buffer-string)))
+                (should (string-match-p "ppa tests failed for ppa:me/x"
+                                        (buffer-string))))
+              (should (eq (plist-get
+                           (deb-packaging-commands-run-record 'ppa-tests)
+                           :status)
+                          'failure)))
+          (kill-buffer out-buf)
+          (kill-buffer report-buf))))))
+
 (provide 'deb-packaging-test-ppa-tests)
 ;;; deb-packaging-test-ppa-tests.el ends here
