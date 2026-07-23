@@ -289,7 +289,7 @@ and re-emit without doubling the argument."
               :artifacts (("mypkg_1.0-1.dsc" . "")))
     (let (captured-args captured-save)
       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
-                 (lambda (_name args &optional _dir _key)
+                 (lambda (_name args &optional _dir _key _buffer-dir)
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-repos-save)
                  (lambda (pkg distro entries)
@@ -316,7 +316,7 @@ and re-emit without doubling the argument."
               :artifacts (("mypkg_1.0-1.dsc" . "")))
     (let (captured-save)
       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
-                 (lambda (_name _args &optional _dir _key)))
+                 (lambda (_name _args &optional _dir _key _buffer-dir)))
                 ((symbol-function 'deb-packaging-repos-save)
                  (lambda (pkg distro entries)
                    (setq captured-save (list pkg distro entries)))))
@@ -330,13 +330,28 @@ and re-emit without doubling the argument."
               :artifacts (("mypkg_1.0-1.dsc" . "")))
     (let (captured-args)
       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
-                 (lambda (_name args &optional _dir _key)
+                 (lambda (_name args &optional _dir _key _buffer-dir)
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-repos-save) #'ignore))
         (deb-packaging-commands-sbuild
          '("--dist=noble" "--purge-session=always" "--purge-build=never")))
       (should (member "--purge-session=always" captured-args))
       (should (member "--purge-build=never" captured-args)))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-buffer-dir-is-pkg-dir ()
+  "sbuild runs in the parent dir but its log buffer keeps the package dir."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (captured-dir captured-buffer-dir)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name _args &optional dir _key buffer-dir)
+                   (setq captured-dir dir
+                         captured-buffer-dir buffer-dir)))
+                ((symbol-function 'deb-packaging-repos-save) #'ignore))
+        (deb-packaging-commands-sbuild '("--dist=noble")))
+      (should (equal captured-dir pkg-parent-dir))
+      (should (equal captured-buffer-dir pkg-dir)))))
 
 ;;; deb-packaging-transients--binary-default-value restore
 
@@ -524,7 +539,7 @@ and re-emit without doubling the argument."
               :artifacts (("mypkg_1.0-1_source.changes" . "")))
     (let (captured-args captured-save)
       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
-                 (lambda (_name args &optional _dir _key)
+                 (lambda (_name args &optional _dir _key _buffer-dir)
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-ppa-save)
                  (lambda (pkg distro ppa)
@@ -542,7 +557,7 @@ and re-emit without doubling the argument."
               :artifacts (("mypkg_1.0-1_source.changes" . "")))
     (let (captured-args captured-save)
       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
-                 (lambda (_name args &optional _dir _key)
+                 (lambda (_name args &optional _dir _key _buffer-dir)
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-infra--list-ppas)
                  (lambda () '("ppa:me/x")))

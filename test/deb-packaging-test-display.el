@@ -24,14 +24,17 @@
 ;;; Action mapping
 
 (ert-deftest deb-packaging-test-display/action-per-category ()
-  "status/list/report use same-window; output/shell reuse-or-below."
+  "status/list/report use same-window; output/shell reuse-or-same-window."
   (dolist (cat '(status list report))
     (should (memq 'display-buffer-same-window
                   (car (deb-packaging-display--action cat)))))
   (dolist (cat '(output shell))
     (let ((fns (car (deb-packaging-display--action cat))))
       (should (memq 'deb-packaging-display--reuse-category-window fns))
-      (should (memq 'display-buffer-below-selected fns)))))
+      (should (memq 'display-buffer-same-window fns))
+      (should-not (memq 'display-buffer-below-selected fns))
+      (should-not (assq 'inhibit-same-window
+                        (cadr (deb-packaging-display--action cat)))))))
 
 (ert-deftest deb-packaging-test-display/action-unknown-category-errors ()
   (should-error (deb-packaging-display--action 'bogus)
@@ -113,15 +116,24 @@ CATEGORY.  Buffers are killed afterwards."
             (should (eq (window-buffer start) buf)))
         (kill-buffer buf)))))
 
-(ert-deftest deb-packaging-test-display/output-opens-below-and-selects ()
-  "output opens a regular window below the invoking one and selects it."
+(ert-deftest deb-packaging-test-display/output-displays-in-invoking-window ()
+  "output replaces the invoking window and keeps it selected."
   (save-window-excursion
     (deb-packaging-test-display--with-marked-buffers ((buf 'output))
       (let ((start (selected-window)))
         (deb-packaging-display-buffer buf 'output)
-        (should-not (eq (selected-window) start))
-        (should (eq (window-buffer (selected-window)) buf))
-        (should-not (window-parameter (selected-window) 'window-side))))))
+        (should (eq (selected-window) start))
+        (should (eq (window-buffer start) buf))))))
+
+(ert-deftest deb-packaging-test-display/output-reuses-visible-category-window ()
+  "A new output buffer goes to a visible output window, not the invoking one."
+  (save-window-excursion
+    (deb-packaging-test-display--with-marked-buffers
+        ((old-buf 'output) (new-buf 'output))
+      (let ((other (split-window (selected-window) nil 'below)))
+        (set-window-buffer other old-buf)
+        (deb-packaging-display-buffer new-buf 'output)
+        (should (eq (window-buffer other) new-buf))))))
 
 (ert-deftest deb-packaging-test-display/overrides-user-display-buffer-alist ()
   "User alist side-window rules must not grab package buffers."
@@ -191,6 +203,41 @@ CATEGORY.  Buffers are killed afterwards."
                                               (get-buffer buf-name))
                           'output)))
           (kill-buffer buf-name))))))
+
+(ert-deftest deb-packaging-test-display/run-command-buffer-dir-decouples-process-dir ()
+  "Log buffer keeps BUFFER-DIR as `default-directory' when the process
+runs in DIR, so package detection works from the buffer."
+  (deb-packaging-test--with-package-tree '(:name "mypkg" :version "1.0-1")
+    (save-window-excursion
+      (cl-letf (((symbol-function 'make-comint-in-buffer)
+                 (lambda (_name buf-name _program &rest _args)
+                   (get-buffer-create buf-name))))
+        (let ((buf-name (deb-packaging-commands--run-command
+                         "test" '("true") pkg-parent-dir nil pkg-dir)))
+          (unwind-protect
+              (progn
+                (should (equal (buffer-local-value 'default-directory
+                                                   (get-buffer buf-name))
+                               pkg-dir))
+                (should (equal (with-current-buffer buf-name
+                                 (deb-packaging-detect--find-package-dir))
+                               pkg-dir)))
+            (kill-buffer buf-name)))))))
+
+(ert-deftest deb-packaging-test-display/run-command-buffer-dir-defaults-to-dir ()
+  "Without BUFFER-DIR the log buffer's `default-directory' stays DIR."
+  (deb-packaging-test--with-package-tree '(:name "mypkg" :version "1.0-1")
+    (save-window-excursion
+      (cl-letf (((symbol-function 'make-comint-in-buffer)
+                 (lambda (_name buf-name _program &rest _args)
+                   (get-buffer-create buf-name))))
+        (let ((buf-name (deb-packaging-commands--run-command
+                         "test" '("true") pkg-parent-dir)))
+          (unwind-protect
+              (should (equal (buffer-local-value 'default-directory
+                                                 (get-buffer buf-name))
+                             pkg-parent-dir))
+            (kill-buffer buf-name)))))))
 
 (ert-deftest deb-packaging-test-display/dev-exec-displays-shell ()
   "The dev container shell displays via the shell category."

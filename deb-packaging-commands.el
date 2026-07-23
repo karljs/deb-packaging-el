@@ -155,10 +155,13 @@ Lint-style keys also get findings counts stored as :summary."
        (deb-packaging-commands--record-run key status buf-name summary)
        (deb-packaging-commands--notify-status-refresh)))))
 
-(defun deb-packaging-commands--run-command (name args &optional dir key)
+(defun deb-packaging-commands--run-command (name args &optional dir key buffer-dir)
   "Run command in a comint buffer.
 NAME forms the buffer name; ARGS is the full command list.
-DIR sets the process working directory.  KEY (a symbol) enables run tracking."
+DIR sets the process working directory.  KEY (a symbol) enables run tracking.
+BUFFER-DIR sets the buffer's `default-directory' when it differs from DIR,
+so commands run from the log buffer (e.g. `deb-packaging-status') stay in
+the package tree when the process itself must run in the parent build dir."
   (let* ((timestamp (format-time-string "%H:%M:%S"))
          (buf-name (format "*deb-%s-%s*" name timestamp))
          (cmd (mapconcat #'shell-quote-argument args " ")))
@@ -169,8 +172,8 @@ DIR sets the process working directory.  KEY (a symbol) enables run tracking."
       (make-comint-in-buffer name buf-name shell-file-name nil
                              shell-command-switch cmd))
     (with-current-buffer buf-name
-      (when dir
-        (setq default-directory dir))
+      (when-let ((buf-dir (or buffer-dir dir)))
+        (setq default-directory buf-dir))
       (setq deb-packaging-display-category 'output)
       (add-hook 'comint-preoutput-filter-functions
                 #'deb-packaging-commands--filter-osc-sequences nil t)
@@ -250,7 +253,8 @@ ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
       (deb-packaging-commands--run-command "lintian"
                                   (append (list "lintian") lint-args targets)
                                   parent-dir
-                                  key))))
+                                  key
+                                  pkg-dir))))
 
 (defun deb-packaging-commands-lintian-source (&optional args)
   "Run lintian on the source .dsc file with ARGS."
@@ -415,7 +419,8 @@ is returned unchanged."
                  extra-repo-arg
                  (list dsc-file))
          parent-dir
-         'sbuild)))))
+         'sbuild
+         pkg-dir)))))
 
 ;;; autopkgtest
 
@@ -551,7 +556,8 @@ set; the used PPA is saved per package+distro."
           (deb-packaging-ppa-save name distro ppa))
         (deb-packaging-commands--run-command "dput" cmd-args
                                      (or parent-dir default-directory)
-                                     'dput)))))
+                                     'dput
+                                     pkg-dir)))))
 
 ;;; Clean artifacts
 

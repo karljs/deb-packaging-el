@@ -16,8 +16,8 @@
 ;;
 ;;   status, list, report  displayed in the selected window
 ;;   output, shell         reuse a visible window already showing the
-;;                         same category, else a new window below the
-;;                         selected one
+;;                         same category, else the selected window
+;;                         (quit-window restores the previous buffer)
 ;;
 ;; The policy is authoritative for package buffers: it is applied via
 ;; `display-buffer-overriding-action', which outranks user
@@ -84,9 +84,8 @@ CATEGORY is one of status, list, report, output, or shell."
     ((or 'output 'shell)
      '((display-buffer-reuse-window
         deb-packaging-display--reuse-category-window
-        display-buffer-below-selected
-        display-buffer-pop-up-window)
-       (inhibit-same-window . t)))
+        display-buffer-same-window
+        display-buffer-pop-up-window)))
     (_ (error "Unknown deb-packaging display category: %S" category))))
 
 (defun deb-packaging-display-buffer-default (buffer category)
