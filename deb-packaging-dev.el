@@ -333,13 +333,15 @@ languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all."
      "\n")))
 
 (defun deb-packaging-dev--open-on-success (proc tramp-path)
-  "Open dired at TRAMP-PATH when PROC exits 0."
+  "Show dired at TRAMP-PATH when PROC exits 0, without moving focus.
+Provisioning can take minutes; the sentinel must not yank the user out
+of whatever buffer they moved to in the meantime."
   (deb-packaging-commands--wrap-sentinel
    proc
    (lambda (p _event)
      (when (and (eq (process-status p) 'exit)
                 (zerop (process-exit-status p)))
-       (dired tramp-path)
+       (display-buffer (dired-noselect tramp-path))
        (message "Dev shell ready at %s" tramp-path)))))
 
 ;;; Eglot

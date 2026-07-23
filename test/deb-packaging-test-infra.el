@@ -66,5 +66,27 @@
         (should (equal (length compiled) 1))
         (should (string-match-p "sudo rm -rf /srv/schroot/s" (car compiled)))))))
 
+;;; ppa show rendering
+
+(ert-deftest deb-packaging-test-infra/show-ppa-displays-special-buffer ()
+  (let (displayed)
+    (deb-packaging-test--with-mocked-process '(("ppa" . "owner: foo\ndesc"))
+      (cl-letf (((symbol-function 'deb-packaging-display-buffer)
+                 (lambda (buf cat) (setq displayed (cons buf cat)))))
+        (deb-packaging-infra-show-ppa "ppa:foo/bar")
+        (let ((buf (car displayed)))
+          (should (eq (cdr displayed) 'report))
+          (should (buffer-live-p buf))
+          (with-current-buffer buf
+            (should (derived-mode-p 'special-mode))
+            (should (string-match-p "owner: foo" (buffer-string)))
+            (should buffer-read-only))
+          (kill-buffer buf))))))
+
+(ert-deftest deb-packaging-test-infra/show-ppa-failure-is-user-error ()
+  (deb-packaging-test--with-mocked-process '(("ppa" . (1 . "boom happened")))
+    (should-error (deb-packaging-infra-show-ppa "ppa:foo/bar")
+                  :type 'user-error)))
+
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here

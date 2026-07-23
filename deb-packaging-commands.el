@@ -187,6 +187,23 @@ the package tree when the process itself must run in the parent build dir."
     (deb-packaging-display-buffer buf-name 'output)
     buf-name))
 
+;;; Compilation wrapper
+
+(defun deb-packaging-commands--compile (cmd)
+  "Run CMD via `compile' under the package's process conventions.
+No save-buffer prompts, a running compilation is killed without asking,
+and the window follows the package display policy.  Returns the
+compilation buffer (nil under mocks)."
+  (let ((compilation-ask-about-save nil)
+        (compilation-always-kill t)
+        (display-buffer-overriding-action
+         (deb-packaging-display--action 'output)))
+    (let ((buf (compile cmd)))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (setq deb-packaging-display-category 'output)))
+      buf)))
+
 ;;; dpkg-buildpackage
 
 (defun deb-packaging-commands-source-build (&optional args)

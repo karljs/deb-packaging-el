@@ -629,5 +629,29 @@ and re-emit without doubling the argument."
     (cl-letf (((symbol-function 'executable-find) (lambda (_) nil)))
       (should-error (deb-packaging-commands-export-orig) :type 'user-error))))
 
+;;; Compilation wrapper
+
+(ert-deftest deb-packaging-test-commands/compile-wrapper-sets-conventions ()
+  (let (captured)
+    (cl-letf (((symbol-function 'compile)
+               (lambda (cmd &rest _)
+                 (setq captured
+                       (list cmd
+                             compilation-ask-about-save
+                             compilation-always-kill
+                             display-buffer-overriding-action))
+                 (get-buffer-create "*deb-test-compile*"))))
+      (let ((buf (deb-packaging-commands--compile "make foo")))
+        (should (equal captured
+                       (list "make foo" nil t
+                             (deb-packaging-display--action 'output))))
+        (should (eq (buffer-local-value 'deb-packaging-display-category buf)
+                    'output))
+        (kill-buffer buf)))))
+
+(ert-deftest deb-packaging-test-commands/compile-wrapper-tolerates-nil-buffer ()
+  (cl-letf (((symbol-function 'compile) (lambda (&rest _) nil)))
+    (should (null (deb-packaging-commands--compile "make foo")))))
+
 (provide 'deb-packaging-test-commands)
 ;;; deb-packaging-test-commands.el ends here

@@ -100,7 +100,7 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
   (deb-packaging-pq--ensure-quilt-repo)
   (let ((dir (magit-toplevel)))
     (deb-packaging-pq--after-compile
-     (compile "gbp pq import")
+     (deb-packaging-commands--compile "gbp pq import")
      (lambda ()
        (when (deb-packaging-pq--on-pq-branch-p)
          (magit-status-setup-buffer dir)
@@ -112,7 +112,7 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
   (deb-packaging-pq--after-compile
-   (compile "gbp pq switch")
+   (deb-packaging-commands--compile "gbp pq switch")
    (lambda ()
      (let ((branch (deb-packaging-pq--current-branch)))
        (message "On branch: %s" (or branch "detached"))))))
@@ -122,7 +122,7 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
   "Rebase the patch-queue branch against the current branch HEAD."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (compile "gbp pq rebase"))
+  (deb-packaging-commands--compile "gbp pq rebase"))
 
 ;;;###autoload
 (defun deb-packaging-pq-export ()
@@ -134,7 +134,7 @@ packaging branch, deletes the patch-queue branch."
   (unless (deb-packaging-pq--on-pq-branch-p)
     (user-error "Not on a patch-queue branch; switch first"))
   (deb-packaging-pq--after-compile
-   (compile "gbp pq export --commit --drop")
+   (deb-packaging-commands--compile "gbp pq export --commit --drop")
    (lambda ()
      (deb-packaging-commands--notify-status-refresh)
      (message "Exported patches to debian/patches/"))))
@@ -146,7 +146,7 @@ Useful to abort an edit session and start over."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
   (deb-packaging-pq--after-compile
-   (compile "gbp pq drop")
+   (deb-packaging-commands--compile "gbp pq drop")
    #'deb-packaging-commands--notify-status-refresh))
 
 ;;; Transient

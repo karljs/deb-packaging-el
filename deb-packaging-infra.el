@@ -20,6 +20,7 @@
 (require 'magit-section)
 (require 'tabulated-list)
 (require 'transient)
+(require 'deb-packaging-commands)
 (require 'deb-packaging-config)
 (require 'deb-packaging-dev)
 (require 'deb-packaging-transients)
@@ -165,7 +166,7 @@ The parent is the longest chroot name that is a prefix of SESSION."
          (arch (completing-read "Arch: " '("amd64" "i386" "arm64" "armhf") nil t "amd64"))
          (cmd (format "mk-sbuild --arch=%s %s" arch distro)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
-      (compile cmd))))
+      (deb-packaging-commands--compile cmd))))
 
 (defun deb-packaging-infra--update-command (names)
   "Return a shell command updating schroots NAMES sequentially.
@@ -186,7 +187,7 @@ NAMES, when given, is a list of schroot names to update."
                             (mapcar (lambda (s) (plist-get s :name))
                                     (deb-packaging-infra--list-schroots))
                             nil t)))))
-    (compile (deb-packaging-infra--update-command targets))))
+    (deb-packaging-commands--compile (deb-packaging-infra--update-command targets))))
 
 (defun deb-packaging-infra-update-all-schroots ()
   "Update all schroots with sbuild-update."
@@ -196,7 +197,7 @@ NAMES, when given, is a list of schroot names to update."
     (if (null names)
         (message "No schroots found")
       (when (yes-or-no-p (format "Update all %d schroots? " (length names)))
-        (compile (deb-packaging-infra--update-command names))))))
+        (deb-packaging-commands--compile (deb-packaging-infra--update-command names))))))
 
 (defun deb-packaging-infra--end-session (name)
   "End schroot session NAME, messaging the outcome."
@@ -259,7 +260,7 @@ Use schroot at point, or prompt."
           (let ((cmd (format "sudo rm -rf %s && sudo rm %s"
                              (shell-quote-argument directory)
                              (shell-quote-argument config-file))))
-            (compile cmd)))))))
+            (deb-packaging-commands--compile cmd)))))))
 
 ;;; Schroots buffer
 
@@ -392,7 +393,7 @@ Each plist has :name, :type, :status, and type-specific keys."
          (arch (completing-read "Arch: " '("amd64" "arm64") nil t "amd64"))
          (cmd (format "autopkgtest-build-lxd ubuntu-daily:%s/%s" distro arch)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
-      (compile cmd))))
+      (deb-packaging-commands--compile cmd))))
 
 (defun deb-packaging-infra-delete-lxd-entry (&optional entry)
   "Delete the LXD image or container at point.
@@ -557,7 +558,7 @@ Each plist has keys: :name, :path, :size."
          (cmd (format "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s"
                       distro arch deb-packaging-infra-qemu-dir)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
-      (compile cmd))))
+      (deb-packaging-commands--compile cmd))))
 
 (defun deb-packaging-infra-delete-qemu (&optional name)
   "Delete a QEMU autopkgtest image.
@@ -571,7 +572,7 @@ Use image at point, or prompt."
          (path (plist-get img :path)))
     (when (yes-or-no-p (format "Delete %s?" path))
       (deb-packaging-infra--ensure-sudo-timestamp)
-      (compile (format "sudo rm %s" (shell-quote-argument path))))))
+      (deb-packaging-commands--compile (format "sudo rm %s" (shell-quote-argument path))))))
 
 ;;; QEMU list buffer
 
@@ -710,7 +711,7 @@ first call and after the TTL expires."
     (when (and (not (string-empty-p name))
                (yes-or-no-p (format "Run: %s? " cmd)))
       (deb-packaging-infra--invalidate-ppa-cache)
-      (compile cmd))))
+      (deb-packaging-commands--compile cmd))))
 
 (defun deb-packaging-infra-delete-ppa (&optional name)
   "Delete a Launchpad PPA via `ppa destroy'.
@@ -722,7 +723,7 @@ Use PPA at point, or prompt."
   (when (and (not (string-empty-p name))
              (yes-or-no-p (format "Really delete PPA %s? " name)))
     (deb-packaging-infra--invalidate-ppa-cache)
-    (compile (format "ppa destroy %s" (shell-quote-argument name)))))
+    (deb-packaging-commands--compile (format "ppa destroy %s" (shell-quote-argument name)))))
 
 (defun deb-packaging-infra-set-ppa-config (&optional name)
   "Configure a Launchpad PPA via `ppa set'.
@@ -742,17 +743,34 @@ Use PPA at point, or prompt.  Prompts for display name and description."
       (if (= (length args) 3)
           (message "No configuration changes specified")
         (when (yes-or-no-p (format "Run: %s? " cmd))
-          (compile cmd))))))
+          (deb-packaging-commands--compile cmd))))))
 
 (defun deb-packaging-infra-show-ppa (&optional name)
   "Show Launchpad PPA info via `ppa show'.
-Use PPA at point, or prompt."
+Use PPA at point, or prompt.  Output goes to a read-only `special-mode'
+buffer; a compilation buffer would error-parse the text and send RET to
+bogus locations."
   (interactive
    (list (or (tabulated-list-get-id)
              (let ((ppas (deb-packaging-infra--list-ppas)))
                (completing-read "PPA to show: " ppas nil nil)))))
   (unless (string-empty-p name)
-    (compile (format "ppa show %s" (shell-quote-argument name)))))
+    (let ((buf (get-buffer-create (format "*deb-ppa: %s*" name))))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (let ((code (call-process "ppa" nil buf nil "show" name)))
+            (unless (zerop code)
+              (let ((out (string-trim (buffer-string))))
+                (kill-buffer buf)
+                (user-error "ppa show %s failed%s" name
+                            (if (string-empty-p out)
+                                ""
+                              (concat ": " out)))))
+            (goto-char (point-min))
+            (special-mode)
+            (setq deb-packaging-display-category 'report))))
+      (deb-packaging-display-buffer buf 'report))))
 
 ;;; PPA list buffer
 

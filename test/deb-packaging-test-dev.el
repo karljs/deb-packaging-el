@@ -15,6 +15,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'deb-packaging-test)
+(require 'deb-packaging-test-run)
 (require 'deb-packaging-dev)
 
 (defun deb-packaging-test-dev--join (lines)
@@ -149,6 +150,29 @@ the langs or tools layer had packages to install."
          (i-ready (string-match "echo READY: /lxc:deb-dev-foo-noble:/root/work/foo" s)))
     (should (and i-setup i-core i-bd i-langs i-tools i-ready))
     (should (< i-setup i-core i-bd i-langs i-tools i-ready))))
+
+;;; Provisioning sentinel
+
+(ert-deftest deb-packaging-test-dev/open-on-success-displays-without-switching ()
+  "The sentinel shows the container dired but never steals the current window."
+  (let* ((proc (make-process :name "deb-test-true"
+                             :command '("true")
+                             :noquery t))
+         (dired-buf (get-buffer-create " *deb-test-dired*"))
+         (displayed nil)
+         (switched nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'dired)
+                   (lambda (&rest _) (setq switched t)))
+                  ((symbol-function 'dired-noselect)
+                   (lambda (&rest _) dired-buf))
+                  ((symbol-function 'display-buffer)
+                   (lambda (buf &rest _) (setq displayed buf))))
+          (deb-packaging-dev--open-on-success proc "/lxc:c:/root/work")
+          (deb-packaging-test-run--wait proc)
+          (should-not switched)
+          (should (eq displayed dired-buf)))
+      (kill-buffer dired-buf))))
 
 (provide 'deb-packaging-test-dev)
 ;;; deb-packaging-test-dev.el ends here
