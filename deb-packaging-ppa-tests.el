@@ -27,6 +27,10 @@
 (require 'deb-packaging-commands)
 (require 'deb-packaging-display)
 
+;; Loaded after this file in the full package; only referenced by name
+;; in the mode map.
+(declare-function deb-packaging-test-transient "deb-packaging-transients")
+
 ;;; Parsing
 
 ;; In the regexps below, `\S-' is "non-whitespace".  `\S+' would eat the
@@ -167,6 +171,7 @@ Return a plist with :triggers, :results, :running, :waiting."
   "T"   #'deb-packaging-ppa-tests-trigger-all-proposed
   "RET" #'deb-packaging-ppa-tests-open-log
   "g"   #'deb-packaging-ppa-tests-refresh
+  "?"   #'deb-packaging-test-transient
   "q"   #'quit-window)
 
 (define-derived-mode deb-packaging-ppa-tests-mode magit-section-mode

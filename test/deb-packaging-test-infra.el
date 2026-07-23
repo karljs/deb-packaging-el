@@ -161,5 +161,19 @@
       (search-forward "img-1")
       (should-not (get-text-property (point) 'keymap)))))
 
+;;; Mode-map conventions
+
+(ert-deftest deb-packaging-test-infra/lxd-map-s-sorts-t-starts ()
+  (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "S")
+              #'tabulated-list-sort))
+  (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "t")
+              #'deb-packaging-infra-start-lxd-entry))
+  (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "s")
+              #'deb-packaging-infra-stop-lxd-entry)))
+
+(ert-deftest deb-packaging-test-infra/schroots-map-question-opens-dispatch ()
+  (should (eq (lookup-key deb-packaging-infra-schroots-mode-map "?")
+              #'deb-packaging-infra-dispatch)))
+
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here

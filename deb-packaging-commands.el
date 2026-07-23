@@ -19,6 +19,7 @@
 (require 'subr-x)
 (require 'comint)
 (require 'ansi-color)
+(require 'compile)
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)

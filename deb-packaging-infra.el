@@ -276,6 +276,7 @@ Use schroot at point, or prompt."
   "d" #'deb-packaging-infra-delete-schroot
   "c" #'deb-packaging-infra-create-schroot
   "g" #'deb-packaging-infra-refresh-schroots
+  "?" #'deb-packaging-infra-dispatch
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-schroots-mode magit-section-mode "Infra-Schroots"
@@ -487,7 +488,7 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
   :parent tabulated-list-mode-map
   "d" #'deb-packaging-infra-delete-lxd-entry
   "s" #'deb-packaging-infra-stop-lxd-entry
-  "S" #'deb-packaging-infra-start-lxd-entry
+  "t" #'deb-packaging-infra-start-lxd-entry
   "x" #'deb-packaging-infra-shell-lxd-entry
   "c" #'deb-packaging-infra-create-lxd
   "g" #'deb-packaging-infra-refresh-lxd

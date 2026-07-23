@@ -261,5 +261,11 @@
           (kill-buffer out-buf)
           (kill-buffer report-buf))))))
 
+;;; Mode-map conventions
+
+(ert-deftest deb-packaging-test-ppa-tests/map-question-opens-test-transient ()
+  (should (eq (lookup-key deb-packaging-ppa-tests-mode-map "?")
+              #'deb-packaging-test-transient)))
+
 (provide 'deb-packaging-test-ppa-tests)
 ;;; deb-packaging-test-ppa-tests.el ends here

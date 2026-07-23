@@ -450,7 +450,7 @@ in view-mode."
   "Prepare a Debian salsa clone.
 Confirms the Vcs-Git URL, clones (or reuses) into the propagate cache,
 prompts for base and work branch, sets up the `personal' remote if
-configured, and hands off to `magit-status'. Press `P' afterwards to
+configured, and hands off to `magit-status'. Press `C-c a' afterwards to
 apply items."
   (interactive)
   (catch 'abort
@@ -527,7 +527,7 @@ apply items."
       (magit-status-setup-buffer clone-dir)
       (when (derived-mode-p 'magit-status-mode)
         (deb-packaging-propagate-clone-mode +1))
-      (message "Clone ready at %s.  Press P to apply a fix item."
+      (message "Clone ready at %s.  Press C-c a to apply a fix item."
                clone-dir))))
 
 ;;;###autoload
@@ -549,17 +549,19 @@ commit (marking already-applied items), and opens the apply transient."
 
 (defvar-keymap deb-packaging-propagate-clone-mode-map
   :doc "Keymap for `deb-packaging-propagate-clone-mode'."
-  "P" #'deb-packaging-propagate-apply)
+  "C-c a" #'deb-packaging-propagate-apply)
 
 (define-minor-mode deb-packaging-propagate-clone-mode
   "Minor mode for Magit status buffers backed by a propagate clone.
-Binds `P' to pick a fix item and open the apply transient."
+Binds `C-c a' to pick a fix item and open the apply transient.  `P'
+stays with `magit-push': pushing the prepared branch is the natural
+last step of this workflow."
   :lighter deb-packaging-config-propagate-clone-mode-lighter
   :keymap deb-packaging-propagate-clone-mode-map
   (if deb-packaging-propagate-clone-mode
       (setq header-line-format
             (format "Press [%s] to apply a propagate fix item"
-                    (propertize "P" 'face 'bold)))
+                    (propertize "C-c a" 'face 'bold)))
     (setq header-line-format nil)))
 
 ;;; Transient

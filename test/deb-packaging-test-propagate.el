@@ -329,5 +329,19 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
       (should (= status-opened 0))
       (should (cl-some (lambda (m) (string-match-p "Aborted" m)) messages)))))
 
+;;; Clone minor mode keys
+
+(ert-deftest deb-packaging-test-propagate/clone-mode-keymap-frees-magit-push ()
+  "The clone minor mode must not take P from `magit-push'."
+  (should (null (lookup-key deb-packaging-propagate-clone-mode-map "P")))
+  (should (eq (lookup-key deb-packaging-propagate-clone-mode-map (kbd "C-c a"))
+              #'deb-packaging-propagate-apply)))
+
+(ert-deftest deb-packaging-test-propagate/clone-mode-header-advertises-key ()
+  (with-temp-buffer
+    (deb-packaging-propagate-clone-mode 1)
+    (should (string-match-p "C-c a" (format "%s" header-line-format)))
+    (deb-packaging-propagate-clone-mode -1)))
+
 (provide 'deb-packaging-test-propagate)
 ;;; deb-packaging-test-propagate.el ends here
