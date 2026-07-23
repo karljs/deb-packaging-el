@@ -88,5 +88,78 @@
     (should-error (deb-packaging-infra-show-ppa "ppa:foo/bar")
                   :type 'user-error)))
 
+;;; Empty-list prompts
+
+(ert-deftest deb-packaging-test-infra/update-schroots-no-schroots-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+             (lambda () nil))
+            ((symbol-function 'deb-packaging-infra--chroot-targets)
+             (lambda () nil))
+            ((symbol-function 'compile)
+             (lambda (&rest _) (error "must not compile"))))
+    (should-error (deb-packaging-infra-update-schroots) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-infra/delete-schroot-no-schroots-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+             (lambda () nil))
+            ((symbol-function 'deb-packaging-infra--section-value-at-point)
+             (lambda (&rest _) nil))
+            ((symbol-function 'compile)
+             (lambda (&rest _) (error "must not compile"))))
+    (should-error (deb-packaging-infra-delete-schroot) :type 'user-error)))
+
+;;; Container visit path
+
+(ert-deftest deb-packaging-test-infra/visit-lxd-container-uses-in-container-mount ()
+  (let (visited)
+    (cl-letf (((symbol-function 'dired)
+               (lambda (path &rest _) (setq visited path)))
+              ((symbol-function 'deb-packaging-dev--ensure-tramp-method)
+               #'ignore))
+      (deb-packaging-infra-visit-lxd-entry
+       (list :name "deb-dev-foo-noble" :type 'container
+             :raw (list :source "/home/karl/src/foo")))
+      (should (equal visited "/lxc:deb-dev-foo-noble:/root/work/foo")))))
+
+(ert-deftest deb-packaging-test-infra/visit-lxd-hyphenated-package-name ()
+  (let (visited)
+    (cl-letf (((symbol-function 'dired)
+               (lambda (path &rest _) (setq visited path)))
+              ((symbol-function 'deb-packaging-dev--ensure-tramp-method)
+               #'ignore))
+      (deb-packaging-infra-visit-lxd-entry
+       (list :name "deb-dev-linux-tools-noble" :type 'container :raw nil))
+      (should (equal visited "/lxc:deb-dev-linux-tools-noble:/root/work/linux-tools")))))
+
+(ert-deftest deb-packaging-test-infra/visit-lxd-non-dev-container-falls-back ()
+  (let (visited)
+    (cl-letf (((symbol-function 'dired)
+               (lambda (path &rest _) (setq visited path)))
+              ((symbol-function 'deb-packaging-dev--ensure-tramp-method)
+               #'ignore))
+      (deb-packaging-infra-visit-lxd-entry
+       (list :name "random-box" :type 'container :raw nil))
+      (should (equal visited "/lxc:random-box:/root/work")))))
+
+;;; RET only on container rows
+
+(ert-deftest deb-packaging-test-infra/lxd-ret-only-on-container-rows ()
+  (should (null (lookup-key deb-packaging-infra-lxd-mode-map (kbd "RET"))))
+  (cl-letf (((symbol-function 'deb-packaging-infra--list-lxd-all)
+             (lambda ()
+               (list (list :name "img-1" :type 'image
+                           :status "amd64" :detail "1G")
+                     (list :name "deb-dev-foo-noble" :type 'container
+                           :status "RUNNING" :detail "foo / noble")))))
+    (with-temp-buffer
+      (deb-packaging-infra-lxd-mode)
+      (deb-packaging-infra-refresh-lxd)
+      (goto-char (point-min))
+      (search-forward "deb-dev-foo-noble")
+      (should (get-text-property (point) 'keymap))
+      (goto-char (point-min))
+      (search-forward "img-1")
+      (should-not (get-text-property (point) 'keymap)))))
+
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here

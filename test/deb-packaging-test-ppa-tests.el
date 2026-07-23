@@ -152,6 +152,46 @@
                'deb-packaging-ppa-tests-desc
                "llvm-toolchain-19 on noble/amd64")))))
 
+(ert-deftest deb-packaging-test-ppa-tests/open-log-from-result-heading ()
+  (let (opened)
+    (cl-letf (((symbol-function 'browse-url)
+               (lambda (url &rest _) (setq opened url))))
+      (with-temp-buffer
+        (deb-packaging-ppa-tests-mode)
+        (deb-packaging-ppa-tests--render
+         (deb-packaging-ppa-tests--parse deb-packaging-test-ppa-tests--fixture)
+         "ppa:me/x")
+        (goto-char (point-min))
+        (search-forward "llvm-toolchain-19 on noble for amd64")
+        (deb-packaging-ppa-tests-open-log)
+        (should (string-match-p "amd64.*log.gz\\'" opened))))))
+
+(ert-deftest deb-packaging-test-ppa-tests/open-log-from-subtest-line ()
+  (let (opened)
+    (cl-letf (((symbol-function 'browse-url)
+               (lambda (url &rest _) (setq opened url))))
+      (with-temp-buffer
+        (deb-packaging-ppa-tests-mode)
+        (deb-packaging-ppa-tests--render
+         (deb-packaging-ppa-tests--parse deb-packaging-test-ppa-tests--fixture)
+         "ppa:me/x")
+        (goto-char (point-min))
+        (search-forward "command1")
+        (deb-packaging-ppa-tests-open-log)
+        (should (string-match-p "amd64.*log.gz\\'" opened))))))
+
+(ert-deftest deb-packaging-test-ppa-tests/open-log-outside-result-errors ()
+  (cl-letf (((symbol-function 'browse-url)
+             (lambda (&rest _) (error "must not browse"))))
+    (with-temp-buffer
+      (deb-packaging-ppa-tests-mode)
+      (deb-packaging-ppa-tests--render
+       (deb-packaging-ppa-tests--parse deb-packaging-test-ppa-tests--fixture)
+       "ppa:me/x")
+      (goto-char (point-min))
+      (search-forward "Triggers")
+      (should-error (deb-packaging-ppa-tests-open-log) :type 'user-error))))
+
 (ert-deftest deb-packaging-test-ppa-tests/trigger-basic-confirmed ()
   (let (requested)
     (cl-letf (((symbol-function 'url-retrieve)

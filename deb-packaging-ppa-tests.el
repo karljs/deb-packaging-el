@@ -313,13 +313,31 @@ WHAT (\"basic\"/\"all-proposed\") is used in prompts and messages."
   (deb-packaging-ppa-tests--trigger
    'deb-packaging-ppa-tests-all-proposed-url "all-proposed"))
 
+(defun deb-packaging-ppa-tests--section-log-url ()
+  "Return the log URL of the enclosing result section, or nil."
+  (let ((section (magit-current-section)))
+    (while (and section
+                (not (eq (oref section type) 'deb-packaging-ppa-tests-result)))
+      (setq section (oref section parent)))
+    (when section
+      (save-excursion
+        (goto-char (oref section start))
+        (let ((pos (next-single-property-change
+                    (point) 'deb-packaging-ppa-tests-log-url nil
+                    (oref section end))))
+          (when (and pos (< pos (oref section end)))
+            (get-text-property pos 'deb-packaging-ppa-tests-log-url)))))))
+
 (defun deb-packaging-ppa-tests-open-log ()
-  "Open the log URL at point in a browser."
+  "Open the result's log URL in a browser.
+Works anywhere inside a result section, not just on the URL line."
   (interactive)
-  (if-let ((url (get-text-property
-                 (point) 'deb-packaging-ppa-tests-log-url)))
-      (browse-url url)
-    (user-error "No log URL at point")))
+  (let ((url (or (get-text-property
+                  (point) 'deb-packaging-ppa-tests-log-url)
+                 (deb-packaging-ppa-tests--section-log-url))))
+    (if url
+        (browse-url url)
+      (user-error "No log URL here"))))
 
 ;;; Runner
 

@@ -182,11 +182,12 @@ NAMES, when given, is a list of schroot names to update."
   (interactive)
   (let ((targets (or names
                      (deb-packaging-infra--chroot-targets)
-                     (list (completing-read
-                            "Schroot to update: "
-                            (mapcar (lambda (s) (plist-get s :name))
-                                    (deb-packaging-infra--list-schroots))
-                            nil t)))))
+                     (let ((schroots (mapcar (lambda (s) (plist-get s :name))
+                                             (deb-packaging-infra--list-schroots))))
+                       (unless schroots
+                         (user-error "No schroots found"))
+                       (list (completing-read
+                              "Schroot to update: " schroots nil t))))))
     (deb-packaging-commands--compile (deb-packaging-infra--update-command targets))))
 
 (defun deb-packaging-infra-update-all-schroots ()
@@ -241,11 +242,12 @@ Use schroot at point, or prompt."
   (let* ((name (or name
                    (deb-packaging-infra--section-value-at-point
                     'deb-packaging-infra-chroot)
-                   (completing-read
-                    "Schroot to delete: "
-                    (mapcar (lambda (s) (plist-get s :name))
-                            (deb-packaging-infra--list-schroots))
-                    nil t)))
+                   (let ((schroots (mapcar (lambda (s) (plist-get s :name))
+                                           (deb-packaging-infra--list-schroots))))
+                     (unless schroots
+                       (user-error "No schroots found"))
+                     (completing-read
+                      "Schroot to delete: " schroots nil t))))
          (schroots (deb-packaging-infra--list-schroots))
          (sc (cl-find name schroots
                       :key (lambda (s) (plist-get s :name)) :test #'equal))
@@ -405,22 +407,33 @@ ENTRY is a plist from `deb-packaging-infra--list-lxd-all'."
     (when (yes-or-no-p
            (format "Delete %s %s? "
                    (if (eq type 'image) "image" "container") name))
-      (compile
+      (deb-packaging-commands--compile
        (if (eq type 'image)
            (format "lxc image delete %s" (shell-quote-argument name))
          (format "lxc delete --force %s" (shell-quote-argument name)))))))
 
+(defun deb-packaging-infra--container-package (name)
+  "Return the package name encoded in a dev container NAME, or nil.
+Names look like deb-dev-PKG-DISTRO; PKG itself may contain hyphens."
+  (when (string-prefix-p "deb-dev-" name)
+    (let ((parts (split-string (string-remove-prefix "deb-dev-" name) "-")))
+      (when (cdr parts)
+        (mapconcat #'identity (butlast parts) "-")))))
+
 (defun deb-packaging-infra-visit-lxd-entry (&optional entry)
   "Open dired for the LXD container at point.
-Images are ignored."
+Images are ignored.  Dev containers mount the source at
+`deb-packaging-dev--mount-path'; the device source is the host path,
+which does not exist inside the container."
   (interactive
    (list (deb-packaging-infra--read-entry "Visit container: " 'container)))
   (if (not (eq (plist-get entry :type) 'container))
       (message "Only dev containers can be visited")
-    (let* ((raw (plist-get entry :raw))
-           (source (plist-get raw :source))
-           (name (plist-get entry :name))
-           (mount (or source "/root/work"))
+    (let* ((name (plist-get entry :name))
+           (pkg (deb-packaging-infra--container-package name))
+           (mount (if pkg
+                      (deb-packaging-dev--mount-path pkg)
+                    "/root/work"))
            (tramp-path (format "/lxc:%s:%s" name mount)))
       (deb-packaging-dev--ensure-tramp-method)
       (dired tramp-path))))
@@ -476,10 +489,16 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
   "s" #'deb-packaging-infra-stop-lxd-entry
   "S" #'deb-packaging-infra-start-lxd-entry
   "x" #'deb-packaging-infra-shell-lxd-entry
-  "RET" #'deb-packaging-infra-visit-lxd-entry
   "c" #'deb-packaging-infra-create-lxd
   "g" #'deb-packaging-infra-refresh-lxd
   "q" #'quit-window)
+
+(defvar deb-packaging-infra-lxd-row-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'deb-packaging-infra-visit-lxd-entry)
+    map)
+  "Keymap on LXD container rows so RET visits only containers.
+Image rows get no binding rather than a pretend action.")
 
 (define-derived-mode deb-packaging-infra-lxd-mode tabulated-list-mode "Infra-LXD"
   "Major mode for listing LXD images and dev containers."
@@ -497,20 +516,30 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
   (when (derived-mode-p 'deb-packaging-infra-lxd-mode)
     (setq tabulated-list-entries
           (mapcar (lambda (e)
-                    (let ((type-str (if (eq (plist-get e :type) 'image)
-                                        "Image"
-                                      "Container")))
+                    (let* ((containerp (eq (plist-get e :type) 'container))
+                           (row-cell
+                            (lambda (cell)
+                              (if containerp
+                                  (propertize cell 'keymap
+                                              deb-packaging-infra-lxd-row-map)
+                                cell)))
+                           (type-str (if containerp "Container" "Image")))
                       (list e
                             (vector
-                             (deb-packaging-infra--format-cell
-                              (plist-get e :name) 35 'left
-                              'magit-section-heading)
-                             (deb-packaging-infra--format-cell
-                              type-str 12)
-                             (deb-packaging-infra--format-cell
-                              (or (plist-get e :status) "") 10)
-                             (deb-packaging-infra--format-cell
-                              (or (plist-get e :detail) "") 25 nil 'shadow t)))))
+                             (funcall row-cell
+                                      (deb-packaging-infra--format-cell
+                                       (plist-get e :name) 35 'left
+                                       'magit-section-heading))
+                             (funcall row-cell
+                                      (deb-packaging-infra--format-cell
+                                       type-str 12))
+                             (funcall row-cell
+                                      (deb-packaging-infra--format-cell
+                                       (or (plist-get e :status) "") 10))
+                             (funcall row-cell
+                                      (deb-packaging-infra--format-cell
+                                       (or (plist-get e :detail) "") 25
+                                       nil 'shadow t))))))
                   (deb-packaging-infra--list-lxd-all)))
     (tabulated-list-init-header)
     (tabulated-list-print t)
