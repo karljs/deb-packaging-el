@@ -69,6 +69,54 @@
     (should-error (deb-packaging-detect--find-package-dir "/ssh:host:/tmp/foo" t)
                   :type 'user-error)))
 
+;;; Interactive package-dir prompt
+
+(ert-deftest deb-packaging-test-detect/read-package-dir-accepts-subdir ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((answers (list pkg-dir)))
+      (cl-letf (((symbol-function 'read-directory-name)
+                 (lambda (&rest _) (pop answers))))
+        (should (file-equal-p (deb-packaging-detect--read-package-dir)
+                              pkg-dir))
+        (should (null answers))))))
+
+(ert-deftest deb-packaging-test-detect/read-package-dir-reprompts-until-valid ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((empty (make-temp-file "deb-pkg-test-" t))
+          (answers nil))
+      (unwind-protect
+          (progn
+            (setq answers (list empty pkg-dir))
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (&rest _) (pop answers))))
+              (should (file-equal-p (deb-packaging-detect--read-package-dir)
+                                    pkg-dir))
+              (should (null answers))))
+        (delete-directory empty t)))))
+
+(ert-deftest deb-packaging-test-detect/read-package-dir-rejects-tramp-with-message ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((orig (symbol-function 'locate-dominating-file))
+          (answers (list "/ssh:host:/tmp/pkg/" pkg-dir))
+          (messages nil))
+      (cl-letf (((symbol-function 'locate-dominating-file)
+                 (lambda (dir name)
+                   (if (file-remote-p dir)
+                       "/ssh:host:/tmp/pkg/"
+                     (funcall orig dir name))))
+                ((symbol-function 'read-directory-name)
+                 (lambda (&rest _) (pop answers)))
+                ((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (push (apply #'format fmt args) messages))))
+        (should (file-equal-p (deb-packaging-detect--read-package-dir)
+                              pkg-dir))
+        (should (null answers))
+        (should (cl-some (lambda (m) (string-match-p "host" m)) messages))))))
+
 ;;; Control field extraction
 
 (ert-deftest deb-packaging-test-detect/control-field-existing ()

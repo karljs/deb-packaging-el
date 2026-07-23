@@ -10,12 +10,14 @@
 ;;; Commentary:
 
 ;; Manage schroots, LXD containers, QEMU images, and Launchpad PPAs.
-;; Each type has its own `tabulated-list-mode' buffer with sortable
-;; columns and a common key set (c/d/g/q).
+;; Schroots and their active sessions live in a `magit-section-mode'
+;; buffer; the other types use `tabulated-list-mode' buffers with
+;; sortable columns and a common key set (c/d/g/q).
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'magit-section)
 (require 'tabulated-list)
 (require 'transient)
 (require 'deb-packaging-config)
@@ -122,6 +124,40 @@ Each plist has keys: :name, :config-file, :description, :directory."
                       (string-remove-prefix "session:" line)))
                   (split-string output "\n" t)))))
 
+(defun deb-packaging-infra--session-chroot (session chroots)
+  "Return the name of the chroot SESSION belongs to, or nil.
+CHROOTS is a list of plists from `deb-packaging-infra--list-schroots'.
+The parent is the longest chroot name that is a prefix of SESSION."
+  (let (match)
+    (dolist (schroot chroots)
+      (let ((name (plist-get schroot :name)))
+        (when (and (string-prefix-p name session)
+                   (or (null match) (> (length name) (length match))))
+          (setq match name))))
+    match))
+
+(defun deb-packaging-infra--section-value-at-point (type)
+  "Return the value of the section of TYPE at point, or nil."
+  (when-let ((section (magit-current-section)))
+    (when (eq (oref section type) type)
+      (oref section value))))
+
+(defun deb-packaging-infra--session-targets ()
+  "Return session names in the active region, at point, or under the heading."
+  (or (magit-region-values 'deb-packaging-infra-session)
+      (when-let ((section (magit-current-section)))
+        (pcase (oref section type)
+          ('deb-packaging-infra-session (list (oref section value)))
+          ('deb-packaging-infra-sessions
+           (mapcar (lambda (s) (oref s value)) (oref section children)))))))
+
+(defun deb-packaging-infra--chroot-targets ()
+  "Return names of chroots in the active region or at point."
+  (or (magit-region-values 'deb-packaging-infra-chroot)
+      (when-let ((name (deb-packaging-infra--section-value-at-point
+                        'deb-packaging-infra-chroot)))
+        (list name))))
+
 (defun deb-packaging-infra-create-schroot ()
   "Create a schroot with mk-sbuild."
   (interactive)
@@ -131,40 +167,77 @@ Each plist has keys: :name, :config-file, :description, :directory."
     (when (yes-or-no-p (format "Run: %s? " cmd))
       (compile cmd))))
 
-(defun deb-packaging-infra-update-schroot (&optional name)
-  "Update a schroot with sbuild-update.
-Use schroot at point, or prompt."
-  (interactive
-   (list (deb-packaging-infra--read-name
-          "Schroot to update: " #'deb-packaging-infra--list-schroots)))
-  (compile (format "sbuild-update -udcar %s" (shell-quote-argument name))))
+(defun deb-packaging-infra--update-command (names)
+  "Return a shell command updating schroots NAMES sequentially.
+Chained with \";\" so one failing schroot does not block the rest."
+  (mapconcat (lambda (name)
+               (format "sbuild-update -udcar %s" (shell-quote-argument name)))
+             names "; "))
+
+(defun deb-packaging-infra-update-schroots (&optional names)
+  "Update schroots with sbuild-update.
+Schroots in the active region, the schroot at point, or prompt for one.
+NAMES, when given, is a list of schroot names to update."
+  (interactive)
+  (let ((targets (or names
+                     (deb-packaging-infra--chroot-targets)
+                     (list (completing-read
+                            "Schroot to update: "
+                            (mapcar (lambda (s) (plist-get s :name))
+                                    (deb-packaging-infra--list-schroots))
+                            nil t)))))
+    (compile (deb-packaging-infra--update-command targets))))
+
+(defun deb-packaging-infra-update-all-schroots ()
+  "Update all schroots with sbuild-update."
+  (interactive)
+  (let ((names (mapcar (lambda (s) (plist-get s :name))
+                       (deb-packaging-infra--list-schroots))))
+    (if (null names)
+        (message "No schroots found")
+      (when (yes-or-no-p (format "Update all %d schroots? " (length names)))
+        (compile (deb-packaging-infra--update-command names))))))
+
+(defun deb-packaging-infra--end-session (name)
+  "End schroot session NAME, messaging the outcome."
+  (if (zerop (call-process "schroot" nil nil nil "-e" "-c" name))
+      (message "Ended session %s" name)
+    (message "Failed to end session %s" name)))
+
+(defun deb-packaging-infra--end-session-list (names)
+  "End schroot sessions NAMES after confirmation, then refresh."
+  (if (null names)
+      (message "No schroot sessions to end")
+    (when (y-or-n-p (if (= (length names) 1)
+                        (format "End schroot session %s? " (car names))
+                      (format "End %d schroot sessions? " (length names))))
+      (dolist (name names)
+        (deb-packaging-infra--end-session name))
+      (deb-packaging-infra-refresh-schroots))))
 
 (defun deb-packaging-infra-end-sessions ()
+  "End schroot sessions in the active region, at point, or under the heading."
+  (interactive)
+  (deb-packaging-infra--end-session-list (deb-packaging-infra--session-targets)))
+
+(defun deb-packaging-infra-end-all-sessions ()
   "End all active schroot sessions."
   (interactive)
-  (compile "schroot -e --all-sessions"))
-
-(defun deb-packaging-infra-end-session-at-point ()
-  "End the schroot session whose row is at point."
-  (interactive)
-  (let ((id (tabulated-list-get-id)))
-    (if (and (consp id) (eq (car id) :session))
-        (let ((name (cdr id)))
-          (when (y-or-n-p (format "End schroot session %s? " name))
-            (if (zerop (call-process "schroot" nil nil nil "-e" "-c" name))
-                (progn
-                  (message "Ended session %s" name)
-                  (deb-packaging-infra-refresh-schroots))
-              (message "Failed to end session %s" name))))
-      (message "No schroot session at point"))))
+  (deb-packaging-infra--end-session-list (deb-packaging-infra--list-sessions)))
 
 (defun deb-packaging-infra-delete-schroot (&optional name)
   "Delete a schroot (config and directory).
 Use schroot at point, or prompt."
-  (interactive
-   (list (deb-packaging-infra--read-name
-          "Schroot to delete: " #'deb-packaging-infra--list-schroots)))
-  (let* ((schroots (deb-packaging-infra--list-schroots))
+  (interactive)
+  (let* ((name (or name
+                   (deb-packaging-infra--section-value-at-point
+                    'deb-packaging-infra-chroot)
+                   (completing-read
+                    "Schroot to delete: "
+                    (mapcar (lambda (s) (plist-get s :name))
+                            (deb-packaging-infra--list-schroots))
+                    nil t)))
+         (schroots (deb-packaging-infra--list-schroots))
          (sc (cl-find name schroots
                       :key (lambda (s) (plist-get s :name)) :test #'equal))
          (config-file (plist-get sc :config-file))
@@ -179,62 +252,70 @@ Use schroot at point, or prompt."
                              (shell-quote-argument config-file))))
             (compile cmd)))))))
 
-;;; Schroot list buffer
+;;; Schroots buffer
 
 (defvar-keymap deb-packaging-infra-schroots-mode-map
-  :doc "Keymap for the schroots list buffer."
-  :parent tabulated-list-mode-map
-  "u" #'deb-packaging-infra-update-schroot
-  "e" #'deb-packaging-infra-end-session-at-point
-  "E" #'deb-packaging-infra-end-sessions
+  :doc "Keymap for the schroots buffer."
+  :parent magit-section-mode-map
+  "u" #'deb-packaging-infra-update-schroots
+  "U" #'deb-packaging-infra-update-all-schroots
+  "e" #'deb-packaging-infra-end-sessions
+  "E" #'deb-packaging-infra-end-all-sessions
   "d" #'deb-packaging-infra-delete-schroot
   "c" #'deb-packaging-infra-create-schroot
   "g" #'deb-packaging-infra-refresh-schroots
   "q" #'quit-window)
 
-(define-derived-mode deb-packaging-infra-schroots-mode tabulated-list-mode "Infra-Schroots"
-  "Major mode for listing and managing schroots."
-  (setq tabulated-list-format
-        [("Name" 25 t)
-         ("Description" 25 t)
-         ("Directory" 50 t)])
-  (setq tabulated-list-padding 2)
-  (setq tabulated-list-sort-key nil))
+(define-derived-mode deb-packaging-infra-schroots-mode magit-section-mode "Infra-Schroots"
+  "Major mode for listing and managing schroots and their sessions.")
+
+(defun deb-packaging-infra--insert-session-row (session schroots)
+  "Insert a row for schroot SESSION, dimming its parent chroot from SCHROOTS."
+  (magit-insert-section (deb-packaging-infra-session session)
+    (insert "  "
+            (deb-packaging-infra--format-cell
+             session 32 'left 'magit-section-heading)
+            (deb-packaging-infra--format-cell
+             (or (deb-packaging-infra--session-chroot session schroots) "")
+             32 nil 'shadow)
+            "\n")))
+
+(defun deb-packaging-infra--insert-chroot-row (schroot)
+  "Insert a row for schroot plist SCHROOT."
+  (magit-insert-section (deb-packaging-infra-chroot (plist-get schroot :name))
+    (insert "  "
+            (deb-packaging-infra--format-cell
+             (plist-get schroot :name) 25 'left 'magit-section-heading)
+            (deb-packaging-infra--format-cell
+             (plist-get schroot :description) 25)
+            (deb-packaging-infra--format-cell
+             (plist-get schroot :directory) 50 nil 'shadow t)
+            "\n")))
 
 (defun deb-packaging-infra-refresh-schroots ()
-  "Refresh the schroots list buffer."
+  "Refresh the schroots buffer."
   (interactive)
   (when (derived-mode-p 'deb-packaging-infra-schroots-mode)
-    (setq tabulated-list-entries
-          (nconc
-           (mapcar (lambda (schroot)
-                     (list schroot
-                           (vector
-                            (deb-packaging-infra--format-cell
-                             (plist-get schroot :name) 25 'left
-                             'magit-section-heading)
-                            (deb-packaging-infra--format-cell
-                             (plist-get schroot :description) 25)
-                            (deb-packaging-infra--format-cell
-                             (plist-get schroot :directory) 50 nil 'shadow t))))
-                   (deb-packaging-infra--list-schroots))
-           (mapcar (lambda (session)
-                     (list (cons :session session)
-                           (vector
-                            (deb-packaging-infra--format-cell
-                             session 25 'left 'magit-section-heading)
-                            (deb-packaging-infra--format-cell
-                             "active session" 25)
-                            (deb-packaging-infra--format-cell
-                             "" 50 nil 'shadow t))))
-                   (deb-packaging-infra--list-sessions))))
-    (tabulated-list-init-header)
-    (tabulated-list-print t)
-    (when (null tabulated-list-entries)
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (insert (propertize "\nNo schroots found.\nCreate one with 'c'."
-                            'face 'shadow))))))
+    (let ((inhibit-read-only t)
+          (schroots (deb-packaging-infra--list-schroots))
+          (sessions (deb-packaging-infra--list-sessions))
+          (pos (point)))
+      (erase-buffer)
+      (magit-insert-section (deb-packaging-infra-root)
+        (when sessions
+          (magit-insert-section (deb-packaging-infra-sessions)
+            (magit-insert-heading (format "Sessions (%d)" (length sessions)))
+            (dolist (session sessions)
+              (deb-packaging-infra--insert-session-row session schroots)))
+          (insert "\n"))
+        (magit-insert-section (deb-packaging-infra-chroots)
+          (magit-insert-heading (format "Chroots (%d)" (length schroots)))
+          (dolist (schroot schroots)
+            (deb-packaging-infra--insert-chroot-row schroot)))
+        (when (and (null schroots) (null sessions))
+          (insert (propertize "\nNo schroots found.\nCreate one with 'c'."
+                              'face 'shadow))))
+      (goto-char (min pos (point-max))))))
 
 (defun deb-packaging-infra-schroots ()
   "Open a buffer listing all schroots."

@@ -30,6 +30,25 @@ With HOST-ONLY, error on TRAMP paths so host commands stay off containers."
            "This command runs on the host, but the current file is inside a dev container.  Run it from the status buffer (M-x deb-packaging-status) or a host file."))
         expanded))))
 
+(defun deb-packaging-detect--read-package-dir (&optional prompt)
+  "Prompt for a package directory, re-prompting until one qualifies.
+A directory qualifies when it or an ancestor contains debian/changelog;
+the package root is returned, not necessarily the directory picked.
+Remote picks are rejected with the host-only message from
+`deb-packaging-detect--find-package-dir'.  PROMPT defaults to
+\"Package directory: \"; C-g aborts as usual."
+  (let ((prompt (or prompt "Package directory: "))
+        (pkg-dir nil))
+    (while (not pkg-dir)
+      (let ((dir (read-directory-name prompt nil nil t)))
+        (setq pkg-dir
+              (condition-case err
+                  (deb-packaging-detect--find-package-dir dir t)
+                (user-error (message "%s" (cadr err)) nil)))
+        (unless pkg-dir
+          (message "No debian/changelog in %s or any parent directory" dir))))
+    pkg-dir))
+
 ;;; Shared helpers
 
 (defun deb-packaging-detect--parent-dir (pkg-dir)

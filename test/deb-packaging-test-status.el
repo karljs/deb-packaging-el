@@ -334,5 +334,44 @@
     (should (string-match-p "1F" (deb-packaging-status--ppa-tests-summary-note)))
     (should (string-match-p "0B" (deb-packaging-status--ppa-tests-summary-note)))))
 
+;;; Entry point prompting
+
+(ert-deftest deb-packaging-test-status/status-prompts-outside-package ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((default-directory pkg-parent-dir)
+          (answers (list pkg-dir))
+          (displayed nil))
+      (deb-packaging-test--with-mocked-process
+          '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+        (cl-letf (((symbol-function 'read-directory-name)
+                   (lambda (&rest _) (pop answers)))
+                  ((symbol-function 'deb-packaging-display-buffer)
+                   (lambda (buf _category) (setq displayed buf))))
+          (deb-packaging-status))
+        (should (null answers))
+        (should (string= (buffer-name displayed) "*deb-packaging: foo*"))
+        (should (file-equal-p (buffer-local-value 'default-directory displayed)
+                              pkg-dir))
+        (should (equal (plist-get (buffer-local-value
+                                   'deb-packaging-status--context displayed)
+                                  :name)
+                       "foo"))
+        (kill-buffer displayed)))))
+
+(ert-deftest deb-packaging-test-status/status-inside-package-does-not-prompt ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((displayed nil))
+      (deb-packaging-test--with-mocked-process
+          '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+        (cl-letf (((symbol-function 'read-directory-name)
+                   (lambda (&rest _) (error "must not prompt")))
+                  ((symbol-function 'deb-packaging-display-buffer)
+                   (lambda (buf _category) (setq displayed buf))))
+          (deb-packaging-status))
+        (should (string= (buffer-name displayed) "*deb-packaging: foo*"))
+        (kill-buffer displayed)))))
+
 (provide 'deb-packaging-test-status)
 ;;; deb-packaging-test-status.el ends here

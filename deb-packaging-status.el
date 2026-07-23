@@ -114,7 +114,7 @@ Does not create or refresh a buffer."
   "Return a note naming the session kept by the last sbuild run, or nil."
   (when-let* ((summary (deb-packaging-commands--run-summary 'sbuild))
               (kept (plist-get summary :kept-session)))
-    (format "Session kept: %s ('e' on it in the infra schroots list ends it)"
+    (format "Session kept: %s ('e' on it in the infra schroots buffer ends it)"
             kept)))
 
 (defun deb-packaging-status--lint-summary-note (key)
@@ -961,9 +961,13 @@ Navigation and folding come from `magit-section-mode'."
 
 ;;;###autoload
 (defun deb-packaging-status ()
-  "Open the Debian packaging status buffer."
+  "Open the Debian packaging status buffer.
+Outside a package tree, prompt for one first (like `magit-status')."
   (interactive)
-  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+  (let* ((pkg-dir (or (condition-case nil
+                          (deb-packaging-detect--find-package-dir nil t)
+                        (user-error nil))
+                      (deb-packaging-detect--read-package-dir)))
          (name (deb-packaging-detect--package-name pkg-dir))
          (buf (get-buffer-create (deb-packaging-status--buffer-name name))))
     (with-current-buffer buf

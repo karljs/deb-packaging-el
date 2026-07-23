@@ -11,7 +11,8 @@
 
 ;; Context-aware interface for Debian/Ubuntu packaging.
 ;; Entry points: `deb-packaging-status' (status buffer) and
-;; `deb-packaging-dispatch' (transient hub). Default key: C-c C-d.
+;; `deb-packaging-dispatch' (transient hub).  Both prompt for a package
+;; directory when invoked outside one.  Default key: C-c C-d.
 
 ;;; Code:
 
@@ -49,7 +50,7 @@ Propagated to all per-tool transients and the status buffer."
   (deb-packaging-config--set-distro distro)
   (message "Target distro set to %s" distro))
 
-(transient-define-prefix deb-packaging-dispatch ()
+(transient-define-prefix deb-packaging-dispatch-transient ()
   "Debian packaging commands.
 Set the target distro with `d'; other transients inherit it."
   :environment #'deb-packaging-transients--env
@@ -71,9 +72,22 @@ Set the target distro with `d'; other transients inherit it."
   ["Cleanup"
    ("c" "Clean artifacts..." deb-packaging-commands-clean-transient)
    ("r" "Reset source tree..." deb-packaging-commands-reset-transient)]
-  ["Other"
-   ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
-   ("q" "Quit"             transient-quit-one)])
+   ["Other"
+    ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
+    ("q" "Quit"             transient-quit-one)])
+
+;;;###autoload
+(defun deb-packaging-dispatch ()
+  "Open the packaging dispatch transient.
+Outside a package tree, go through `deb-packaging-status' first: it
+prompts for a package and lands in its status buffer, which becomes the
+context the transient's commands run in."
+  (interactive)
+  (unless (condition-case nil
+              (deb-packaging-detect--find-package-dir nil t)
+            (user-error nil))
+    (deb-packaging-status))
+  (deb-packaging-dispatch-transient))
 
 ;;; Keybinding
 

@@ -31,7 +31,8 @@ TEST_SRC = test/deb-packaging-test-version.el \
            test/deb-packaging-test-run.el \
            test/deb-packaging-test-pq.el \
            test/deb-packaging-test-dev.el \
-           test/deb-packaging-test-clone.el
+           test/deb-packaging-test-clone.el \
+           test/deb-packaging-test-dispatch.el
 
 # Put installed ELPA packages (magit, transient, magit-section, deps) plus
 # the package root and test/ on the load-path.

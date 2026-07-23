@@ -304,38 +304,192 @@ runs in DIR, so package detection works from the buffer."
                "session:alpha\nchroot:noble-amd64\nsource:noble-amd64\nsession:beta")))
     (should (equal (deb-packaging-infra--list-sessions) '("alpha" "beta")))))
 
-(ert-deftest deb-packaging-test-display/infra-sessions-appear-as-rows ()
-  "Active sessions are appended to the schroots list as session rows."
-  (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
-             (lambda () nil))
-            ((symbol-function 'deb-packaging-infra--list-sessions)
-             (lambda () '("stonking-amd64-abc"))))
-    (with-temp-buffer
-      (deb-packaging-infra-schroots-mode)
-      (deb-packaging-infra-refresh-schroots)
-      (should (equal (car (nth 0 tabulated-list-entries))
-                     '(:session . "stonking-amd64-abc"))))))
+;;; Schroots buffer: two magit-section sections
+
+(defmacro deb-packaging-test-display--with-schroots-buffer (chroots sessions &rest body)
+  "Render the schroots buffer with mocked lists, then run BODY in it.
+CHROOTS is a list of plists as from `deb-packaging-infra--list-schroots';
+SESSIONS a list of session name strings."
+  (declare (indent 2) (debug (form form body)))
+  `(cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+              (lambda () ,chroots))
+             ((symbol-function 'deb-packaging-infra--list-sessions)
+              (lambda () ,sessions)))
+     (with-temp-buffer
+       (deb-packaging-infra-schroots-mode)
+       (deb-packaging-infra-refresh-schroots)
+       ,@body)))
+
+(ert-deftest deb-packaging-test-display/infra-schroots-two-sections ()
+  "Sessions and chroots render as separate sections."
+  (deb-packaging-test-display--with-schroots-buffer
+      '((:name "noble-amd64" :description "Noble" :directory "/srv/noble"))
+      '("noble-amd64-abc123")
+    (should (string-match-p "Sessions (1)" (buffer-string)))
+    (should (string-match-p "Chroots (1)" (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "noble-amd64-abc123")
+    (should (eq (oref (magit-current-section) type)
+                'deb-packaging-infra-session))
+    (should (equal (oref (magit-current-section) value)
+                   "noble-amd64-abc123"))
+    (goto-char (point-min))
+    (search-forward "/srv/noble")
+    (should (eq (oref (magit-current-section) type)
+                'deb-packaging-infra-chroot))))
+
+(ert-deftest deb-packaging-test-display/infra-sessions-section-hidden-when-none ()
+  "No Sessions section is shown when there are no active sessions."
+  (deb-packaging-test-display--with-schroots-buffer
+      '((:name "noble-amd64" :description "Noble" :directory "/srv/noble"))
+      nil
+    (should-not (string-match-p "Sessions" (buffer-string)))
+    (should (string-match-p "Chroots (1)" (buffer-string)))))
+
+(ert-deftest deb-packaging-test-display/infra-schroots-empty-state ()
+  "With no chroots and no sessions, an empty-state message is shown."
+  (deb-packaging-test-display--with-schroots-buffer nil nil
+    (should (string-match-p "No schroots found" (buffer-string)))))
+
+(ert-deftest deb-packaging-test-display/infra-session-chroot-prefix-match ()
+  "The parent chroot of a session is found by longest name prefix."
+  (let ((chroots '((:name "noble-amd64") (:name "noble-amd64-debug"))))
+    (should (equal (deb-packaging-infra--session-chroot
+                    "noble-amd64-debug-abc123" chroots)
+                   "noble-amd64-debug"))
+    (should (equal (deb-packaging-infra--session-chroot
+                    "noble-amd64-abc123" chroots)
+                   "noble-amd64"))
+    (should-not (deb-packaging-infra--session-chroot "unrelated-xyz" chroots))))
 
 (ert-deftest deb-packaging-test-display/infra-end-session-at-point ()
-  "Ending a session row runs schroot -e -c NAME."
+  "With point on a session row, `e' ends that session."
   (let (calls)
     (cl-letf (((symbol-function 'call-process)
                (lambda (program &optional _infile _dest _display &rest args)
                  (push (cons program args) calls)
                  0))
-              ((symbol-function 'y-or-n-p) #'always)
-              ((symbol-function 'deb-packaging-infra-refresh-schroots) #'ignore))
-      (with-temp-buffer
-        (deb-packaging-infra-schroots-mode)
-        (setq tabulated-list-entries
-              (list (list '(:session . "sess-1")
-                          (vector "sess-1" "active session" ""))))
-        (tabulated-list-init-header)
-        (tabulated-list-print t)
+              ((symbol-function 'y-or-n-p) #'always))
+      (deb-packaging-test-display--with-schroots-buffer nil '("sess-1")
         (goto-char (point-min))
         (search-forward "sess-1")
-        (deb-packaging-infra-end-session-at-point)))
+        (deb-packaging-infra-end-sessions)))
     (should (equal (car calls) '("schroot" "-e" "-c" "sess-1")))))
+
+(ert-deftest deb-packaging-test-display/infra-end-sessions-in-region ()
+  "With an active region over session rows, `e' ends them all."
+  (let (calls)
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (program &optional _infile _dest _display &rest args)
+                 (push (cons program args) calls)
+                 0))
+              ((symbol-function 'y-or-n-p) #'always))
+      (deb-packaging-test-display--with-schroots-buffer nil '("sess-1" "sess-2")
+        (goto-char (point-min))
+        (search-forward "sess-1")
+        (beginning-of-line)
+        (set-mark (point))
+        (activate-mark)
+        (search-forward "sess-2")
+        (deb-packaging-infra-end-sessions)))
+    (should (equal (length calls) 2))
+    (should (member '("schroot" "-e" "-c" "sess-1") calls))
+    (should (member '("schroot" "-e" "-c" "sess-2") calls))))
+
+(ert-deftest deb-packaging-test-display/infra-end-sessions-on-heading ()
+  "With point on the Sessions heading, `e' ends all sessions."
+  (let (calls)
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (program &optional _infile _dest _display &rest args)
+                 (push (cons program args) calls)
+                 0))
+              ((symbol-function 'y-or-n-p) #'always))
+      (deb-packaging-test-display--with-schroots-buffer nil '("sess-1" "sess-2")
+        (goto-char (point-min))
+        (search-forward "Sessions (2)")
+        (deb-packaging-infra-end-sessions)))
+    (should (equal (length calls) 2))))
+
+(ert-deftest deb-packaging-test-display/infra-end-all-sessions ()
+  "`E' ends every active session without a compile buffer."
+  (let (calls compiles)
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (program &optional _infile _dest _display &rest args)
+                 (push (cons program args) calls)
+                 0))
+              ((symbol-function 'compile)
+               (lambda (&rest _) (push t compiles) nil))
+              ((symbol-function 'y-or-n-p) #'always)
+              ((symbol-function 'deb-packaging-infra--list-sessions)
+               (lambda () '("sess-1" "sess-2"))))
+      (deb-packaging-infra-end-all-sessions))
+    (should-not compiles)
+    (should (equal (length calls) 2))
+    (should (member '("schroot" "-e" "-c" "sess-1") calls))
+    (should (member '("schroot" "-e" "-c" "sess-2") calls))))
+
+(ert-deftest deb-packaging-test-display/infra-update-schroot-at-point ()
+  "With point on a chroot row, `u' updates just that chroot."
+  (let (compiles)
+    (cl-letf (((symbol-function 'compile)
+               (lambda (cmd &rest _) (push cmd compiles) nil)))
+      (deb-packaging-test-display--with-schroots-buffer
+          '((:name "noble-amd64" :description "Noble" :directory "/srv/noble")
+            (:name "stonking-amd64" :description "Stonk" :directory "/srv/stonk"))
+          nil
+        (goto-char (point-min))
+        (search-forward "stonking-amd64")
+        (deb-packaging-infra-update-schroots)))
+    (should (equal compiles '("sbuild-update -udcar stonking-amd64")))))
+
+(ert-deftest deb-packaging-test-display/infra-update-schroots-in-region ()
+  "With an active region over chroot rows, `u' updates them in one compile."
+  (let (compiles)
+    (cl-letf (((symbol-function 'compile)
+               (lambda (cmd &rest _) (push cmd compiles) nil)))
+      (deb-packaging-test-display--with-schroots-buffer
+          '((:name "noble-amd64" :description "Noble" :directory "/srv/noble")
+            (:name "stonking-amd64" :description "Stonk" :directory "/srv/stonk"))
+          nil
+        (goto-char (point-min))
+        (search-forward "noble-amd64")
+        (beginning-of-line)
+        (set-mark (point))
+        (activate-mark)
+        (search-forward "stonking-amd64")
+        (deb-packaging-infra-update-schroots)))
+    (should (= (length compiles) 1))
+    (should (string-match-p "sbuild-update -udcar noble-amd64" (car compiles)))
+    (should (string-match-p "sbuild-update -udcar stonking-amd64" (car compiles)))))
+
+(ert-deftest deb-packaging-test-display/infra-update-all-schroots ()
+  "`U' updates every chroot in one compile command."
+  (let (compiles)
+    (cl-letf (((symbol-function 'compile)
+               (lambda (cmd &rest _) (push cmd compiles) nil))
+              ((symbol-function 'yes-or-no-p) #'always)
+              ((symbol-function 'deb-packaging-infra--list-schroots)
+               (lambda () '((:name "noble-amd64") (:name "stonking-amd64")))))
+      (deb-packaging-infra-update-all-schroots))
+    (should (= (length compiles) 1))
+    (should (string-match-p "sbuild-update -udcar noble-amd64" (car compiles)))
+    (should (string-match-p "sbuild-update -udcar stonking-amd64" (car compiles)))
+    (should (string-match-p ";" (car compiles)))))
+
+(ert-deftest deb-packaging-test-display/infra-delete-schroot-at-point ()
+  "With point on a chroot row, `d' deletes that chroot."
+  (let (compiles)
+    (cl-letf (((symbol-function 'compile)
+               (lambda (cmd &rest _) (push cmd compiles) nil))
+              ((symbol-function 'yes-or-no-p) #'always))
+      (deb-packaging-test-display--with-schroots-buffer
+          '((:name "noble-amd64" :description "Noble" :directory "/srv/noble"
+             :config-file "/etc/schroot/chroot.d/noble"))
+          nil
+        (goto-char (point-min))
+        (search-forward "noble-amd64")
+        (deb-packaging-infra-delete-schroot)))
+    (should (string-match-p "rm -rf /srv/noble" (car compiles)))))
 
 (ert-deftest deb-packaging-test-display/infra-ppas-displays-list ()
   "The PPAs list displays via the list category."
