@@ -225,6 +225,14 @@ NAMES, when given, is a list of schroot names to update."
   (interactive)
   (deb-packaging-infra--end-session-list (deb-packaging-infra--list-sessions)))
 
+(defun deb-packaging-infra--ensure-sudo-timestamp ()
+  "Signal `user-error' unless sudo credentials are currently cached.
+Sudo runs inside a compilation buffer, which cannot answer password
+prompts (authd and other non-standard PAM prompts included).  Prime the
+timestamp with `sudo -v' in a terminal first."
+  (unless (zerop (call-process "sudo" nil nil nil "-n" "true"))
+    (user-error "sudo credentials not cached; run `sudo -v' in a terminal first")))
+
 (defun deb-packaging-infra-delete-schroot (&optional name)
   "Delete a schroot (config and directory).
 Use schroot at point, or prompt."
@@ -247,6 +255,7 @@ Use schroot at point, or prompt."
       (let ((msg (format "Will delete:\n  Config: %s\n  Directory: %s\n\nProceed?"
                          config-file directory)))
         (when (yes-or-no-p msg)
+          (deb-packaging-infra--ensure-sudo-timestamp)
           (let ((cmd (format "sudo rm -rf %s && sudo rm %s"
                              (shell-quote-argument directory)
                              (shell-quote-argument config-file))))
@@ -561,6 +570,7 @@ Use image at point, or prompt."
                        :key (lambda (i) (plist-get i :name)) :test #'equal))
          (path (plist-get img :path)))
     (when (yes-or-no-p (format "Delete %s?" path))
+      (deb-packaging-infra--ensure-sudo-timestamp)
       (compile (format "sudo rm %s" (shell-quote-argument path))))))
 
 ;;; QEMU list buffer

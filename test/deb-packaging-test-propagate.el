@@ -256,5 +256,78 @@ Author: A U Thor <author@example.com>
         (when (file-directory-p clone-root)
           (delete-directory clone-root t))))))
 
+;;; Clone session flow (mocked)
+
+(defmacro deb-packaging-test-propagate--with-clone-mocks (answers &rest body)
+  "Run BODY with `deb-packaging-propagate-clone' dependencies mocked.
+ANSWERS is a list of `yes-or-no-p' answers consumed in order.  Within
+BODY, `git-calls' records `magit-call-git' argument lists, `prompts'
+records confirmation prompts, `messages' records echo-area messages,
+and `status-opened' counts `magit-status-setup-buffer' calls."
+  (declare (indent 1) (debug (form body)))
+  `(let ((git-calls nil)
+         (prompts nil)
+         (messages nil)
+         (status-opened 0)
+         (remaining ,answers))
+     (cl-letf (((symbol-function 'deb-packaging-propagate--clone-dir)
+                (lambda (name) (expand-file-name (concat name "-clone")
+                                                 temporary-file-directory)))
+               ((symbol-function 'deb-packaging-propagate--clone-exists-p)
+                (lambda (_dir) t))
+               ((symbol-function 'deb-packaging-propagate--default-branch)
+                (lambda (_dir) "main"))
+               ((symbol-function 'deb-packaging-propagate--remote-branches)
+                (lambda (_dir) nil))
+               ((symbol-function 'deb-packaging-propagate--git-quiet)
+                (lambda (_dir &rest args)
+                  (when (equal (car args) "rev-parse") "abc123")))
+               ((symbol-function 'deb-packaging-propagate--salsa-personal-url)
+                (lambda (_name) nil))
+               ((symbol-function 'read-string)
+                (lambda (&rest _) "ignored"))
+               ((symbol-function 'yes-or-no-p)
+                (lambda (prompt) (push prompt prompts) (pop remaining)))
+               ((symbol-function 'magit-call-git)
+                (lambda (&rest args) (push args git-calls) 0))
+               ((symbol-function 'magit-status-setup-buffer)
+                (lambda (_dir) (cl-incf status-opened) (current-buffer)))
+               ((symbol-function 'message)
+                (lambda (fmt &rest args)
+                  (push (apply #'format fmt args) messages))))
+       ,@body)))
+
+(ert-deftest deb-packaging-test-propagate/clone-confirms-before-deleting-work-branch ()
+  "Re-running clone asks before force-deleting the existing work branch."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (deb-packaging-test-propagate--with-clone-mocks (list t t)
+      (deb-packaging-propagate-clone)
+      (should (cl-some (lambda (p) (string-match-p "Delete existing work branch" p))
+                       prompts))
+      (should (cl-some (lambda (c) (equal c '("branch" "-D" "ignored")))
+                       git-calls))
+      (should (= status-opened 1)))))
+
+(ert-deftest deb-packaging-test-propagate/clone-declining-branch-delete-aborts ()
+  "Declining the branch deletion keeps the branch and stops the run."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (deb-packaging-test-propagate--with-clone-mocks (list t nil)
+      (deb-packaging-propagate-clone)
+      (should-not (cl-some (lambda (c) (equal (car c) "branch")) git-calls))
+      (should (= status-opened 0))
+      (should (cl-some (lambda (m) (string-match-p "Aborted" m)) messages)))))
+
+(ert-deftest deb-packaging-test-propagate/clone-declining-reset-aborts-quietly ()
+  "Saying no to the fetch/reset aborts with a message, not an error."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (deb-packaging-test-propagate--with-clone-mocks (list nil)
+      (deb-packaging-propagate-clone)
+      (should (null git-calls))
+      (should (= status-opened 0))
+      (should (cl-some (lambda (m) (string-match-p "Aborted" m)) messages)))))
+
 (provide 'deb-packaging-test-propagate)
 ;;; deb-packaging-test-propagate.el ends here

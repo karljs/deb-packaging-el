@@ -481,6 +481,8 @@ SESSIONS a list of session name strings."
   (let (compiles)
     (cl-letf (((symbol-function 'compile)
                (lambda (cmd &rest _) (push cmd compiles) nil))
+              ((symbol-function 'call-process)
+               (lambda (&rest _) 0))
               ((symbol-function 'yes-or-no-p) #'always))
       (deb-packaging-test-display--with-schroots-buffer
           '((:name "noble-amd64" :description "Noble" :directory "/srv/noble"
