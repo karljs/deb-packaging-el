@@ -12,7 +12,7 @@
 ;; Context-aware interface for Debian/Ubuntu packaging.
 ;; Entry points: `deb-packaging-status' (status buffer) and
 ;; `deb-packaging-dispatch' (transient hub).  Both prompt for a package
-;; directory when invoked outside one.  Default key: C-c C-d.
+;; directory when invoked outside one.
 
 ;;; Code:
 
@@ -88,22 +88,6 @@ context the transient's commands run in."
             (user-error nil))
     (deb-packaging-status))
   (deb-packaging-dispatch-transient))
-
-;;; Keybinding
-
-;;;###autoload
-(defun deb-packaging-setup-keys ()
-  "Bind `C-c C-d' to `deb-packaging-status'.
-Skips and warns if `C-c C-d' is already bound to another command."
-  (let* ((key (kbd "C-c C-d"))
-         (cmd (key-binding key t)))
-    (if (or (null cmd) (eq cmd #'deb-packaging-status))
-        (global-set-key key #'deb-packaging-status)
-      (message "deb-packaging: C-c C-d already bound to %s; bind deb-packaging-status manually"
-               cmd))))
-
-;;;###autoload
-(autoload 'deb-packaging-status "deb-packaging-status" nil t)
 
 (provide 'deb-packaging)
 ;;; deb-packaging.el ends here

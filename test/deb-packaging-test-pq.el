@@ -24,7 +24,7 @@
 
 (ert-deftest deb-packaging-test-pq/state-on-main ()
   (deb-packaging-test--with-temp-git-repo
-    (should (string= (deb-packaging-pq--current-branch) "main"))
+    (should (string= (magit-get-current-branch) "main"))
     (should (null (deb-packaging-pq--on-pq-branch-p)))
     (let ((state (deb-packaging-pq--state)))
       (should (null (plist-get state :on-pq-p)))
@@ -44,7 +44,7 @@
   (deb-packaging-test--with-temp-git-repo
     (deb-packaging-test--git repo-dir "branch" "patch-queue/main")
     (deb-packaging-test--git repo-dir "checkout" "-q" "patch-queue/main")
-    (should (string= (deb-packaging-pq--current-branch) "patch-queue/main"))
+    (should (string= (magit-get-current-branch) "patch-queue/main"))
     (should (deb-packaging-pq--on-pq-branch-p))
     (let ((state (deb-packaging-pq--state)))
       (should (plist-get state :on-pq-p))
@@ -58,7 +58,7 @@
          (fired 0))
     (unwind-protect
         (progn
-          (deb-packaging-pq--after-compile buf (lambda () (cl-incf fired)))
+          (deb-packaging-commands--after-compile buf (lambda () (cl-incf fired)))
           ;; Wrong buffer: no fire, hook stays.
           (run-hook-with-args 'compilation-finish-functions
                               (generate-new-buffer " *other*") "finished\n")
@@ -78,7 +78,7 @@
          (fired 0))
     (unwind-protect
         (progn
-          (deb-packaging-pq--after-compile buf (lambda () (cl-incf fired)))
+          (deb-packaging-commands--after-compile buf (lambda () (cl-incf fired)))
           ;; Matching buffer, failure message: action does not fire, hook removes itself.
           (run-hook-with-args 'compilation-finish-functions
                               buf "exited abnormally with code 1\n")

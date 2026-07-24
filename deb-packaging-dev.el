@@ -55,9 +55,6 @@ Add entries to extend language support.")
   "Extra apt packages for dev containers. Not build-deps, not language servers.
 Best-effort install.")
 
-(defvar deb-packaging-dev-own-remote-path t
-  "When non-nil, add `tramp-own-remote-path' to `tramp-remote-path'.")
-
 ;;; TRAMP method
 
 (defun deb-packaging-dev--ensure-tramp-method ()
@@ -72,8 +69,7 @@ Best-effort install.")
        (tramp-remote-shell "/bin/sh")
        (tramp-remote-shell-login ("-l"))
        (tramp-remote-shell-args ("-i" "-c")))))
-  (when (and deb-packaging-dev-own-remote-path
-             (not (memq 'tramp-own-remote-path tramp-remote-path)))
+  (unless (memq 'tramp-own-remote-path tramp-remote-path)
     (add-to-list 'tramp-remote-path 'tramp-own-remote-path)))
 
 ;;; Provisioning
@@ -89,18 +85,6 @@ Best-effort install.")
 (defun deb-packaging-dev--mount-path (pkg)
   "Mount path for PKG inside the container."
   (format "%s/%s" deb-packaging-dev-mount-point pkg))
-
-(defun deb-packaging-dev--profile-lookup (key)
-  "Return profile entry for KEY or nil."
-  (assq key deb-packaging-dev-language-profiles))
-
-(defun deb-packaging-dev--profile-apt (entry)
-  "Return :apt string for ENTRY or nil."
-  (plist-get (cddr entry) :apt))
-
-(defun deb-packaging-dev--profile-setup (entry)
-  "Return :setup command for ENTRY or nil."
-  (plist-get (cddr entry) :setup))
 
 (defun deb-packaging-dev--langs-cache-file (pkg distro)
   "Return cache file path for PKG/DISTRO language selection, or nil."
@@ -145,14 +129,14 @@ recurs on every dev-shell.")
   "Prompt for language profiles. Pre-selects from cache. Writes back."
   (let* ((cached-keys (deb-packaging-dev--read-langs-cache pkg distro))
          (labels (mapcar #'cadr deb-packaging-dev-language-profiles))
-         (initial (when cached-keys
-                    (mapconcat #'identity
-                               (delq nil
-                                     (mapcar (lambda (key)
-                                                 (let ((entry (deb-packaging-dev--profile-lookup key)))
-                                                   (when entry (cadr entry))))
-                                               cached-keys))
-                               ",")))
+          (initial (when cached-keys
+                     (mapconcat #'identity
+                                (delq nil
+                                      (mapcar (lambda (key)
+                                                (let ((entry (assq key deb-packaging-dev-language-profiles)))
+                                                  (when entry (cadr entry))))
+                                              cached-keys))
+                                ",")))
          (chosen (completing-read-multiple
                   "Language servers (comma-separated, empty for none): "
                   labels nil nil initial))
@@ -162,7 +146,9 @@ recurs on every dev-shell.")
                                        :key #'cadr :test #'equal)))
                        (cl-remove-if #'string-empty-p
                                      (mapcar #'string-trim chosen))))
-         (entries (delq nil (mapcar #'deb-packaging-dev--profile-lookup keys))))
+          (entries (delq nil (mapcar (lambda (k)
+                                       (assq k deb-packaging-dev-language-profiles))
+                                     keys))))
     (deb-packaging-dev--write-langs-cache
      pkg distro (or keys (list deb-packaging-dev--no-langs-key)))
     entries))
@@ -224,10 +210,6 @@ the bind mount needs no shift."
    (format "  lxc config device add %s %s disk source=%s path=%s"
            qname (shell-quote-argument device) qpkg-dir qmount)
    "fi"))
-
-(defun deb-packaging-dev--script-force-line (force)
-  "Return the FORCE shell-variable assignment line for FORCE."
-  (list (format "FORCE=%s" (if force "1" ""))))
 
 (defun deb-packaging-dev--script-core-helpers (qname)
   "Return script lines installing devscripts and equivs when missing."
@@ -335,15 +317,17 @@ languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all."
         (extra-apt (mapconcat #'shell-quote-argument
                               deb-packaging-dev-extra-packages " "))
         (profile-apts (delq nil
-                            (mapcar #'deb-packaging-dev--profile-apt profiles)))
+                            (mapcar (lambda (e) (plist-get (cddr e) :apt))
+                                    profiles)))
         (profile-setups (delq nil
-                              (mapcar #'deb-packaging-dev--profile-setup profiles)))
+                              (mapcar (lambda (e) (plist-get (cddr e) :setup))
+                                      profiles)))
         (device (format "work-%s" pkg)))
     (string-join
      (append
       (deb-packaging-dev--script-container-setup
        qname image uid qpkg-dir qmount device)
-      (deb-packaging-dev--script-force-line force)
+      (list (format "FORCE=%s" (if force "1" "")))
       (deb-packaging-dev--script-core-helpers qname)
       (deb-packaging-dev--script-build-deps-layer qname mount control-fp)
       (deb-packaging-dev--script-langs-layer
@@ -415,11 +399,10 @@ Partial builds produce partial results. Re-run after changing build flags."
               "  exit 1"
               "fi")
              "\n"))
-           (script (format "lxc exec %s -- sh -c %s"
-                           qname (shell-quote-argument inner)))
-           (buf (deb-packaging-commands--run-command
-                 "compile-db" (list "sh" "-c" script) pkg-dir 'compile-db)))
-      buf)))
+            (script (format "lxc exec %s -- sh -c %s"
+                            qname (shell-quote-argument inner))))
+      (deb-packaging-commands--run-command
+       "compile-db" (list "sh" "-c" script) pkg-dir 'compile-db))))
 
 ;;; Open existing container
 
@@ -447,15 +430,10 @@ Errors if container doesn't exist."
 (defun deb-packaging-dev-exec ()
   "Open a shell in the container via `lxc exec -- bash -l'."
   (interactive)
-  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
-                      (user-error "Not in a Debian package directory")))
-         (pkg (deb-packaging-detect--package-name pkg-dir))
-         (distro (deb-packaging-config--effective-distro))
-         (name (deb-packaging-dev--container-name pkg distro)))
-    (unless (deb-packaging-dev--container-exists-p name)
-      (user-error "Container %s does not exist; run deb-packaging-dev-shell first"
-                  name))
-    (call-process "lxc" nil nil nil "start" name)
+  (let* ((tramp-path (deb-packaging-dev--tramp-path-for-current))
+         ;; Path is /lxc:NAME:MOUNT.
+         (name (car (split-string
+                     (string-remove-prefix "/lxc:" tramp-path) ":" t))))
     (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
                             "exec" name "--" "bash" "-l")))
       (with-current-buffer buf
@@ -508,13 +486,6 @@ Each plist: :name, :status, :source."
                    :source source)))
          (if (vectorp entries) (append entries nil) entries))))))
 
-(defun deb-packaging-dev--container-for-package (pkg distro)
-  "Return container plist for PKG/DISTRO or nil."
-  (cl-find (deb-packaging-dev--container-name pkg distro)
-           (deb-packaging-dev--list-containers)
-           :key (lambda (c) (plist-get c :name))
-           :test #'equal))
-
 ;;; Commands
 
 ;;;###autoload
@@ -533,13 +504,13 @@ C-u forces re-provision of all layers."
          (mount (deb-packaging-dev--mount-path pkg))
          (control-fp (deb-packaging-dev--control-fingerprint pkg-dir))
          (tools-fp (deb-packaging-dev--tools-fingerprint))
-        ;; langs-fp starts empty; only recomputed if the langs layer runs.
-        (langs-fp (secure-hash 'sha256 ""))
-        (profiles nil))
+         (langs-fp nil)
+         (profiles nil))
     ;; Prompt for languages only when cache disagrees with the marker.
     (let* ((cached-keys (deb-packaging-dev--read-langs-cache pkg distro))
            (cached-profiles (delq nil
-                                  (mapcar #'deb-packaging-dev--profile-lookup
+                                  (mapcar (lambda (k)
+                                            (assq k deb-packaging-dev-language-profiles))
                                           cached-keys)))
            (cached-fp (when cached-keys
                         (deb-packaging-dev--langs-fingerprint cached-profiles)))

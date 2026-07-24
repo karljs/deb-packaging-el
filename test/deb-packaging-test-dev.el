@@ -39,10 +39,6 @@ list (the historical bug) is caught here rather than at runtime."
     (should (string-match-p "cloud-init status --wait" s))
     (should (string-match-p "lxc config device add ctr work-pkg disk source=/host/pkg path=/root/work/pkg" s))))
 
-(ert-deftest deb-packaging-test-dev/force-line ()
-  (should (equal (deb-packaging-dev--script-force-line t) '("FORCE=1")))
-  (should (equal (deb-packaging-dev--script-force-line nil) '("FORCE="))))
-
 ;;; Core helpers
 
 (ert-deftest deb-packaging-test-dev/core-helpers ()

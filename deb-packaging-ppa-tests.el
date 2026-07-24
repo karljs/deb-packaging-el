@@ -137,15 +137,10 @@ Return a plist with :triggers, :results, :running, :waiting."
 
 (defun deb-packaging-ppa-tests--summary (parsed)
   "Return a :pass/:fail/:bad/:running/:waiting count plist for PARSED."
-  (let ((pass 0) (fail 0) (bad 0))
-    (dolist (r (plist-get parsed :results))
-      (pcase (plist-get r :status)
-        ('pass (cl-incf pass))
-        ('fail (cl-incf fail))
-        ('bad (cl-incf bad))))
-    (list :pass pass
-          :fail fail
-          :bad bad
+  (let ((results (plist-get parsed :results)))
+    (list :pass (cl-count-if (lambda (r) (eq (plist-get r :status) 'pass)) results)
+          :fail (cl-count-if (lambda (r) (eq (plist-get r :status) 'fail)) results)
+          :bad (cl-count-if (lambda (r) (eq (plist-get r :status) 'bad)) results)
           :running (length (plist-get parsed :running))
           :waiting (length (plist-get parsed :waiting)))))
 

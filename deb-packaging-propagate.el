@@ -36,9 +36,7 @@
   (let* ((lower (downcase (or str "")))
          (words (split-string lower "[^a-z0-9]+" t))
          (joined (mapconcat #'identity (seq-take words 4) "-")))
-    (if (> (length joined) 50)
-        (substring joined 0 50)
-      joined)))
+    (truncate-string-to-width joined 50)))
 
 (defun deb-packaging-propagate--item-slug (item)
   "Return a short slug for fix-source ITEM."
@@ -70,12 +68,16 @@ Read-only probes only; skips Magit process-buffer logging."
        (apply #'call-process "git" nil t nil
               (append (when dir (list "-C" dir)) args))))))
 
+(defun deb-packaging-propagate--git-ok-p (dir &rest args)
+  "Return non-nil if git with ARGS exits 0 in DIR."
+  (zerop (apply #'call-process "git" nil nil nil
+                (append (when dir (list "-C" dir)) args))))
+
 (defun deb-packaging-propagate--patch-applied-p (patch-path clone-dir)
   "Return non-nil if PATCH-PATH is already applied in CLONE-DIR.
 Tests reverse-application with `git apply --check -R'."
-  (zerop (call-process "git" nil nil nil
-                       "-C" clone-dir "apply" "--check" "-R"
-                       patch-path)))
+  (deb-packaging-propagate--git-ok-p
+   clone-dir "apply" "--check" "-R" patch-path))
 
 (defun deb-packaging-propagate--commit-applied-p (subject clone-dir)
   "Heuristic: return non-nil if SUBJECT appears in CLONE-DIR's log.
@@ -86,7 +88,7 @@ Fooled by rewording; only used for indicators."
 
 (defun deb-packaging-propagate--fork-exists-p (url)
   "Return non-nil if the remote repo at URL is reachable."
-  (zerop (call-process "git" nil nil nil "ls-remote" url "HEAD")))
+  (deb-packaging-propagate--git-ok-p nil "ls-remote" url "HEAD"))
 
 (defun deb-packaging-propagate--default-branch (clone-dir)
   "Return the default branch name for CLONE-DIR, or nil."
@@ -141,15 +143,18 @@ annotation, not the candidate, so applied items stay typeable."
                         " ✓ applied"))))
       (complete-with-action action choices string pred))))
 
-(defun deb-packaging-propagate--read-patches-multi (&optional clone-dir)
-  "Prompt for one or more quilt patches.  Returns a list of item plists."
+(defun deb-packaging-propagate--read-patches (multi &optional clone-dir)
+  "Prompt for quilt patches, returning a list of item plists.
+MULTI non-nil allows a comma-separated selection."
   (let ((choices (deb-packaging-propagate--patch-choices clone-dir)))
     (unless choices
       (user-error "No patches found in debian/patches/series"))
-    (let* ((selection (completing-read-multiple
-                       "Patches (comma-separated): "
-                       (deb-packaging-propagate--annotated-table choices)
-                       nil t))
+    (let* ((table (deb-packaging-propagate--annotated-table choices))
+           (selection
+            (if multi
+                (completing-read-multiple "Patches (comma-separated): "
+                                          table nil t)
+              (list (completing-read "Patch: " table nil t))))
            (items (delq nil
                         (mapcar (lambda (s)
                                   (when-let ((entry (assoc (string-trim s) choices)))
@@ -157,25 +162,6 @@ annotation, not the candidate, so applied items stay typeable."
                                 selection))))
       (if items items
         (user-error "No patches selected")))))
-
-(defun deb-packaging-propagate--read-patch-one (&optional clone-dir)
-  "Prompt for a single quilt patch.  Returns one item plist."
-  (let ((choices (deb-packaging-propagate--patch-choices clone-dir)))
-    (unless choices
-      (user-error "No patches found in debian/patches/series"))
-    (let* ((selection (completing-read "Patch: "
-                                       (deb-packaging-propagate--annotated-table
-                                        choices)
-                                       nil t))
-           (entry (assoc selection choices)))
-      (unless entry
-        (user-error "No patch selected"))
-      (cdr entry))))
-
-(defun deb-packaging-propagate--git-ok-p (dir &rest args)
-  "Return non-nil if git with ARGS exits 0 in DIR."
-  (zerop (apply #'call-process "git" nil nil nil
-                (append (when dir (list "-C" dir)) args))))
 
 (defun deb-packaging-propagate--read-commit-one (source-dir &optional clone-dir)
   "Prompt for a single git commit from SOURCE-DIR.
@@ -211,17 +197,16 @@ CLONE-DIR.  Any other ref may be typed; it is validated with rev-parse."
       (if entry
           (cdr entry)
         ;; Not one of the recent candidates: resolve any ref.
-        (unless (deb-packaging-propagate--git-ok-p
-                 source-dir "rev-parse" "--verify"
-                 (concat selection "^{commit}"))
-          (user-error "Not a commit: %s" selection))
-        (list :type 'commit
-              :ref (deb-packaging-propagate--git-quiet
+        (let ((ref (deb-packaging-propagate--git-quiet
                     source-dir "rev-parse" "--verify"
-                    (concat selection "^{commit}"))
-              :subject (deb-packaging-propagate--git-quiet
-                        source-dir "log" "-1" "--format=%s" selection)
-              :source-dir source-dir)))))
+                    (concat selection "^{commit}"))))
+          (when (string-empty-p (or ref ""))
+            (user-error "Not a commit: %s" selection))
+          (list :type 'commit
+                :ref ref
+                :subject (deb-packaging-propagate--git-quiet
+                          source-dir "log" "-1" "--format=%s" selection)
+                :source-dir source-dir))))))
 
 (defun deb-packaging-propagate--read-range (source-dir)
   "Prompt for a git refspec range from SOURCE-DIR.
@@ -254,7 +239,7 @@ ALLOW-RANGE enables the range type."
          (choice (completing-read "Fix source: " choices nil t)))
     (pcase choice
       ("patch"
-       (deb-packaging-propagate--read-patches-multi clone-dir))
+       (deb-packaging-propagate--read-patches t clone-dir))
       ("commit"
        (list (deb-packaging-propagate--read-commit-one pkg-dir clone-dir)))
       ("range"
@@ -277,7 +262,7 @@ provides the source-dir via git config."
       (user-error "Source directory %s no longer exists" source-dir))
     (pcase choice
       ("patch"
-       (deb-packaging-propagate--read-patch-one clone-dir))
+       (car (deb-packaging-propagate--read-patches nil clone-dir)))
       ("commit"
        (deb-packaging-propagate--read-commit-one source-dir clone-dir)))))
 
@@ -643,7 +628,7 @@ commit (marking already-applied items), and opens the apply transient."
 Binds `C-c a' to pick a fix item and open the apply transient.  `P'
 stays with `magit-push': pushing the prepared branch is the natural
 last step of this workflow."
-  :lighter deb-packaging-config-propagate-clone-mode-lighter
+  :lighter " Prop"
   :keymap deb-packaging-propagate-clone-mode-map
   (if deb-packaging-propagate-clone-mode
       (progn

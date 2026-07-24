@@ -17,7 +17,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'compile)
 (require 'magit)
 (require 'transient)
@@ -36,53 +35,32 @@
 
 ;;; Branch state
 
-(defun deb-packaging-pq--current-branch ()
-  "Return the current git branch name, or nil if detached."
-  (let ((branch (magit-git-string "branch" "--show-current")))
-    (and branch (not (string-empty-p branch)) branch)))
-
 (defun deb-packaging-pq--patch-queue-branch (&optional branch)
   "Return the patch-queue branch name for BRANCH (default: current).
 Returns nil if BRANCH itself is a patch-queue branch."
-  (let ((br (or branch (deb-packaging-pq--current-branch))))
+  (let ((br (or branch (magit-get-current-branch))))
     (when (and br (not (string-prefix-p "patch-queue/" br)))
       (format "patch-queue/%s" br))))
 
-(defun deb-packaging-pq--branch-exists-p (branch)
-  "Return non-nil if BRANCH exists in the local repo."
-  (and branch
-       (string-match-p (regexp-quote branch)
-                       (or (magit-git-string "branch" "--list" "--all"
-                                             (format "*%s*" branch))
-                           ""))))
-
 (defun deb-packaging-pq--on-pq-branch-p ()
   "Return non-nil if currently on a patch-queue branch."
-  (let ((branch (deb-packaging-pq--current-branch)))
+  (let ((branch (magit-get-current-branch)))
     (and branch (string-prefix-p "patch-queue/" branch))))
 
 (defun deb-packaging-pq--state ()
   "Return a plist describing the patch-queue state.
 Keys: :on-pq-p, :branch, :pq-branch (nil if already on one), :exists-p."
-  (let* ((branch (deb-packaging-pq--current-branch))
+  (let* ((branch (magit-get-current-branch))
          (on-pq (and branch (string-prefix-p "patch-queue/" branch)))
          (pq-branch (unless on-pq
                       (deb-packaging-pq--patch-queue-branch branch)))
          (exists (or on-pq
                      (and pq-branch
-                          (deb-packaging-pq--branch-exists-p pq-branch)))))
+                          (magit-ref-p pq-branch)))))
     (list :on-pq-p on-pq
           :branch branch
           :pq-branch (if on-pq branch pq-branch)
           :exists-p exists)))
-
-;;; Compilation follow-up
-
-(defun deb-packaging-pq--after-compile (buf action)
-  "Call ACTION (no args) when the compilation in BUF finishes successfully.
-One-shot `compilation-finish-functions' hook; skips ACTION on failure
-since the buffer already shows the error."
-  (deb-packaging-commands--after-compile buf action))
 
 ;;; Commands
 
@@ -94,7 +72,7 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
   (let ((dir (magit-toplevel)))
-    (deb-packaging-pq--after-compile
+    (deb-packaging-commands--after-compile
      (deb-packaging-commands--compile "gbp pq import")
      (lambda ()
        (when (deb-packaging-pq--on-pq-branch-p)
@@ -106,10 +84,10 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
   "Toggle between the packaging branch and its patch-queue branch."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (deb-packaging-pq--after-compile
+  (deb-packaging-commands--after-compile
    (deb-packaging-commands--compile "gbp pq switch")
    (lambda ()
-     (let ((branch (deb-packaging-pq--current-branch)))
+     (let ((branch (magit-get-current-branch)))
        (message "On branch: %s" (or branch "detached"))))))
 
 ;;;###autoload
@@ -128,7 +106,7 @@ packaging branch, deletes the patch-queue branch."
   (deb-packaging-pq--ensure-quilt-repo)
   (unless (deb-packaging-pq--on-pq-branch-p)
     (user-error "Not on a patch-queue branch; switch first"))
-  (deb-packaging-pq--after-compile
+  (deb-packaging-commands--after-compile
    (deb-packaging-commands--compile "gbp pq export --commit --drop")
    (lambda ()
      (deb-packaging-commands--notify-status-refresh)
@@ -140,7 +118,7 @@ packaging branch, deletes the patch-queue branch."
 Useful to abort an edit session and start over."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (deb-packaging-pq--after-compile
+  (deb-packaging-commands--after-compile
    (deb-packaging-commands--compile "gbp pq drop")
    #'deb-packaging-commands--notify-status-refresh))
 

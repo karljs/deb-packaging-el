@@ -34,16 +34,7 @@ lines).  Returns nil if the file is missing or empty."
     (when (file-readable-p file)
       (with-temp-buffer
         (insert-file-contents file)
-        (goto-char (point-min))
-        (let (entries)
-          (while (not (eobp))
-            (let ((line (buffer-substring-no-properties
-                         (line-beginning-position)
-                         (line-end-position))))
-              (unless (string-empty-p line)
-                (push line entries)))
-            (forward-line 1))
-          (nreverse entries))))))
+        (split-string (buffer-string) "\n" t)))))
 
 (defun deb-packaging-repos-save (package distro entries)
   "Write ENTRIES (a list of strings) for PACKAGE and DISTRO to the cache.

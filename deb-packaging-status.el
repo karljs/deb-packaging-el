@@ -22,6 +22,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'magit-section)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
@@ -43,7 +44,7 @@
 (defvar-local deb-packaging-status--context nil
   "Buffer-local plist describing the package shown.
 Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
-:source-format :orig-tarball :arch :maintainer.")
+:source-format :orig-tarball :arch.")
 
 (defun deb-packaging-status--buffer-name (name)
   "Return the status buffer name for package NAME."
@@ -57,18 +58,6 @@ distro once without clobbering user choice."
     (when ctx
       (deb-packaging-config--maybe-seed-distro (plist-get ctx :distro)))
     ctx))
-
-(defun deb-packaging-status--current-context ()
-  "Return the context of the live status buffer, if any.
-Does not create or refresh a buffer."
-  (catch 'found
-    (dolist (buf (buffer-list))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (when (and (derived-mode-p 'deb-packaging-status-mode)
-                     deb-packaging-status--context)
-            (throw 'found deb-packaging-status--context)))))
-    nil))
 
 ;;; Section -> action dispatch
 ;;
@@ -190,18 +179,11 @@ done, ready. KEEP-READY keeps success as ready so it can re-run (lint)."
           (ready 'ready)
           (t 'blocked))))
 
-(defun deb-packaging-status--actionable-state-p (state)
-  "Return non-nil when STATE is running, failed, or ready."
-  (memq state '(running failed ready)))
-
 (defun deb-packaging-status--hide-phase-p (state next-key key)
   "Return non-nil if a phase in STATE should collapse by default.
 Expand running/failed phases and the next actionable phase (KEY equals
 NEXT-KEY); collapse the rest."
-  (cond
-   ((memq state '(failed running)) nil)
-   ((eq key next-key) nil)
-   (t t)))
+  (not (or (memq state '(failed running)) (eq key next-key))))
 
 (defun deb-packaging-status--source-ready-p (ctx)
   "Return non-nil when the source build inputs are in place.
@@ -272,26 +254,17 @@ context, which must not block."
   "Left-justify TEXT to WIDTH columns."
   (format (format "%%-%ds" width) text))
 
-(defun deb-packaging-status--file-mtime (path)
-  "Return a formatted \"Jun 24 14:32\" timestamp for PATH, or empty string."
-  (condition-case nil
-      (format-time-string "%b %e %H:%M"
-                          (file-attribute-status-change-time
-                           (file-attributes path)))
-    (error "")))
-
-(defun deb-packaging-status--file-size (path)
-  "Return a human-readable size string for PATH, or empty string."
-  (condition-case nil
-      (file-size-human-readable
-       (file-attribute-size (file-attributes path)))
-    (error "")))
-
 (defun deb-packaging-status--insert-file-line (path)
   "Insert an indented PATH line with size and modification time."
   (let* ((base (file-name-nondirectory path))
-         (size (deb-packaging-status--file-size path))
-         (mtime (deb-packaging-status--file-mtime path)))
+         (attrs (condition-case nil (file-attributes path) (error nil)))
+         (size (if attrs
+                   (file-size-human-readable (file-attribute-size attrs))
+                 ""))
+         (mtime (if attrs
+                    (format-time-string "%b %e %H:%M"
+                                        (file-attribute-status-change-time attrs))
+                  "")))
     (insert (format "    %-45s %8s  %s\n"
                     (propertize base 'font-lock-face
                                 'magit-section-secondary-heading)
@@ -394,16 +367,6 @@ last-run time, DETAIL is an optional dimmed fragment."
           (deb-packaging-status--insert-note
            "missing orig tarball; run git ubuntu export-orig")))))))
 
-(defun deb-packaging-status--transient-args (prefix)
-  "Return PREFIX's saved/default transient args, or nil.
-Defensive: a missing prefix yields nil rather than signaling."
-  (ignore-errors (transient-args prefix)))
-
-(defun deb-packaging-status--transient-flag-p (prefix flag)
-  "Return non-nil if FLAG is in PREFIX's saved/default transient args."
-  (let ((args (deb-packaging-status--transient-args prefix)))
-    (and args (member flag args) t)))
-
 (defun deb-packaging-status--insert-binary (ctx hide)
   "Insert the Binary phase section from CTX, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
@@ -445,20 +408,21 @@ Defensive: a missing prefix yields nil rather than signaling."
             (deb-packaging-status--insert-file-line d)))
          ((not dsc)
           (deb-packaging-status--insert-note "waiting on source build")))
-        (when (deb-packaging-status--transient-flag-p
-               'deb-packaging-binary-build-transient
-               deb-packaging-transients-sbuild-shell-flag)
+        (when (member deb-packaging-transients-sbuild-shell-flag
+                      (ignore-errors
+                        (transient-args 'deb-packaging-binary-build-transient)))
           (deb-packaging-status--insert-note
            "Drops into a chroot shell on build failure"))
         (when-let ((note (deb-packaging-status--kept-session-note)))
           (deb-packaging-status--insert-note note))))))
 
-(defun deb-packaging-status--insert-lintian-child (section-type key label artifacts)
+(defun deb-packaging-status--insert-lintian-child (section-type key label artifacts &optional note)
   "Insert one Lint child section of SECTION-TYPE for run key KEY.
 LABEL is the heading; ARTIFACTS are files to lint, absence blocks the
-child. Lint never reaches done: KEEP-READY returns success to ready so
-it can re-run. SECTION-TYPE must be registered for RET to act on it."
-  (let ((state (deb-packaging-status--phase-state key nil (and artifacts t) t)))
+child unless NOTE is shown instead. Lint never reaches done: KEEP-READY
+returns success to ready so it can re-run. SECTION-TYPE must be
+registered for RET to act on it."
+  (let ((state (deb-packaging-status--phase-state key nil (or artifacts note) t)))
     (magit-insert-section ((eval section-type))
       (magit-insert-heading
         (concat "  "
@@ -469,10 +433,13 @@ it can re-run. SECTION-TYPE must be registered for RET to act on it."
                 (deb-packaging-status--lint-summary-note key)
                 (deb-packaging-status--run-time-note key)))
       (magit-insert-section-body
-        (if artifacts
-            (dolist (a artifacts)
-              (deb-packaging-status--insert-file-line a))
-          (deb-packaging-status--insert-note "waiting on build"))))))
+        (cond (artifacts
+               (dolist (a artifacts)
+                 (deb-packaging-status--insert-file-line a)))
+              (note
+               (deb-packaging-status--insert-note note))
+              (t
+               (deb-packaging-status--insert-note "waiting on build")))))))
 
 (defun deb-packaging-status--lint-rollup-state (ctx)
   "Return a status symbol summarising the Lint section's children.
@@ -496,24 +463,6 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
   (let ((state (deb-packaging-status--lint-rollup-state ctx)))
     (not (memq state '(failed running)))))
 
-(defun deb-packaging-status--insert-ubuntu-lint-child ()
-  "Insert the Ubuntu lint child section under Lint.
-Always ready inside a package. Like lintian, KEEP-READY keeps success
-as ready."
-  (let ((state (deb-packaging-status--phase-state 'ubuntu-lint nil t t)))
-    (magit-insert-section (deb-packaging-commands-ubuntu-lint)
-      (magit-insert-heading
-        (concat "  "
-                (propertize (deb-packaging-status--pad
-                             "Ubuntu lint" (- deb-packaging-status--label-width 2))
-                            'font-lock-face 'magit-section-secondary-heading)
-                (deb-packaging-status--state-word state)
-                (deb-packaging-status--lint-summary-note 'ubuntu-lint)
-                (deb-packaging-status--run-time-note 'ubuntu-lint)))
-      (magit-insert-section-body
-        (deb-packaging-status--insert-note
-         "Ubuntu upload policy checks (SRU, maintainer, bug references)")))))
-
 (defun deb-packaging-status--insert-check (ctx hide)
   "Insert the Lint phase: lintian source/binary children plus ubuntu-lint."
   (let ((state (deb-packaging-status--lint-rollup-state ctx)))
@@ -529,7 +478,9 @@ as ready."
            (when dsc (list dsc)))
           (deb-packaging-status--insert-lintian-child
            'deb-packaging-commands-lintian-binary 'lintian-binary "Binary" debs)
-          (deb-packaging-status--insert-ubuntu-lint-child))))))
+          (deb-packaging-status--insert-lintian-child
+           'deb-packaging-commands-ubuntu-lint 'ubuntu-lint "Ubuntu lint" nil
+           "Ubuntu upload policy checks (SRU, maintainer, bug references)"))))))
 
 (defun deb-packaging-status--insert-test (ctx hide)
   "Insert the Test (autopkgtest) phase section from CTX, collapsed when HIDE."
@@ -568,26 +519,21 @@ as ready."
                  (format "Build it with: %s" hint))))
             (dolist (d debs)
               (deb-packaging-status--insert-file-line d))
-            (when (deb-packaging-status--transient-flag-p
-                   'deb-packaging-test-transient
-                   "--shell-fail")
+            (when (member "--shell-fail"
+                          (ignore-errors
+                            (transient-args 'deb-packaging-test-transient)))
               (deb-packaging-status--insert-note
                "Drops into a testbed shell on test failure")))))
         (deb-packaging-status--insert-ppa-tests-row))))
-
-(defun deb-packaging-status--transient-arg-value (prefix flag)
-  "Return the value of FLAG from PREFIX's saved/default transient args.
-Returns nil if the flag is unset or the prefix is unavailable."
-  (let ((args (deb-packaging-status--transient-args prefix)))
-    (when args
-      (transient-arg-value flag args))))
 
 (defun deb-packaging-status--insert-upload (ctx hide)
   "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
          (changes (alist-get 'source-changes arts))
-         (ppa (deb-packaging-status--transient-arg-value
-               'deb-packaging-upload-transient "--ppa="))
+         (ppa (transient-arg-value
+               "--ppa="
+               (ignore-errors
+                 (transient-args 'deb-packaging-upload-transient))))
          (state (deb-packaging-status--phase-state 'dput nil t)))
     (magit-insert-section (deb-packaging-upload nil hide)
       (magit-insert-heading
@@ -610,13 +556,10 @@ Returns nil if the flag is unset or the prefix is unavailable."
 (defun deb-packaging-status--group-stale-by-version (stale-files)
   "Group STALE-FILES by version, returning an alist of (version . files).
 Unparseable versions group under \"unknown\"."
-  (let ((groups nil))
-    (dolist (f stale-files)
-      (let ((ver (or (deb-packaging-detect--filename-version f) "unknown")))
-        (setf (alist-get ver groups nil 'remove)
-              (nconc (alist-get ver groups nil 'remove)
-                     (list f)))))
-    (sort groups (lambda (a b) (string< (car a) (car b))))))
+  (sort (seq-group-by
+         (lambda (f) (or (deb-packaging-detect--filename-version f) "unknown"))
+         stale-files)
+        (lambda (a b) (string< (car a) (car b)))))
 
 (defun deb-packaging-status--insert-stale (ctx hide)
   "Insert the Stale artifacts section from CTX, collapsed when HIDE."
@@ -737,28 +680,30 @@ Collapsed when HIDE."
              state-word
              detail)))))))
 
-(defun deb-packaging-status--next-actionable-key (ctx)
-  "Return the run-history key of the first ready phase in CTX, or nil.
-Walks phases in flow order; picks which phase smart-fold expands."
+(defun deb-packaging-status--phase-states (ctx)
+  "Return an alist of (run-key . state) for the flow phases in CTX."
   (let* ((arts (plist-get ctx :artifacts))
          (dsc (alist-get 'dsc arts))
          (src-changes (alist-get 'source-changes arts))
          (bin-changes (alist-get 'binary-changes arts))
-         (debs (alist-get 'debs arts))
-         (phases
-          (list (cons 'source-build
-                      (deb-packaging-status--phase-state
-                       'source-build (and dsc src-changes)
-                       (deb-packaging-status--source-ready-p ctx)))
-                (cons 'sbuild
-                      (deb-packaging-status--phase-state
-                       'sbuild (and bin-changes debs) dsc))
-                (cons 'autopkgtest
-                      (deb-packaging-status--phase-state 'autopkgtest nil debs))
-                (cons 'dput
-                      ;; Upload is always ready; PPA is set inside its transient.
-                      (deb-packaging-status--phase-state 'dput nil t)))))
-    (car (cl-find 'ready phases :key #'cdr))))
+         (debs (alist-get 'debs arts)))
+    (list (cons 'source-build
+                (deb-packaging-status--phase-state
+                 'source-build (and dsc src-changes)
+                 (deb-packaging-status--source-ready-p ctx)))
+          (cons 'sbuild
+                (deb-packaging-status--phase-state
+                 'sbuild (and bin-changes debs) dsc))
+          (cons 'autopkgtest
+                (deb-packaging-status--phase-state 'autopkgtest nil debs))
+          ;; Upload is always ready; PPA is set inside its transient.
+          (cons 'dput
+                (deb-packaging-status--phase-state 'dput nil t)))))
+
+(defun deb-packaging-status--next-actionable-key (ctx)
+  "Return the run-history key of the first ready phase in CTX, or nil.
+Walks phases in flow order; picks which phase smart-fold expands."
+  (car (cl-find 'ready (deb-packaging-status--phase-states ctx) :key #'cdr)))
 
 (defun deb-packaging-status--render ()
   "Render the status buffer from freshly collected context.
@@ -772,36 +717,24 @@ Point ends on the first phase heading."
           (insert (propertize "Not in a Debian package directory."
                               'font-lock-face 'error)
                   "\n\nVisit a tree containing debian/changelog, then press g.\n")
-        (let* ((next (deb-packaging-status--next-actionable-key ctx))
-               (arts (plist-get ctx :artifacts))
-               (dsc (alist-get 'dsc arts))
-               (src-done (and dsc (alist-get 'source-changes arts)))
-               (bin-done (and (alist-get 'binary-changes arts)
-                              (alist-get 'debs arts)))
-               (debs (alist-get 'debs arts)))
+        (let* ((phases (deb-packaging-status--phase-states ctx))
+               (next (car (cl-find 'ready phases :key #'cdr)))
+               (hide (lambda (key)
+                       (deb-packaging-status--hide-phase-p
+                        (alist-get key phases) next key))))
           (deb-packaging-status--insert-header ctx)
           (deb-packaging-status--insert-source
-           ctx (deb-packaging-status--hide-phase-p
-                (deb-packaging-status--phase-state
-                 'source-build src-done
-                 (deb-packaging-status--source-ready-p ctx))
-                next 'source-build))
+           ctx (funcall hide 'source-build))
           (deb-packaging-status--insert-binary
-           ctx (deb-packaging-status--hide-phase-p
-                (deb-packaging-status--phase-state 'sbuild bin-done dsc)
-                next 'sbuild))
+           ctx (funcall hide 'sbuild))
           ;; Lint groups two children and has no single phase state, so
           ;; use the rollup fold decision instead.
           (deb-packaging-status--insert-check
            ctx (deb-packaging-status--lint-hide-p ctx))
           (deb-packaging-status--insert-test
-           ctx (deb-packaging-status--hide-phase-p
-                (deb-packaging-status--phase-state 'autopkgtest nil debs)
-                next 'autopkgtest))
+           ctx (funcall hide 'autopkgtest))
           (deb-packaging-status--insert-upload
-           ctx (deb-packaging-status--hide-phase-p
-                (deb-packaging-status--phase-state 'dput nil t)
-                next 'dput))
+           ctx (funcall hide 'dput))
           (deb-packaging-status--insert-stale ctx t)
           (deb-packaging-status--insert-dev ctx t)
           (deb-packaging-status--insert-pq ctx t))))
@@ -866,10 +799,6 @@ filesystem each time."
 
 ;;; Actions
 
-(defun deb-packaging-status--open (transient-prefix)
-  "Open TRANSIENT-PREFIX from the status buffer."
-  (call-interactively transient-prefix))
-
 (defun deb-packaging-status-visit ()
   "Open the transient for the section at point.
 Walks up the section tree to the nearest registered type."
@@ -881,53 +810,8 @@ Walks up the section tree to the nearest registered type."
                                deb-packaging-status--section-actions))
       (setq section (oref section parent)))
     (if prefix
-        (deb-packaging-status--open prefix)
+        (call-interactively prefix)
       (user-error "No action for the section at point"))))
-
-(defun deb-packaging-status-build-source ()
-  "Open the source-build transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-commands-source-build-transient))
-
-(defun deb-packaging-status-build-binary ()
-  "Open the binary-build transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-binary-build-transient))
-
-(defun deb-packaging-status-lint ()
-  "Open the lint transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-lint-transient))
-
-(defun deb-packaging-status-test ()
-  "Open the autopkgtest transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-test-transient))
-
-(defun deb-packaging-status-upload ()
-  "Open the PPA upload transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-upload-transient))
-
-(defun deb-packaging-status-clean ()
-  "Open the clean artifacts transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-commands-clean-transient))
-
-(defun deb-packaging-status-reset ()
-  "Open the source-tree reset transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-commands-reset-transient))
-
-(defun deb-packaging-status-dev ()
-  "Open the dev shell transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-dev-transient))
-
-(defun deb-packaging-status-pq ()
-  "Open the patch-queue (gbp pq) transient."
-  (interactive)
-  (deb-packaging-status--open #'deb-packaging-pq-transient))
 
 ;;; Major mode
 
@@ -937,15 +821,15 @@ RET opens the section's transient. Mnemonic verbs open tool transients.
 Navigation and folding come from `magit-section-mode'."
   :parent magit-section-mode-map
   "RET" #'deb-packaging-status-visit
-  "s"   #'deb-packaging-status-build-source
-  "b"   #'deb-packaging-status-build-binary
-  "l"   #'deb-packaging-status-lint
-  "t"   #'deb-packaging-status-test
-  "U"   #'deb-packaging-status-upload
-  "c"   #'deb-packaging-status-clean
-  "r"   #'deb-packaging-status-reset
-  "e"   #'deb-packaging-status-dev
-  "u"   #'deb-packaging-status-pq
+  "s"   #'deb-packaging-commands-source-build-transient
+  "b"   #'deb-packaging-binary-build-transient
+  "l"   #'deb-packaging-lint-transient
+  "t"   #'deb-packaging-test-transient
+  "U"   #'deb-packaging-upload-transient
+  "c"   #'deb-packaging-commands-clean-transient
+  "r"   #'deb-packaging-commands-reset-transient
+  "e"   #'deb-packaging-dev-transient
+  "u"   #'deb-packaging-pq-transient
   "i"   #'deb-packaging-infra-dispatch
   "P"   #'deb-packaging-propagate-transient
   "?"   #'deb-packaging-dispatch

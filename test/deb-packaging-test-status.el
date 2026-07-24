@@ -61,18 +61,6 @@
     (should (eq (deb-packaging-status--phase-state 'lintian-source nil t t) 'ready))
     (should (eq (deb-packaging-status--phase-state 'lintian-source nil nil t) 'blocked))))
 
-;;; Actionable state predicate
-
-(ert-deftest deb-packaging-test-status/actionable-state-p-true-for-running-failed-ready ()
-  (should (deb-packaging-status--actionable-state-p 'running))
-  (should (deb-packaging-status--actionable-state-p 'failed))
-  (should (deb-packaging-status--actionable-state-p 'ready)))
-
-(ert-deftest deb-packaging-test-status/actionable-state-p-nil-for-done-blocked ()
-  (should-not (deb-packaging-status--actionable-state-p 'done))
-  (should-not (deb-packaging-status--actionable-state-p 'blocked))
-  (should-not (deb-packaging-status--actionable-state-p 'unknown)))
-
 ;;; Hide phase decision
 
 (ert-deftest deb-packaging-test-status/hide-phase-failed-expand ()
@@ -229,21 +217,17 @@
 ;;; Stale artifact grouping
 
 (ert-deftest deb-packaging-test-status/group-stale-by-version-sorted ()
-  ;; NOTE: deb-packaging-status--group-stale-by-version uses `alist-get'
-  ;; with its default `eq' test, so each new version string becomes a
-  ;; separate alist entry.  The test therefore asserts the current
-  ;; behaviour including duplicate keys.
   (let ((result (deb-packaging-status--group-stale-by-version
                  '("foo_1.1-1.dsc"
                    "foo_1.1-1_amd64.deb"
                    "foo_1.0-1.dsc"
                    "foo_1.0-1_amd64.deb"))))
     (should (equal (mapcar #'car result)
-                   '("1.0-1" "1.0-1" "1.1-1" "1.1-1")))
-    (should (equal (cdr (nth 0 result)) '("foo_1.0-1_amd64.deb")))
-    (should (equal (cdr (nth 1 result)) '("foo_1.0-1.dsc")))
-    (should (equal (cdr (nth 2 result)) '("foo_1.1-1_amd64.deb")))
-    (should (equal (cdr (nth 3 result)) '("foo_1.1-1.dsc")))))
+                   '("1.0-1" "1.1-1")))
+    (should (equal (cdr (assoc "1.0-1" result))
+                   '("foo_1.0-1.dsc" "foo_1.0-1_amd64.deb")))
+    (should (equal (cdr (assoc "1.1-1" result))
+                   '("foo_1.1-1.dsc" "foo_1.1-1_amd64.deb")))))
 
 (ert-deftest deb-packaging-test-status/group-stale-orig-tarball-unknown ()
   (let ((result (deb-packaging-status--group-stale-by-version
@@ -320,7 +304,7 @@
   (should (eq (lookup-key deb-packaging-status-mode-map "n")
               #'magit-section-forward))
   (should (eq (lookup-key deb-packaging-status-mode-map "U")
-              #'deb-packaging-status-upload)))
+              #'deb-packaging-upload-transient)))
 
 ;;; PPA tests summary note
 

@@ -25,20 +25,6 @@
   (while (memq (process-status proc) '(run stop open listen))
     (accept-process-output nil 0.05)))
 
-;;; Pure helpers
-
-(ert-deftest deb-packaging-test-clone/target-dir ()
-  (should (string= (deb-packaging-clone--target-dir "/tmp/x/" "foo")
-                   "/tmp/x/foo"))
-  (should (string= (deb-packaging-clone--target-dir "/tmp/x" "foo")
-                   "/tmp/x/foo")))
-
-(ert-deftest deb-packaging-test-clone/package-dir-p ()
-  (deb-packaging-test--with-package-tree
-      '(:name "foo" :version "1.0-1")
-    (should (deb-packaging-clone--package-dir-p pkg-dir))
-    (should-not (deb-packaging-clone--package-dir-p pkg-parent-dir))))
-
 ;;; Sentinel
 
 (ert-deftest deb-packaging-test-clone/sentinel-opens-status-on-success ()

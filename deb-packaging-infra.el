@@ -48,14 +48,6 @@ When VALUE is truncated and HELP-ECHO is non-nil, use it as `help-echo'
       (put-text-property 0 (length cell) 'help-echo tip cell))
     cell))
 
-(defun deb-packaging-infra--read-name (prompt list-fn)
-  "Return the name at point, or prompt with PROMPT from (LIST-FN).
-LIST-FN returns a list of plists with :name keys."
-  (or (plist-get (tabulated-list-get-id) :name)
-      (let* ((items (funcall list-fn))
-             (names (mapcar (lambda (s) (plist-get s :name)) items)))
-        (completing-read prompt names nil t))))
-
 (defun deb-packaging-infra--read-entry (prompt &optional type-filter)
   "Return the LXD entry (tabulated-list id plist) at point, or prompt with PROMPT.
 TYPE-FILTER (e.g. `container') restricts completion to that type and
@@ -206,8 +198,7 @@ NAMES, when given, is a list of schroot names to update."
                        (deb-packaging-infra--list-schroots))))
     (if (null names)
         (message "No schroots found")
-      (when (yes-or-no-p (format "Update all %d schroots? " (length names)))
-        (deb-packaging-commands--compile (deb-packaging-infra--update-command names))))))
+      (deb-packaging-infra-update-schroots names))))
 
 (defun deb-packaging-infra--end-session (name)
   "End schroot session NAME, messaging the outcome."
@@ -333,27 +324,26 @@ Use schroot at point, or prompt."
   (interactive)
   (unless (derived-mode-p 'deb-packaging-infra-schroots-mode)
     (user-error "Not in a schroots buffer"))
-  (when (derived-mode-p 'deb-packaging-infra-schroots-mode)
-    (let ((inhibit-read-only t)
-          (schroots (deb-packaging-infra--list-schroots))
-          (sessions (deb-packaging-infra--list-sessions))
-          (pos (point)))
-      (erase-buffer)
-      (magit-insert-section (deb-packaging-infra-root)
-        (when sessions
-          (magit-insert-section (deb-packaging-infra-sessions)
-            (magit-insert-heading (format "Sessions (%d)" (length sessions)))
-            (dolist (session sessions)
-              (deb-packaging-infra--insert-session-row session schroots)))
-          (insert "\n"))
-        (magit-insert-section (deb-packaging-infra-chroots)
-          (magit-insert-heading (format "Chroots (%d)" (length schroots)))
-          (dolist (schroot schroots)
-            (deb-packaging-infra--insert-chroot-row schroot)))
-        (when (and (null schroots) (null sessions))
-          (insert (propertize "\nNo schroots found.\nCreate one with 'c'."
-                              'face 'shadow))))
-      (goto-char (min pos (point-max))))))
+  (let ((inhibit-read-only t)
+        (schroots (deb-packaging-infra--list-schroots))
+        (sessions (deb-packaging-infra--list-sessions))
+        (pos (point)))
+    (erase-buffer)
+    (magit-insert-section (deb-packaging-infra-root)
+      (when sessions
+        (magit-insert-section (deb-packaging-infra-sessions)
+          (magit-insert-heading (format "Sessions (%d)" (length sessions)))
+          (dolist (session sessions)
+            (deb-packaging-infra--insert-session-row session schroots)))
+        (insert "\n"))
+      (magit-insert-section (deb-packaging-infra-chroots)
+        (magit-insert-heading (format "Chroots (%d)" (length schroots)))
+        (dolist (schroot schroots)
+          (deb-packaging-infra--insert-chroot-row schroot)))
+      (when (and (null schroots) (null sessions))
+        (insert (propertize "\nNo schroots found.\nCreate one with 'c'."
+                            'face 'shadow))))
+    (goto-char (min pos (point-max)))))
 
 (defun deb-packaging-infra-schroots ()
   "Open a buffer listing all schroots."
@@ -403,8 +393,8 @@ Each plist has :name, :type, :status, and type-specific keys."
            (deb-packaging-infra--list-lxd-images))
    (mapcar (lambda (c)
              (let* ((name (plist-get c :name))
-                    (rest (replace-regexp-in-string "^deb-dev-" "" name))
-                    (parts (split-string rest "-"))
+                    (parts (split-string
+                            (string-remove-prefix "deb-dev-" name) "-"))
                     (release (car (last parts)))
                     (pkg (mapconcat #'identity (butlast parts) "-")))
                (list :name name
@@ -552,42 +542,41 @@ Image rows get no binding rather than a pretend action.")
   (interactive)
   (unless (derived-mode-p 'deb-packaging-infra-lxd-mode)
     (user-error "Not in an LXD buffer"))
-  (when (derived-mode-p 'deb-packaging-infra-lxd-mode)
-    (setq tabulated-list-entries
-          (mapcar (lambda (e)
-                    (let* ((containerp (eq (plist-get e :type) 'container))
-                           (row-cell
-                            (lambda (cell)
-                              (if containerp
-                                  (propertize cell 'keymap
-                                              deb-packaging-infra-lxd-row-map)
-                                cell)))
-                           (type-str (if containerp "Container" "Image")))
-                      (list e
-                            (vector
-                             (funcall row-cell
-                                      (deb-packaging-infra--format-cell
-                                       (plist-get e :name) 35 'left
-                                       'magit-section-heading))
-                             (funcall row-cell
-                                      (deb-packaging-infra--format-cell
-                                       type-str 12))
-                             (funcall row-cell
-                                      (deb-packaging-infra--format-cell
-                                       (or (plist-get e :status) "") 10))
-                             (funcall row-cell
-                                      (deb-packaging-infra--format-cell
-                                       (or (plist-get e :detail) "") 25
-                                       nil 'shadow t))))))
-                  (deb-packaging-infra--list-lxd-all)))
-    (tabulated-list-init-header)
-    (tabulated-list-print t)
-    (when (null tabulated-list-entries)
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (insert (propertize
-                 "\nNo LXD images or dev containers found.\nCreate an image with 'c'."
-                 'face 'shadow))))))
+  (setq tabulated-list-entries
+        (mapcar (lambda (e)
+                  (let* ((containerp (eq (plist-get e :type) 'container))
+                         (row-cell
+                          (lambda (cell)
+                            (if containerp
+                                (propertize cell 'keymap
+                                            deb-packaging-infra-lxd-row-map)
+                              cell)))
+                         (type-str (if containerp "Container" "Image")))
+                    (list e
+                          (vector
+                           (funcall row-cell
+                                    (deb-packaging-infra--format-cell
+                                     (plist-get e :name) 35 'left
+                                     'magit-section-heading))
+                           (funcall row-cell
+                                    (deb-packaging-infra--format-cell
+                                     type-str 12))
+                           (funcall row-cell
+                                    (deb-packaging-infra--format-cell
+                                     (or (plist-get e :status) "") 10))
+                           (funcall row-cell
+                                    (deb-packaging-infra--format-cell
+                                     (or (plist-get e :detail) "") 25
+                                     nil 'shadow t))))))
+                (deb-packaging-infra--list-lxd-all)))
+  (tabulated-list-init-header)
+  (tabulated-list-print t)
+  (when (null tabulated-list-entries)
+    (let ((inhibit-read-only t))
+      (goto-char (point-max))
+      (insert (propertize
+               "\nNo LXD images or dev containers found.\nCreate an image with 'c'."
+               'face 'shadow)))))
 
 (defun deb-packaging-infra-lxd ()
   "Open a buffer listing all LXD images and dev containers."
@@ -636,8 +625,12 @@ Each plist has keys: :name, :path, :size."
   "Delete a QEMU autopkgtest image.
 Use image at point, or prompt."
   (interactive
-   (list (deb-packaging-infra--read-name
-          "Image to delete: " #'deb-packaging-infra--list-qemu-images)))
+   (list (or (plist-get (tabulated-list-get-id) :name)
+             (completing-read
+              "Image to delete: "
+              (mapcar (lambda (s) (plist-get s :name))
+                      (deb-packaging-infra--list-qemu-images))
+              nil t))))
   (let* ((images (deb-packaging-infra--list-qemu-images))
          (img (cl-find name images
                        :key (lambda (i) (plist-get i :name)) :test #'equal))
@@ -673,28 +666,27 @@ Use image at point, or prompt."
   (interactive)
   (unless (derived-mode-p 'deb-packaging-infra-qemu-images-mode)
     (user-error "Not in a QEMU images buffer"))
-  (when (derived-mode-p 'deb-packaging-infra-qemu-images-mode)
-    (setq tabulated-list-entries
-          (mapcar (lambda (img)
-                    (list img
-                          (vector
-                           (deb-packaging-infra--format-cell
-                            (plist-get img :name) 45 'left
-                            'magit-section-heading)
-                           (deb-packaging-infra--format-cell
-                            (file-size-human-readable (or (plist-get img :size) 0))
-                            12 'right)
-                           (deb-packaging-infra--format-cell
-                            (plist-get img :path) 40 nil 'shadow t))))
-                  (deb-packaging-infra--list-qemu-images)))
-    (tabulated-list-init-header)
-    (tabulated-list-print t)
-    (when (null tabulated-list-entries)
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (insert (propertize (format "\nNo QEMU images found in %s.\nCreate one with 'c'."
-                                    deb-packaging-infra-qemu-dir)
-                            'face 'shadow))))))
+  (setq tabulated-list-entries
+        (mapcar (lambda (img)
+                  (list img
+                        (vector
+                         (deb-packaging-infra--format-cell
+                          (plist-get img :name) 45 'left
+                          'magit-section-heading)
+                         (deb-packaging-infra--format-cell
+                          (file-size-human-readable (or (plist-get img :size) 0))
+                          12 'right)
+                         (deb-packaging-infra--format-cell
+                          (plist-get img :path) 40 nil 'shadow t))))
+                (deb-packaging-infra--list-qemu-images)))
+  (tabulated-list-init-header)
+  (tabulated-list-print t)
+  (when (null tabulated-list-entries)
+    (let ((inhibit-read-only t))
+      (goto-char (point-max))
+      (insert (propertize (format "\nNo QEMU images found in %s.\nCreate one with 'c'."
+                                  deb-packaging-infra-qemu-dir)
+                          'face 'shadow)))))
 
 (defun deb-packaging-infra-qemu-images ()
   "Open a buffer listing all QEMU autopkgtest images."
@@ -994,23 +986,22 @@ processes (refresh cancels them) only clean up."
   (interactive)
   (unless (derived-mode-p 'deb-packaging-infra-ppas-mode)
     (user-error "Not in a PPAs buffer"))
-  (when (derived-mode-p 'deb-packaging-infra-ppas-mode)
-    (deb-packaging-infra--cancel-ppa-processes)
-    (deb-packaging-infra--show-ppas-loading-message)
-    (let ((buf (current-buffer)))
-      (dolist (cfg (cons nil (deb-packaging-infra--team-config-files)))
-        (let* ((args (if cfg
-                         (list "ppa" "list" "-C" cfg)
-                       (list "ppa" "list")))
-               (temp-buf (generate-new-buffer " *ppa-list*"))
-               (proc (make-process
-                      :name "ppa-list"
-                      :buffer temp-buf
-                      :command args
-                      :noquery t
-                      :sentinel (deb-packaging-infra--ppa-list-sentinel
-                                 buf temp-buf))))
-          (push proc deb-packaging-infra--ppa-processes))))))
+  (deb-packaging-infra--cancel-ppa-processes)
+  (deb-packaging-infra--show-ppas-loading-message)
+  (let ((buf (current-buffer)))
+    (dolist (cfg (cons nil (deb-packaging-infra--team-config-files)))
+      (let* ((args (if cfg
+                       (list "ppa" "list" "-C" cfg)
+                     (list "ppa" "list")))
+             (temp-buf (generate-new-buffer " *ppa-list*"))
+             (proc (make-process
+                    :name "ppa-list"
+                    :buffer temp-buf
+                    :command args
+                    :noquery t
+                    :sentinel (deb-packaging-infra--ppa-list-sentinel
+                               buf temp-buf))))
+        (push proc deb-packaging-infra--ppa-processes)))))
 
 (defun deb-packaging-infra-ppas ()
   "Open a buffer listing all Launchpad PPAs."
