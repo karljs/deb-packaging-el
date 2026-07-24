@@ -232,6 +232,23 @@ NAMES, when given, is a list of schroot names to update."
   (interactive)
   (deb-packaging-infra--end-session-list (deb-packaging-infra--list-sessions)))
 
+(defun deb-packaging-infra--refresh-buffer (mode refresh-fn)
+  "Call REFRESH-FN in the live buffer derived from MODE, if any."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (derived-mode-p mode)
+          (funcall refresh-fn))))))
+
+(defun deb-packaging-infra--compile-then-refresh (cmd mode refresh-fn)
+  "Run CMD via the compile wrapper; on success refresh the MODE list buffer.
+Keeps the row of a deleted item from lingering until a manual `g'."
+  (when-let ((buf (deb-packaging-commands--compile cmd)))
+    (deb-packaging-commands--after-compile
+     buf
+     (lambda ()
+       (deb-packaging-infra--refresh-buffer mode refresh-fn)))))
+
 (defun deb-packaging-infra--ensure-sudo-timestamp ()
   "Signal `user-error' unless sudo credentials are currently cached.
 Sudo runs inside a compilation buffer, which cannot answer password
@@ -267,7 +284,10 @@ Use schroot at point, or prompt."
           (let ((cmd (format "sudo rm -rf %s && sudo rm %s"
                              (shell-quote-argument directory)
                              (shell-quote-argument config-file))))
-            (deb-packaging-commands--compile cmd)))))))
+            (deb-packaging-infra--compile-then-refresh
+             cmd
+             'deb-packaging-infra-schroots-mode
+             #'deb-packaging-infra-refresh-schroots)))))))
 
 ;;; Schroots buffer
 
@@ -417,10 +437,12 @@ ENTRY is a plist from `deb-packaging-infra--list-lxd-all'."
     (when (yes-or-no-p
            (format "Delete %s %s? "
                    (if (eq type 'image) "image" "container") name))
-      (deb-packaging-commands--compile
+      (deb-packaging-infra--compile-then-refresh
        (if (eq type 'image)
            (format "lxc image delete %s" (shell-quote-argument name))
-         (format "lxc delete --force %s" (shell-quote-argument name)))))))
+         (format "lxc delete --force %s" (shell-quote-argument name)))
+       'deb-packaging-infra-lxd-mode
+       #'deb-packaging-infra-refresh-lxd))))
 
 (defun deb-packaging-infra--container-package (name)
   "Return the package name encoded in a dev container NAME, or nil.
@@ -457,7 +479,8 @@ No-op for images."
       (message "Cannot stop an image")
     (let ((name (plist-get entry :name)))
       (message "Stopping %s..." name)
-      (call-process "lxc" nil nil nil "stop" name)
+      (unless (zerop (call-process "lxc" nil nil nil "stop" name))
+        (user-error "Failed to stop %s" name))
       (message "Stopped %s" name)
       (deb-packaging-infra-refresh-lxd))))
 
@@ -470,7 +493,8 @@ No-op for images."
       (message "Cannot start an image")
     (let ((name (plist-get entry :name)))
       (message "Starting %s..." name)
-      (call-process "lxc" nil nil nil "start" name)
+      (unless (zerop (call-process "lxc" nil nil nil "start" name))
+        (user-error "Failed to start %s" name))
       (message "Started %s" name)
       (deb-packaging-infra-refresh-lxd))))
 
@@ -482,7 +506,8 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
   (if (not (eq (plist-get entry :type) 'container))
       (message "Cannot shell into an image")
     (let ((name (plist-get entry :name)))
-      (call-process "lxc" nil nil nil "start" name)
+      (unless (zerop (call-process "lxc" nil nil nil "start" name))
+        (user-error "Failed to start %s" name))
       (deb-packaging-dev--ensure-tramp-method)
       (let ((buf (make-comint (format "lxc:%s" name) "lxc" nil
                               "exec" name "--" "bash" "-l")))
@@ -615,7 +640,10 @@ Use image at point, or prompt."
          (path (plist-get img :path)))
     (when (yes-or-no-p (format "Delete %s?" path))
       (deb-packaging-infra--ensure-sudo-timestamp)
-      (deb-packaging-commands--compile (format "sudo rm %s" (shell-quote-argument path))))))
+      (deb-packaging-infra--compile-then-refresh
+       (format "sudo rm %s" (shell-quote-argument path))
+       'deb-packaging-infra-qemu-images-mode
+       #'deb-packaging-infra-refresh-qemu-images))))
 
 ;;; QEMU list buffer
 
@@ -766,7 +794,10 @@ Use PPA at point, or prompt."
   (when (and (not (string-empty-p name))
              (yes-or-no-p (format "Really delete PPA %s? " name)))
     (deb-packaging-infra--invalidate-ppa-cache)
-    (deb-packaging-commands--compile (format "ppa destroy %s" (shell-quote-argument name)))))
+    (deb-packaging-infra--compile-then-refresh
+     (format "ppa destroy %s" (shell-quote-argument name))
+     'deb-packaging-infra-ppas-mode
+     #'deb-packaging-infra-refresh-ppas)))
 
 (defun deb-packaging-infra-set-ppa-config (&optional name)
   "Configure a Launchpad PPA via `ppa set'.
@@ -879,7 +910,8 @@ bogus locations."
 
 (defun deb-packaging-infra--ppa-list-sentinel (buf temp-buf)
   "Return a sentinel for an async `ppa list' process.
-BUF is the PPAs list buffer; TEMP-BUF holds output."
+BUF is the PPAs list buffer; TEMP-BUF holds output.  A non-zero exit
+reports the failure instead of masquerading as an empty list."
   (lambda (proc _event)
     (let ((status (process-status proc)))
       (when (memq status '(exit failed))
@@ -889,10 +921,13 @@ BUF is the PPAs list buffer; TEMP-BUF holds output."
                 (setq deb-packaging-infra--ppa-processes
                       (delq proc deb-packaging-infra--ppa-processes))
                 (when (eq status 'exit)
-                  (let ((output (with-current-buffer temp-buf
-                                  (buffer-string))))
-                    (dolist (ppa (deb-packaging-infra--parse-ppa-lines output))
-                      (deb-packaging-infra--append-ppa ppa))))
+                  (if (zerop (process-exit-status proc))
+                      (let ((output (with-current-buffer temp-buf
+                                      (buffer-string))))
+                        (dolist (ppa (deb-packaging-infra--parse-ppa-lines output))
+                          (deb-packaging-infra--append-ppa ppa)))
+                    (message "ppa list failed (exit %d); keeping previous list"
+                             (process-exit-status proc))))
                 (deb-packaging-infra--finalize-ppas buf)))
           (when (buffer-live-p temp-buf)
             (kill-buffer temp-buf)))))))

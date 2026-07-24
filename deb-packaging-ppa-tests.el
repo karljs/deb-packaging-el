@@ -346,14 +346,21 @@ Works anywhere inside a result section, not just on the URL line."
 
 ;;; Runner
 
+(defvar-local deb-packaging-ppa-tests--process nil
+  "In-flight `ppa tests' process for this report buffer, or nil.")
+
 (defun deb-packaging-ppa-tests--fetch (ppa name distro)
-  "Run `ppa tests' for PPA/NAME/DISTRO; render the report when done."
+  "Run `ppa tests' for PPA/NAME/DISTRO; render the report when done.
+A fetch already in flight for the report buffer is killed first, so two
+fetches cannot race to render."
   (let ((report-buf (get-buffer-create
                      (deb-packaging-ppa-tests--buffer-name ppa)))
         (out-buf (generate-new-buffer " *deb-ppa-tests-output*")))
     (with-current-buffer report-buf
       (unless (derived-mode-p 'deb-packaging-ppa-tests-mode)
         (deb-packaging-ppa-tests-mode))
+      (when (process-live-p deb-packaging-ppa-tests--process)
+        (delete-process deb-packaging-ppa-tests--process))
       (setq deb-packaging-ppa-tests--ppa ppa
             deb-packaging-ppa-tests--package name
             deb-packaging-ppa-tests--distro distro)
@@ -364,18 +371,21 @@ Works anywhere inside a result section, not just on the URL line."
     (deb-packaging-commands--record-run 'ppa-tests 'running nil)
     (deb-packaging-commands--notify-status-refresh)
     (condition-case err
-        (make-process
-         :name "deb-ppa-tests"
-         :buffer out-buf
-         :command (append (list "ppa" "tests" "-L" ppa)
-                          (when name (list "-p" name))
-                          (list "-r" distro))
-         :sentinel
-         (lambda (proc _event)
-           (when (memq (process-status proc) '(exit signal))
-             (unwind-protect
-                 (deb-packaging-ppa-tests--fetch-done proc out-buf report-buf ppa)
-               (kill-buffer out-buf)))))
+        (let ((proc (make-process
+                     :name "deb-ppa-tests"
+                     :buffer out-buf
+                     :command (append (list "ppa" "tests" "-L" ppa)
+                                      (when name (list "-p" name))
+                                      (list "-r" distro))
+                     :sentinel
+                     (lambda (proc _event)
+                       (when (memq (process-status proc) '(exit signal))
+                         (unwind-protect
+                             (deb-packaging-ppa-tests--fetch-done
+                              proc out-buf report-buf ppa)
+                           (kill-buffer out-buf)))))))
+          (with-current-buffer report-buf
+            (setq deb-packaging-ppa-tests--process proc)))
       ;; Spawn itself can signal (e.g. ppa not installed); don't leak the
       ;; buffer or leave the run record stuck on `running'.
       (error (kill-buffer out-buf)
@@ -384,18 +394,21 @@ Works anywhere inside a result section, not just on the URL line."
              (signal (car err) (cdr err))))))
 
 (defun deb-packaging-ppa-tests--fetch-done (proc out-buf report-buf ppa)
-  "Handle `ppa tests' exit: parse and render, or dump raw output on failure."
-  (if (and (eq (process-status proc) 'exit)
-           (zerop (process-exit-status proc)))
-      (let* ((parsed (deb-packaging-ppa-tests--parse
-                      (with-current-buffer out-buf (buffer-string))))
-             (summary (deb-packaging-ppa-tests--summary parsed)))
-        (deb-packaging-commands--record-run
-         'ppa-tests 'success (buffer-name report-buf) summary)
-        ;; The user may have killed the report buffer while we ran.
-        (when (buffer-live-p report-buf)
-          (with-current-buffer report-buf
-            (deb-packaging-ppa-tests--render parsed ppa))))
+  "Handle `ppa tests' exit: parse and render, or dump raw output on failure.
+A killed process (a newer fetch replaced it) is ignored entirely."
+  (cond
+   ((and (eq (process-status proc) 'exit)
+         (zerop (process-exit-status proc)))
+    (let* ((parsed (deb-packaging-ppa-tests--parse
+                    (with-current-buffer out-buf (buffer-string))))
+           (summary (deb-packaging-ppa-tests--summary parsed)))
+      (deb-packaging-commands--record-run
+       'ppa-tests 'success (buffer-name report-buf) summary)
+      ;; The user may have killed the report buffer while we ran.
+      (when (buffer-live-p report-buf)
+        (with-current-buffer report-buf
+          (deb-packaging-ppa-tests--render parsed ppa)))))
+   ((eq (process-status proc) 'exit)
     (deb-packaging-commands--record-run
      'ppa-tests 'failure (buffer-name report-buf))
     (when (buffer-live-p report-buf)
@@ -404,7 +417,7 @@ Works anywhere inside a result section, not just on the URL line."
           (erase-buffer)
           (insert (propertize (format "ppa tests failed for %s:\n\n" ppa)
                               'font-lock-face 'error))
-          (insert-buffer-substring out-buf)))))
+          (insert-buffer-substring out-buf))))))
   (deb-packaging-commands--notify-status-refresh))
 
 (defun deb-packaging-ppa-tests-refresh ()
@@ -421,7 +434,8 @@ Works anywhere inside a result section, not just on the URL line."
 (defun deb-packaging-ppa-tests-show (&optional args)
   "Show the parsed autopkgtest report for a PPA.
 ARGS comes from `deb-packaging-test-transient'.  Prompts when no PPA is
-set; the used PPA is saved per package+distro."
+set.  Does not touch the saved default PPA: a report is a lookup, and a
+one-off check must not clobber the per-package+distro default."
   (interactive (list (transient-args 'deb-packaging-test-transient)))
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
@@ -431,8 +445,6 @@ set; the used PPA is saved per package+distro."
            (distro (or (transient-arg-value "--dist=" effective-args)
                        (deb-packaging-config--effective-distro)))
            (name (deb-packaging-detect--package-name pkg-dir)))
-      (when name
-        (deb-packaging-ppa-save name distro ppa))
       (deb-packaging-ppa-tests--fetch ppa name distro)
       (deb-packaging-display-buffer
        (deb-packaging-ppa-tests--buffer-name ppa) 'report))))

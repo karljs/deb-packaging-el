@@ -190,6 +190,17 @@ the package tree when the process itself must run in the parent build dir."
 
 ;;; Compilation wrapper
 
+(defun deb-packaging-commands--after-compile (buf action)
+  "Call ACTION (no args) when the compilation in BUF finishes successfully.
+One-shot `compilation-finish-functions' hook; skips ACTION on failure
+since the buffer already shows the error."
+  (letrec ((hook (lambda (finished-buf msg)
+                   (when (eq finished-buf buf)
+                     (remove-hook 'compilation-finish-functions hook)
+                     (when (string-match-p "finished" msg)
+                       (funcall action))))))
+    (add-hook 'compilation-finish-functions hook)))
+
 (defun deb-packaging-commands--compile (cmd)
   "Run CMD via `compile' under the package's process conventions.
 No save-buffer prompts, a running compilation is killed without asking,

@@ -267,5 +267,44 @@
   (should (eq (lookup-key deb-packaging-ppa-tests-mode-map "?")
               #'deb-packaging-test-transient)))
 
+;;; Fetch races and PPA saving
+
+(ert-deftest deb-packaging-test-ppa-tests/refresh-kills-in-flight-fetch ()
+  "A second fetch cancels the first so two sentinels cannot race."
+  (let ((killed nil)
+        (procs nil)
+        (buf nil))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest _)
+                 (let ((p (list 'fake (length procs))))
+                   (push p procs)
+                   p)))
+              ((symbol-function 'process-live-p) (lambda (p) (and p t)))
+              ((symbol-function 'delete-process) (lambda (p) (push p killed)))
+              ((symbol-function 'deb-packaging-commands--record-run)
+               (lambda (&rest _) nil))
+              ((symbol-function 'deb-packaging-commands--notify-status-refresh)
+               (lambda () nil)))
+      (deb-packaging-ppa-tests--fetch "ppa:me/x" "pkg" "noble")
+      (deb-packaging-ppa-tests--fetch "ppa:me/x" "pkg" "noble")
+      (setq buf (get-buffer (deb-packaging-ppa-tests--buffer-name "ppa:me/x")))
+      (should (equal (length killed) 1))
+      (should (eq (car killed) (cadr procs)))
+      (when buf (kill-buffer buf)))))
+
+(ert-deftest deb-packaging-test-ppa-tests/show-does-not-save-ppa ()
+  "A one-off report lookup must not clobber the saved default PPA."
+  (deb-packaging-test--with-package-tree '(:name "mypkg" :version "1.0-1")
+    (let (saved)
+      (cl-letf (((symbol-function 'deb-packaging-commands--resolve-ppa)
+                 (lambda (_) "ppa:someone/else"))
+                ((symbol-function 'deb-packaging-ppa-save)
+                 (lambda (&rest args) (setq saved args)))
+                ((symbol-function 'deb-packaging-ppa-tests--fetch) #'ignore)
+                ((symbol-function 'deb-packaging-display-buffer)
+                 (lambda (&rest _) (selected-window))))
+        (deb-packaging-ppa-tests-show '("--ppa=ppa:someone/else"))
+        (should (null saved))))))
+
 (provide 'deb-packaging-test-ppa-tests)
 ;;; deb-packaging-test-ppa-tests.el ends here

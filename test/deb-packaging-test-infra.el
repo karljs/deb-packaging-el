@@ -10,6 +10,7 @@
 
 (require 'ert)
 (require 'deb-packaging-test)
+(require 'deb-packaging-test-run)
 (require 'deb-packaging-infra)
 
 ;;; sudo preflight for deletions
@@ -218,6 +219,124 @@ yes-or-no-p declines so nothing runs."
     (should (equal (nth 3 rs) deb-packaging-config-target-distro))
     (should (null (nth 4 cr)))
     (should (equal (nth 6 cr) "amd64"))))
+
+;;; Refresh after delete
+
+(ert-deftest deb-packaging-test-infra/delete-qemu-refreshes-on-success ()
+  (let ((refreshed 0))
+    (deb-packaging-test--with-mocked-process '(("sudo" . 0))
+      (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
+                 (lambda () (list (list :name "img" :path "/x.img"))))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                ((symbol-function 'deb-packaging-commands--compile)
+                 (lambda (&rest _) (get-buffer-create " *c*")))
+                ((symbol-function 'deb-packaging-infra-refresh-qemu-images)
+                 (lambda () (cl-incf refreshed))))
+        (unwind-protect
+            (with-temp-buffer
+              (deb-packaging-infra-qemu-images-mode)
+              (deb-packaging-infra-delete-qemu "img")
+              (run-hook-with-args 'compilation-finish-functions
+                                  (get-buffer " *c*") "finished\n")
+              (should (= refreshed 1)))
+          (kill-buffer " *c*"))))))
+
+(ert-deftest deb-packaging-test-infra/delete-qemu-no-refresh-on-failure ()
+  (let ((refreshed 0))
+    (deb-packaging-test--with-mocked-process '(("sudo" . 0))
+      (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
+                 (lambda () (list (list :name "img" :path "/x.img"))))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                ((symbol-function 'deb-packaging-commands--compile)
+                 (lambda (&rest _) (get-buffer-create " *c*")))
+                ((symbol-function 'deb-packaging-infra-refresh-qemu-images)
+                 (lambda () (cl-incf refreshed))))
+        (unwind-protect
+            (with-temp-buffer
+              (deb-packaging-infra-qemu-images-mode)
+              (deb-packaging-infra-delete-qemu "img")
+              (run-hook-with-args 'compilation-finish-functions
+                                  (get-buffer " *c*") "abnormally\n")
+              (should (= refreshed 0)))
+          (kill-buffer " *c*"))))))
+
+;;; Honest lxc start/stop
+
+(ert-deftest deb-packaging-test-infra/stop-lxd-reports-failure ()
+  (deb-packaging-test--with-mocked-process '(("lxc" . 1))
+    (cl-letf (((symbol-function 'deb-packaging-infra-refresh-lxd) #'ignore))
+      (should-error
+       (deb-packaging-infra-stop-lxd-entry
+        (list :name "deb-dev-foo-noble" :type 'container))
+       :type 'user-error))))
+
+(ert-deftest deb-packaging-test-infra/stop-lxd-refreshes-on-success ()
+  (let ((refreshed 0))
+    (deb-packaging-test--with-mocked-process '(("lxc" . 0))
+      (cl-letf (((symbol-function 'deb-packaging-infra-refresh-lxd)
+                 (lambda () (cl-incf refreshed))))
+        (deb-packaging-infra-stop-lxd-entry
+         (list :name "deb-dev-foo-noble" :type 'container))
+        (should (= refreshed 1))))))
+
+(ert-deftest deb-packaging-test-infra/start-lxd-reports-failure ()
+  (deb-packaging-test--with-mocked-process '(("lxc" . 1))
+    (cl-letf (((symbol-function 'deb-packaging-infra-refresh-lxd) #'ignore))
+      (should-error
+       (deb-packaging-infra-start-lxd-entry
+        (list :name "deb-dev-foo-noble" :type 'container))
+       :type 'user-error))))
+
+(ert-deftest deb-packaging-test-infra/shell-lxd-errors-when-start-fails ()
+  (deb-packaging-test--with-mocked-process '(("lxc" . 1))
+    (cl-letf (((symbol-function 'make-comint)
+               (lambda (&rest _) (error "must not comint"))))
+      (should-error
+       (deb-packaging-infra-shell-lxd-entry
+        (list :name "deb-dev-foo-noble" :type 'container))
+       :type 'user-error))))
+
+;;; PPA list fetch failure
+
+(ert-deftest deb-packaging-test-infra/ppa-list-failure-keeps-list-and-messages ()
+  (let ((messages nil))
+    (with-temp-buffer
+      (deb-packaging-infra-ppas-mode)
+      (setq tabulated-list-entries
+            (list (deb-packaging-infra--make-ppa-entry "ppa:me/old")))
+      (let ((temp-buf (generate-new-buffer " *t*"))
+            (proc (make-process :name "f" :command '("false") :noquery t)))
+        (unwind-protect
+            (progn
+              (deb-packaging-test-run--wait proc)
+              (cl-letf (((symbol-function 'message)
+                         (lambda (fmt &rest args)
+                           (push (apply #'format fmt args) messages))))
+                (funcall (deb-packaging-infra--ppa-list-sentinel
+                          (current-buffer) temp-buf)
+                         proc "exited abnormally with code 1\n"))
+              (should (assoc "ppa:me/old" tabulated-list-entries))
+              (should (cl-some (lambda (m) (string-match-p "failed" m))
+                               messages)))
+          (kill-buffer temp-buf))))))
+
+(ert-deftest deb-packaging-test-infra/ppa-list-success-appends ()
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (setq tabulated-list-entries nil)
+    (let ((temp-buf (generate-new-buffer " *t*"))
+          (proc (make-process :name "t" :command '("true") :noquery t)))
+      (unwind-protect
+          (progn
+            (with-current-buffer temp-buf
+              (insert "Some header\n  ppa:me/new\n"))
+            (deb-packaging-test-run--wait proc)
+            (funcall (deb-packaging-infra--ppa-list-sentinel
+                      (current-buffer) temp-buf)
+                     proc "finished\n")
+            (should (assoc "ppa:me/new" tabulated-list-entries)))
+        (when (buffer-live-p temp-buf)
+          (kill-buffer temp-buf))))))
 
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here

@@ -82,12 +82,7 @@ Keys: :on-pq-p, :branch, :pq-branch (nil if already on one), :exists-p."
   "Call ACTION (no args) when the compilation in BUF finishes successfully.
 One-shot `compilation-finish-functions' hook; skips ACTION on failure
 since the buffer already shows the error."
-  (letrec ((hook (lambda (finished-buf msg)
-                   (when (eq finished-buf buf)
-                     (remove-hook 'compilation-finish-functions hook)
-                     (when (string-match-p "finished" msg)
-                       (funcall action))))))
-    (add-hook 'compilation-finish-functions hook)))
+  (deb-packaging-commands--after-compile buf action))
 
 ;;; Commands
 
