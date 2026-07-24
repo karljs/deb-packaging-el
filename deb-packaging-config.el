@@ -15,7 +15,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'subr-x)
 (require 'deb-packaging-detect)
 
@@ -74,9 +73,6 @@ When nil, prepared clones get no `personal' remote.")
                     (deb-packaging-detect--cache-dir))
   "Directory for prepared propagate clones.
 Under $XDG_CACHE_HOME/deb-packaging/propagate (or ~/.cache).")
-
-(defvar deb-packaging-config-propagate-clone-mode-lighter " Prop"
-  "Lighter for `deb-packaging-propagate-clone-mode'.")
 
 ;;; Extra PPA candidates
 

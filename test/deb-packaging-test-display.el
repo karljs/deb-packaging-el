@@ -469,7 +469,7 @@ SESSIONS a list of session name strings."
   (let (compiles)
     (cl-letf (((symbol-function 'compile)
                (lambda (cmd &rest _) (push cmd compiles) nil))
-              ((symbol-function 'yes-or-no-p) #'always)
+              ((symbol-function 'y-or-n-p) #'always)
               ((symbol-function 'deb-packaging-infra--list-schroots)
                (lambda () '((:name "noble-amd64") (:name "stonking-amd64")))))
       (deb-packaging-infra-update-all-schroots))

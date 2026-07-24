@@ -106,20 +106,38 @@ Also restores the saved extra-repository set for the current package and distro.
             (mapcar (lambda (r) (concat "--extra-repository=" r))
                     repos))))
 
+(defun deb-packaging-transients--seed-from-prefix (obj arg-prefix)
+  "Seed OBJ's value from flat ARG-PREFIX args in the prefix value.
+Works around upstream repeat-mode init-value, which keeps whole arg
+strings and so doubles the argument when the value is re-emitted."
+  (oset obj value
+        (mapcar (lambda (a) (string-remove-prefix arg-prefix a))
+                (seq-filter
+                 (lambda (a) (and (stringp a) (string-prefix-p arg-prefix a)))
+                 (oref transient--prefix value)))))
+
+(defun deb-packaging-transients--format-list-value (value display-fn)
+  "Show VALUE entries, comma-separated, each through DISPLAY-FN."
+  (if value
+      (mapconcat (lambda (entry)
+                   (propertize (funcall display-fn entry)
+                               'face 'transient-value))
+                 value
+                 (propertize "," 'face 'transient-inactive-value))
+    (propertize "none" 'face 'transient-inactive-value)))
+
 (defclass deb-packaging-transients--extra-repo-argument (transient-option) ()
   "sbuild --extra-repository= option, expanded to a repo string at build time.")
 
 (defun deb-packaging-transients--extra-repo-read (current)
   "Read one extra-repository entry and toggle it against CURRENT.
-CURRENT is the entry list, a legacy single-entry string, or nil.
-Completes against `deb-packaging-commands-sbuild-variants' names, known
-PPAs, and `deb-packaging-config-extra-ppas'.  Selecting an entry already
-in the set removes it; empty input keeps the set.  Returns the new list
-of entries, or nil when empty.  A variant name or ppa: address expands
+CURRENT is the entry list or nil.  Completes against
+`deb-packaging-commands-sbuild-variants' names, known PPAs, and
+`deb-packaging-config-extra-ppas'.  Selecting an entry already in the
+set removes it; empty input keeps the set.  Returns the new list of
+entries, or nil when empty.  A variant name or ppa: address expands
 at build time; anything else is passed to sbuild verbatim."
-  (let* ((current (cond ((listp current) current)
-                        (current (list current))))
-         (variants (mapcar #'car deb-packaging-commands-sbuild-variants))
+  (let* ((variants (mapcar #'car deb-packaging-commands-sbuild-variants))
          (ppas (deb-packaging-infra--list-ppas))
          (choices (delete-dups
                    (append variants ppas deb-packaging-config-extra-ppas)))
@@ -139,26 +157,13 @@ at build time; anything else is passed to sbuild verbatim."
    (and (slot-boundp obj 'value) (oref obj value))))
 
 (cl-defmethod transient-init-value ((obj deb-packaging-transients--extra-repo-argument))
-  "Seed OBJ's entries from flat --extra-repository= args in the prefix value.
-Works around upstream repeat-mode init-value, which keeps whole arg
-strings and so doubles the argument when the value is re-emitted."
-  (oset obj value
-        (mapcar (lambda (a) (string-remove-prefix "--extra-repository=" a))
-                (seq-filter
-                 (lambda (a)
-                   (and (stringp a)
-                        (string-prefix-p "--extra-repository=" a)))
-                 (oref transient--prefix value)))))
+  "Seed OBJ's entries from flat --extra-repository= args in the prefix value."
+  (deb-packaging-transients--seed-from-prefix obj "--extra-repository="))
 
 (cl-defmethod transient-format-value ((obj deb-packaging-transients--extra-repo-argument))
   "Show the chosen entries, comma-separated."
-  (let ((v (and (slot-boundp obj 'value) (oref obj value))))
-    (if v
-        (mapconcat (lambda (entry)
-                     (propertize entry 'face 'transient-value))
-                   (if (listp v) v (list v))
-                   (propertize "," 'face 'transient-inactive-value))
-      (propertize "none" 'face 'transient-inactive-value))))
+  (deb-packaging-transients--format-list-value
+   (and (slot-boundp obj 'value) (oref obj value)) #'identity))
 
 (defclass deb-packaging-transients--extra-package-argument (transient-option) ()
   "sbuild --extra-package= option.
@@ -172,14 +177,11 @@ any path.  Multi-valued: each .deb becomes a separate --extra-package=.")
 
 (defun deb-packaging-transients--extra-package-read (current)
   "Read one extra-package .deb and toggle it against CURRENT.
-CURRENT is the path list, a legacy single-path string, or nil.
-Completes against .deb files in the build-output directory, falling
-back to file-name reading.  Selecting a path already in the set
-removes it; empty input keeps the set.  Returns absolute paths, or
-nil when empty."
-  (let* ((current (cond ((listp current) current)
-                        (current (list current))))
-         (pkg-dir (deb-packaging-detect--find-package-dir))
+CURRENT is the path list or nil.  Completes against .deb files in the
+build-output directory, falling back to file-name reading.  Selecting
+a path already in the set removes it; empty input keeps the set.
+Returns absolute paths, or nil when empty."
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir))
          (parent-dir (when pkg-dir (deb-packaging-detect--parent-dir pkg-dir)))
          (debs (when (and parent-dir (file-directory-p parent-dir))
                  (directory-files parent-dir t "\\.deb\\'")))
@@ -203,27 +205,13 @@ nil when empty."
           (append current (list path)))))))
 
 (cl-defmethod transient-init-value ((obj deb-packaging-transients--extra-package-argument))
-  "Seed OBJ's paths from flat --extra-package= args in the prefix value.
-Works around upstream repeat-mode init-value, which keeps whole arg
-strings and so doubles the argument when the value is re-emitted."
-  (oset obj value
-        (mapcar (lambda (a) (string-remove-prefix "--extra-package=" a))
-                (seq-filter
-                 (lambda (a)
-                   (and (stringp a)
-                        (string-prefix-p "--extra-package=" a)))
-                 (oref transient--prefix value)))))
+  "Seed OBJ's paths from flat --extra-package= args in the prefix value."
+  (deb-packaging-transients--seed-from-prefix obj "--extra-package="))
 
 (cl-defmethod transient-format-value ((obj deb-packaging-transients--extra-package-argument))
   "Show the selected .deb file(s) by base name."
-  (let ((v (oref obj value)))
-    (if v
-        (mapconcat
-         (lambda (f) (propertize (file-name-nondirectory f)
-                                 'face 'transient-value))
-         (if (listp v) v (list v))
-         (propertize "," 'face 'transient-inactive-value))
-      (propertize "none" 'face 'transient-inactive-value))))
+  (deb-packaging-transients--format-list-value
+   (and (slot-boundp obj 'value) (oref obj value)) #'file-name-nondirectory))
 
 ;;;###autoload(autoload 'deb-packaging-binary-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-binary-build-transient ()

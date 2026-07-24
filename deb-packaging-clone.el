@@ -23,14 +23,6 @@
 (require 'magit)
 (require 'deb-packaging-status)
 
-(defun deb-packaging-clone--target-dir (parent package)
-  "Return the clone target directory for PACKAGE under PARENT."
-  (expand-file-name package parent))
-
-(defun deb-packaging-clone--package-dir-p (dir)
-  "Return non-nil if DIR contains debian/changelog."
-  (file-exists-p (expand-file-name "debian/changelog" dir)))
-
 (defun deb-packaging-clone--open-status (dir)
   "Open `deb-packaging-status' with DIR as the package directory."
   (let ((default-directory (file-name-as-directory dir)))
@@ -73,9 +65,9 @@ already contains a package tree, skip the clone and open status there."
     (user-error "No package given"))
   (unless (executable-find "git-ubuntu")
     (user-error "git-ubuntu not found in `exec-path'"))
-  (let ((target (deb-packaging-clone--target-dir parent package)))
+  (let ((target (expand-file-name package parent)))
     (cond
-     ((deb-packaging-clone--package-dir-p target)
+     ((file-exists-p (expand-file-name "debian/changelog" target))
       (message "Already cloned at %s" target)
       (deb-packaging-clone--open-status target))
      ((file-exists-p target)

@@ -259,48 +259,6 @@
       (list :name "foo" :version "1.2-3")
     (should (null (deb-packaging-detect--vcs-git pkg-dir)))))
 
-;;; Upstream URL
-
-(ert-deftest deb-packaging-test-detect/upstream-url-github-homepage ()
-  (deb-packaging-test--with-package-tree
-      (list :name "foo" :version "1.2-3"
-            :homepage "https://github.com/example/foo")
-    (should (string= (deb-packaging-detect--upstream-url pkg-dir)
-                     "https://github.com/example/foo"))))
-
-(ert-deftest deb-packaging-test-detect/upstream-url-gitlab-homepage ()
-  (deb-packaging-test--with-package-tree
-      (list :name "foo" :version "1.2-3"
-            :homepage "https://gitlab.com/example/foo")
-    (should (string= (deb-packaging-detect--upstream-url pkg-dir)
-                     "https://gitlab.com/example/foo"))))
-
-(ert-deftest deb-packaging-test-detect/upstream-url-non-git-homepage ()
-  (deb-packaging-test--with-package-tree
-      (list :name "foo" :version "1.2-3"
-            :homepage "https://foo.example.org")
-    (should (string= (deb-packaging-detect--upstream-url pkg-dir)
-                     "https://foo.example.org"))))
-
-(ert-deftest deb-packaging-test-detect/upstream-url-from-watch ()
-  (deb-packaging-test--with-package-tree
-      (list :name "foo" :version "1.2-3"
-            :watch "version=4\nopts=... https://github.com/example/foo/tags .../archive/@ANY_VERSION@.tar.gz\n")
-    (should (string= (deb-packaging-detect--upstream-url pkg-dir)
-                     "https://github.com/example/foo"))))
-
-(ert-deftest deb-packaging-test-detect/upstream-url-from-watch-gitlab ()
-  (deb-packaging-test--with-package-tree
-      (list :name "foo" :version "1.2-3"
-            :watch "version=4\nhttps://gitlab.com/example/foo/-/archive/v@ANY_VERSION@/foo-@ANY_VERSION@.tar.gz\n")
-    (should (string= (deb-packaging-detect--upstream-url pkg-dir)
-                     "https://gitlab.com/example/foo"))))
-
-(ert-deftest deb-packaging-test-detect/upstream-url-nothing ()
-  (deb-packaging-test--with-package-tree
-      (list :name "foo" :version "1.2-3")
-    (should (null (deb-packaging-detect--upstream-url pkg-dir)))))
-
 ;;; Changes file parsing
 
 (ert-deftest deb-packaging-test-detect/parse-changes-file-single-file ()
@@ -480,8 +438,6 @@
         (should (file-equal-p (plist-get ctx :pkg-dir) pkg-dir))
         (should (file-equal-p (plist-get ctx :parent-dir) pkg-parent-dir))
         (should (string= (plist-get ctx :source-format) "3.0 (quilt)"))
-        (should (string= (plist-get ctx :maintainer)
-                         "Karl Smeltzer <karl@example.com>"))
         (should (alist-get 'dsc (plist-get ctx :artifacts)))
         (should (string= (plist-get ctx :arch) "amd64"))))))
 

@@ -88,24 +88,15 @@ CATEGORY is one of status, list, report, output, or shell."
         display-buffer-pop-up-window)))
     (_ (error "Unknown deb-packaging display category: %S" category))))
 
-(defun deb-packaging-display-buffer-default (buffer category)
-  "Display BUFFER per the CATEGORY policy and return the window used.
-Binds `display-buffer-overriding-action' so the package policy wins
-over user `display-buffer-alist' rules for package buffers."
-  (let ((display-buffer-overriding-action
-         (deb-packaging-display--action category)))
-    (display-buffer buffer)))
-
-(defvar deb-packaging-display-buffer-function
-  #'deb-packaging-display-buffer-default
-  "Function used to display package buffers.
-Called with (BUFFER CATEGORY) and must return the window used.")
-
 (defun deb-packaging-display-buffer (buffer category)
   "Display BUFFER according to CATEGORY and select its window.
+Binds `display-buffer-overriding-action' so the package policy wins
+over user `display-buffer-alist' rules for package buffers.
 CATEGORY is one of status, list, report, output, or shell."
   (select-window
-   (funcall deb-packaging-display-buffer-function buffer category)))
+   (let ((display-buffer-overriding-action
+          (deb-packaging-display--action category)))
+     (display-buffer buffer))))
 
 (provide 'deb-packaging-display)
 ;;; deb-packaging-display.el ends here

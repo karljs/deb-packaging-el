@@ -46,7 +46,7 @@
     (should (equal (deb-packaging-commands--filter-args lintian-args deb-packaging-commands--lintian-arg-prefixes)
                    '("-i" "--pedantic" "--color=auto")))
     (should (equal (deb-packaging-commands--filter-args ubuntu-args deb-packaging-commands--ubuntu-lint-arg-prefixes)
-                   '("--verbose" "--json" "--context=ctx" "--all=yes")))))
+                   '("--verbose" "--json" "--all=yes")))))
 
 ;;; deb-packaging-commands--parse-lint-summary
 
@@ -185,12 +185,6 @@
     (should (equal (deb-packaging-transients--extra-repo-read '("ppa:me/x"))
                    '("ppa:me/x")))
     (should (null (deb-packaging-transients--extra-repo-read nil)))))
-
-(ert-deftest deb-packaging-test-commands/extra-repo-reader-legacy-string ()
-  "A pre-multi-value string value is treated as a one-entry set."
-  (deb-packaging-test-commands--with-repo-read "proposed"
-    (should (equal (deb-packaging-transients--extra-repo-read "ppa:me/x")
-                   '("ppa:me/x" "proposed")))))
 
 (ert-deftest deb-packaging-test-commands/extra-repo-init-value-roundtrip ()
   "Flat --extra-repository= args in the prefix value restore as entries,

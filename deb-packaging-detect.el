@@ -153,31 +153,6 @@ Returns nil if debian/control has no Vcs-Git field."
       (string-trim
        (replace-regexp-in-string "\\s-+-b\\s-+\\S-+$" "" value)))))
 
-(defun deb-packaging-detect--upstream-url (&optional pkg-dir)
-  "Return a best-effort upstream repo URL for PKG-DIR, or nil.
-Prefers Homepage from debian/control; else a GitHub/GitLab URL in
-debian/watch."
-  (let* ((dir (or pkg-dir (deb-packaging-detect--find-package-dir)))
-         (homepage (deb-packaging-detect--control-field "Homepage" dir)))
-    (cond
-     ((and homepage
-           (string-match-p "\\`https?://\\(github\\.com\\|gitlab\\.com\\)/"
-                           homepage))
-      homepage)
-     ((and homepage (not (string-empty-p homepage)))
-      homepage)
-     (t
-      (when-let* ((dir)
-                  (watch (expand-file-name "debian/watch" dir)))
-        (when (file-readable-p watch)
-          (with-temp-buffer
-            (insert-file-contents watch)
-            (goto-char (point-min))
-            (when (re-search-forward
-                   "https?://\\(?:gitlab\\.com\\|github\\.com\\)/[^/ \t]+/[^/ \t]+"
-                   nil t)
-              (match-string 0)))))))))
-
 (defun deb-packaging-detect--orig-tarball (name version parent-dir)
   "Return the .orig.tar.* path matching `NAME_UPSTREAM' in PARENT-DIR, or nil."
   (let* ((upstream (deb-packaging-detect--upstream-version version))
@@ -201,10 +176,6 @@ debian/watch."
         (when (re-search-forward
                (format "^%s:\\s-*\\(.+\\)$" (regexp-quote field)) nil t)
           (string-trim (match-string 1)))))))
-
-(defun deb-packaging-detect--architecture ()
-  "Return the build architecture string (e.g. \"amd64\")."
-  (deb-packaging-detect--call-process-string "dpkg" "--print-architecture"))
 
 (defun deb-packaging-detect--schroot-exists-p (distro arch)
   "Return the schroot name matching DISTRO and ARCH, or nil.
@@ -319,14 +290,12 @@ to the source name if debian/control is missing."
          (source-name (nth 0 info))
          (bin-names (deb-packaging-detect--binary-package-names dir))
          (all-names (cons source-name bin-names)))
-    (cl-remove-duplicates
-     (apply #'nconc
-            (mapcar (lambda (n)
-                      (list n
-                            (concat n "-dbgsym")
-                            (concat n "-dbg")))
-                    all-names))
-     :test #'equal)))
+    (delete-dups
+     (mapcan (lambda (n)
+               (list n
+                     (concat n "-dbgsym")
+                     (concat n "-dbg")))
+             all-names))))
 
 (defun deb-packaging-detect--filename-version (filename)
   "Extract the version field from packaging FILENAME, or nil.
@@ -391,8 +360,7 @@ package tree.  Keys:
   :stale         list from `deb-packaging-detect--scan-stale-artifacts'
   :source-format source format string, or nil
   :orig-tarball  .orig.tar.* path, or nil
-  :arch          build architecture string
-  :maintainer    Maintainer field, or nil"
+  :arch          build architecture string"
   (when-let* ((pkg-dir (deb-packaging-detect--find-package-dir start-dir))
               (info (deb-packaging-detect--parse-changelog pkg-dir)))
     (let* ((name (nth 0 info))
@@ -410,8 +378,8 @@ package tree.  Keys:
             :stale stale
             :source-format (deb-packaging-detect--source-format pkg-dir)
             :orig-tarball (deb-packaging-detect--orig-tarball name version parent-dir)
-            :arch (deb-packaging-detect--architecture)
-            :maintainer (deb-packaging-detect--control-field "Maintainer" pkg-dir)))))
+            :arch (deb-packaging-detect--call-process-string
+                   "dpkg" "--print-architecture")))))
 
 (provide 'deb-packaging-detect)
 ;;; deb-packaging-detect.el ends here

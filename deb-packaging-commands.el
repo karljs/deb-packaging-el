@@ -95,21 +95,15 @@ Return plist (:ok N :skip N :warn N :error N :fail N) from the final
         (goto-char (point-min))
         (when (re-search-forward
                "^Summary: ran [0-9]+ lint checks (\\([^)]*\\))" nil t)
-          (let ((stats (make-vector 5 0))
-                (order '(("OK" . 0) ("SKIP" . 1) ("WARN" . 2)
-                         ("ERROR" . 3) ("FAIL" . 4))))
+          (let ((ok 0) (skip 0) (warn 0) (error 0) (fail 0))
             (dolist (pair (split-string (match-string 1) ", " t))
-              (let ((kv (split-string pair ": " t)))
-                (when (= (length kv) 2)
-                  (let ((idx (cdr (assoc (car kv) order))))
-                    (when idx
-                      (aset stats idx
-                            (string-to-number (cadr kv))))))))
-            (list :ok (aref stats 0)
-                  :skip (aref stats 1)
-                  :warn (aref stats 2)
-                  :error (aref stats 3)
-                  :fail (aref stats 4))))))))
+              (pcase (split-string pair ": " t)
+                (`("OK" ,n)    (setq ok    (string-to-number n)))
+                (`("SKIP" ,n)  (setq skip  (string-to-number n)))
+                (`("WARN" ,n)  (setq warn  (string-to-number n)))
+                (`("ERROR" ,n) (setq error (string-to-number n)))
+                (`("FAIL" ,n)  (setq fail  (string-to-number n)))))
+            (list :ok ok :skip skip :warn warn :error error :fail fail)))))))
 
 (defun deb-packaging-commands--parse-sbuild-summary (buf-name)
   "Parse a kept schroot session from sbuild buffer BUF-NAME.
@@ -238,7 +232,7 @@ compilation buffer (nil under mocks)."
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
     (deb-packaging-commands--run-command "source-build"
-                                 (cons "dpkg-buildpackage" (or args '()))
+                                 (cons "dpkg-buildpackage" args)
                                  pkg-dir
                                  'source-build)))
 
@@ -264,7 +258,7 @@ compilation buffer (nil under mocks)."
 Entries ending in `=' match by prefix; bare entries match exactly.")
 
 (defconst deb-packaging-commands--ubuntu-lint-arg-prefixes
-  '("--verbose" "--json" "--context=" "--all=")
+  '("--verbose" "--json" "--all=")
   "ubuntu-lint arg prefixes for `deb-packaging-commands--filter-args'.")
 
 (defun deb-packaging-commands--filter-args (args prefixes)
@@ -290,7 +284,7 @@ ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
       (user-error "Not in a Debian package directory"))
     (let ((parent-dir (deb-packaging-detect--parent-dir pkg-dir))
           (lint-args (deb-packaging-commands--filter-args
-                      (or args '())
+                      args
                       deb-packaging-commands--lintian-arg-prefixes)))
       (deb-packaging-commands--run-command "lintian"
                                   (append (list "lintian") lint-args targets)
@@ -309,7 +303,7 @@ ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
          (dsc (alist-get 'dsc artifacts)))
     (unless dsc
       (user-error "No .dsc file found; run a source build first"))
-    (deb-packaging-commands--run-lintian (list dsc) (or args '()) 'lintian-source)))
+    (deb-packaging-commands--run-lintian (list dsc) args 'lintian-source)))
 
 (defun deb-packaging-commands--lintian-binary-artifacts ()
   "Return the .deb files for the current package.
@@ -329,14 +323,14 @@ Signal `user-error' if none exist."
   "Run lintian on all .deb files with ARGS."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
   (let ((debs (deb-packaging-commands--lintian-binary-artifacts)))
-    (deb-packaging-commands--run-lintian debs (or args '()) 'lintian-binary)))
+    (deb-packaging-commands--run-lintian debs args 'lintian-binary)))
 
 (defun deb-packaging-commands-lintian-binary-one (&optional args)
   "Run lintian on one .deb with ARGS, prompting for which."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
   (let* ((debs (deb-packaging-commands--lintian-binary-artifacts))
          (target (completing-read "Deb to lint: " debs nil t)))
-    (deb-packaging-commands--run-lintian (list target) (or args '()) 'lintian-binary)))
+    (deb-packaging-commands--run-lintian (list target) args 'lintian-binary)))
 
 ;;; ubuntu-lint
 
@@ -368,18 +362,14 @@ context source (`changes' by default, or `source-dir' / `changelog')."
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((effective-args (or args '()))
-           (mode (or (transient-arg-value "--context=" effective-args) "changes"))
+    (let* ((mode (or (transient-arg-value "--context=" args) "changes"))
            (ubuntu-args (deb-packaging-commands--filter-args
-                         effective-args
+                         args
                          deb-packaging-commands--ubuntu-lint-arg-prefixes))
-           (passthrough (cl-remove-if
-                         (lambda (a) (string-prefix-p "--context=" a))
-                         ubuntu-args))
            (context-args (deb-packaging-commands--ubuntu-lint-context-args mode pkg-dir)))
       (deb-packaging-commands--run-command
        "ubuntu-lint"
-       (append (list "ubuntu-lint") passthrough context-args)
+       (append (list "ubuntu-lint") ubuntu-args context-args)
        pkg-dir
        'ubuntu-lint))))
 
@@ -407,12 +397,11 @@ Return nil if PPA is not a recognisable ppa: address."
 A `deb-packaging-commands-sbuild-variants' key expands its template; a
 \"ppa:owner/name\" address expands to a Launchpad repo line; anything else
 is returned unchanged."
-  (cond
-   ((cdr (assoc value deb-packaging-commands-sbuild-variants))
-    (format (cdr (assoc value deb-packaging-commands-sbuild-variants)) distro))
-   ((string-prefix-p "ppa:" value)
-    (or (deb-packaging-commands--ppa-repo-line value distro) value))
-   (t value)))
+  (if-let ((template (cdr (assoc value deb-packaging-commands-sbuild-variants))))
+      (format template distro)
+    (if (string-prefix-p "ppa:" value)
+        (or (deb-packaging-commands--ppa-repo-line value distro) value)
+      value)))
 
 (defun deb-packaging-commands-sbuild (&optional args)
   "Run sbuild with ARGS from the binary-build transient."
@@ -428,12 +417,11 @@ is returned unchanged."
            (dsc-file (alist-get 'dsc artifacts)))
       (unless dsc-file
         (user-error "No .dsc file found; run a source build first"))
-      (let* ((effective-args (or args '()))
-             (distro (or (transient-arg-value "--dist=" effective-args)
+      (let* ((distro (or (transient-arg-value "--dist=" args)
                          (deb-packaging-config--effective-distro)))
              (repo-args (cl-remove-if-not
                          (lambda (a) (string-prefix-p "--extra-repository=" a))
-                         effective-args))
+                         args))
              (extra-repo-arg
               (mapcar (lambda (a)
                         (concat "--extra-repository="
@@ -443,7 +431,7 @@ is returned unchanged."
                       repo-args))
              (passthrough (cl-remove-if
                            (lambda (a) (string-prefix-p "--extra-repository=" a))
-                           effective-args)))
+                           args)))
         ;; Default --dist= back if the user cleared it.
         (unless (transient-arg-value "--dist=" passthrough)
           (setq passthrough (cons (format "--dist=%s" distro) passthrough)))
@@ -525,10 +513,9 @@ Return nil if RUNNER has no registered hint."
            (debs (alist-get 'debs artifacts)))
       (unless debs
         (user-error "No .deb files found; run a binary build first"))
-      (let* ((effective-args (or args '()))
-             (runner (or (transient-arg-value "--runner=" effective-args)
+      (let* ((runner (or (transient-arg-value "--runner=" args)
                          "lxd"))
-              (distro (or (transient-arg-value "--dist=" effective-args)
+              (distro (or (transient-arg-value "--dist=" args)
                           (deb-packaging-config--effective-distro)))
              (image-info (deb-packaging-commands--test-image-info runner distro))
              (image (plist-get image-info :image))
@@ -538,7 +525,7 @@ Return nil if RUNNER has no registered hint."
                               (or (string-prefix-p "--runner=" a)
                                   (string-prefix-p "--dist=" a)
                                   (string-prefix-p "--ppa=" a)))
-                            effective-args)))
+                            args)))
         (when (and image (not image-exists))
           (user-error "%s image '%s' not found.\nBuild it with:\n  %s"
                       (capitalize runner)
@@ -576,9 +563,8 @@ Signals `user-error' on empty input."
 ARGS comes from `deb-packaging-upload-transient'.  Prompts when no PPA is
 set; the used PPA is saved per package+distro."
   (interactive (list (transient-args 'deb-packaging-upload-transient)))
-  (let* ((effective-args (or args '()))
-         (ppa (deb-packaging-commands--resolve-ppa effective-args))
-         (distro (or (transient-arg-value "--dist=" effective-args)
+  (let* ((ppa (deb-packaging-commands--resolve-ppa args))
+         (distro (or (transient-arg-value "--dist=" args)
                      (deb-packaging-config--effective-distro))))
     (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
            (info (deb-packaging-detect--package-info pkg-dir))
@@ -591,8 +577,7 @@ set; the used PPA is saved per package+distro."
            (changes (alist-get 'source-changes artifacts)))
       (unless changes
         (user-error "No source .changes file found; run a source build first"))
-      (let* ((changes-file (if (consp changes) (car changes) changes))
-             (cmd-args (list "dput" ppa changes-file)))
+      (let ((cmd-args (list "dput" ppa changes)))
         (deb-packaging-config--set-distro distro)
         (when name
           (deb-packaging-ppa-save name distro ppa))
@@ -610,9 +595,8 @@ Moves files to trash from the output (parent) directory only."
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((effective-args (or args '()))
-           (do-artifacts (member "--artifacts" effective-args))
-           (do-stale     (member "--stale"     effective-args))
+    (let* ((do-artifacts (member "--artifacts" args))
+           (do-stale     (member "--stale"     args))
            (name (deb-packaging-detect--package-name pkg-dir))
            (version (deb-packaging-detect--package-version pkg-dir))
            (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
@@ -651,10 +635,9 @@ Pops quilt patches, removes .pc/, and/or removes debian/files."
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((effective-args (or args '()))
-           (do-quilt (member "--quilt" effective-args))
-           (do-pc    (member "--pc"    effective-args))
-           (do-files (member "--files" effective-args))
+    (let* ((do-quilt (member "--quilt" args))
+           (do-pc    (member "--pc"    args))
+           (do-files (member "--files" args))
            (steps '())
            (desc '()))
       (when do-quilt
