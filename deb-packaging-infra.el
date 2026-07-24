@@ -193,7 +193,11 @@ NAMES, when given, is a list of schroot names to update."
                          (user-error "No schroots found"))
                        (list (completing-read
                               "Schroot to update: " schroots nil t))))))
-    (deb-packaging-commands--compile (deb-packaging-infra--update-command targets))))
+    (when (y-or-n-p (if (= (length targets) 1)
+                        (format "Update schroot %s? " (car targets))
+                      (format "Update %d schroots? " (length targets))))
+      (deb-packaging-commands--compile
+       (deb-packaging-infra--update-command targets)))))
 
 (defun deb-packaging-infra-update-all-schroots ()
   "Update all schroots with sbuild-update."
@@ -220,7 +224,9 @@ NAMES, when given, is a list of schroot names to update."
                       (format "End %d schroot sessions? " (length names))))
       (dolist (name names)
         (deb-packaging-infra--end-session name))
-      (deb-packaging-infra-refresh-schroots))))
+      (deb-packaging-commands--refresh-buffer
+       'deb-packaging-infra-schroots-mode
+       #'deb-packaging-infra-refresh-schroots))))
 
 (defun deb-packaging-infra-end-sessions ()
   "End schroot sessions in the active region, at point, or under the heading."
@@ -232,14 +238,6 @@ NAMES, when given, is a list of schroot names to update."
   (interactive)
   (deb-packaging-infra--end-session-list (deb-packaging-infra--list-sessions)))
 
-(defun deb-packaging-infra--refresh-buffer (mode refresh-fn)
-  "Call REFRESH-FN in the live buffer derived from MODE, if any."
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when (derived-mode-p mode)
-          (funcall refresh-fn))))))
-
 (defun deb-packaging-infra--compile-then-refresh (cmd mode refresh-fn)
   "Run CMD via the compile wrapper; on success refresh the MODE list buffer.
 Keeps the row of a deleted item from lingering until a manual `g'."
@@ -247,7 +245,7 @@ Keeps the row of a deleted item from lingering until a manual `g'."
     (deb-packaging-commands--after-compile
      buf
      (lambda ()
-       (deb-packaging-infra--refresh-buffer mode refresh-fn)))))
+       (deb-packaging-commands--refresh-buffer mode refresh-fn)))))
 
 (defun deb-packaging-infra--ensure-sudo-timestamp ()
   "Signal `user-error' unless sudo credentials are currently cached.
@@ -333,6 +331,8 @@ Use schroot at point, or prompt."
 (defun deb-packaging-infra-refresh-schroots ()
   "Refresh the schroots buffer."
   (interactive)
+  (unless (derived-mode-p 'deb-packaging-infra-schroots-mode)
+    (user-error "Not in a schroots buffer"))
   (when (derived-mode-p 'deb-packaging-infra-schroots-mode)
     (let ((inhibit-read-only t)
           (schroots (deb-packaging-infra--list-schroots))
@@ -482,7 +482,8 @@ No-op for images."
       (unless (zerop (call-process "lxc" nil nil nil "stop" name))
         (user-error "Failed to stop %s" name))
       (message "Stopped %s" name)
-      (deb-packaging-infra-refresh-lxd))))
+      (deb-packaging-commands--refresh-buffer 'deb-packaging-infra-lxd-mode
+                                              #'deb-packaging-infra-refresh-lxd))))
 
 (defun deb-packaging-infra-start-lxd-entry (&optional entry)
   "Start the LXD container at point.
@@ -496,7 +497,8 @@ No-op for images."
       (unless (zerop (call-process "lxc" nil nil nil "start" name))
         (user-error "Failed to start %s" name))
       (message "Started %s" name)
-      (deb-packaging-infra-refresh-lxd))))
+      (deb-packaging-commands--refresh-buffer 'deb-packaging-infra-lxd-mode
+                                              #'deb-packaging-infra-refresh-lxd))))
 
 (defun deb-packaging-infra-shell-lxd-entry (&optional entry)
   "Open a shell in the LXD container at point.
@@ -548,6 +550,8 @@ Image rows get no binding rather than a pretend action.")
 (defun deb-packaging-infra-refresh-lxd ()
   "Refresh the LXD list buffer."
   (interactive)
+  (unless (derived-mode-p 'deb-packaging-infra-lxd-mode)
+    (user-error "Not in an LXD buffer"))
   (when (derived-mode-p 'deb-packaging-infra-lxd-mode)
     (setq tabulated-list-entries
           (mapcar (lambda (e)
@@ -667,6 +671,8 @@ Use image at point, or prompt."
 (defun deb-packaging-infra-refresh-qemu-images ()
   "Refresh the QEMU images list buffer."
   (interactive)
+  (unless (derived-mode-p 'deb-packaging-infra-qemu-images-mode)
+    (user-error "Not in a QEMU images buffer"))
   (when (derived-mode-p 'deb-packaging-infra-qemu-images-mode)
     (setq tabulated-list-entries
           (mapcar (lambda (img)
@@ -792,8 +798,9 @@ cached list is used."
   (interactive)
   (let* ((name (read-string "PPA name to create: "))
          (cmd (format "ppa create %s" (shell-quote-argument name))))
-    (when (and (not (string-empty-p name))
-               (yes-or-no-p (format "Run: %s? " cmd)))
+    (when (string-empty-p name)
+      (user-error "No PPA name given"))
+    (when (yes-or-no-p (format "Run: %s? " cmd))
       (deb-packaging-infra--invalidate-ppa-cache)
       (deb-packaging-commands--compile cmd))))
 
@@ -802,8 +809,9 @@ cached list is used."
 Use PPA at point, or prompt."
   (interactive
    (list (deb-packaging-infra--read-ppa "PPA to delete: ")))
-  (when (and (not (string-empty-p name))
-             (yes-or-no-p (format "Really delete PPA %s? " name)))
+  (when (string-empty-p name)
+    (user-error "No PPA name given"))
+  (when (yes-or-no-p (format "Really delete PPA %s? " name))
     (deb-packaging-infra--invalidate-ppa-cache)
     (deb-packaging-infra--compile-then-refresh
      (format "ppa destroy %s" (shell-quote-argument name))
@@ -835,23 +843,24 @@ buffer; a compilation buffer would error-parse the text and send RET to
 bogus locations."
   (interactive
    (list (deb-packaging-infra--read-ppa "PPA to show: ")))
-  (unless (string-empty-p name)
-    (let ((buf (get-buffer-create (format "*deb-ppa: %s*" name))))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (let ((code (call-process "ppa" nil buf nil "show" name)))
-            (unless (zerop code)
-              (let ((out (string-trim (buffer-string))))
-                (kill-buffer buf)
-                (user-error "ppa show %s failed%s" name
-                            (if (string-empty-p out)
-                                ""
-                              (concat ": " out)))))
-            (goto-char (point-min))
-            (special-mode)
-            (setq deb-packaging-display-category 'report))))
-      (deb-packaging-display-buffer buf 'report))))
+  (when (string-empty-p name)
+    (user-error "No PPA name given"))
+  (let ((buf (get-buffer-create (format "*deb-ppa: %s*" name))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (let ((code (call-process "ppa" nil buf nil "show" name)))
+          (unless (zerop code)
+            (let ((out (string-trim (buffer-string))))
+              (kill-buffer buf)
+              (user-error "ppa show %s failed%s" name
+                          (if (string-empty-p out)
+                              ""
+                            (concat ": " out)))))
+          (goto-char (point-min))
+          (special-mode)
+          (setq deb-packaging-display-category 'report))))
+    (deb-packaging-display-buffer buf 'report)))
 
 ;;; PPA list buffer
 
@@ -951,6 +960,8 @@ reports the failure instead of masquerading as an empty list."
 (defun deb-packaging-infra-refresh-ppas ()
   "Refresh the PPAs list buffer asynchronously so Emacs does not block."
   (interactive)
+  (unless (derived-mode-p 'deb-packaging-infra-ppas-mode)
+    (user-error "Not in a PPAs buffer"))
   (when (derived-mode-p 'deb-packaging-infra-ppas-mode)
     (deb-packaging-infra--cancel-ppa-processes)
     (deb-packaging-infra--show-ppas-loading-message)

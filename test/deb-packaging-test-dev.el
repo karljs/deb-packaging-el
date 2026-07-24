@@ -197,5 +197,86 @@ the langs or tools layer had packages to install."
     (should (deb-packaging-dev--need-langs-prompt-p nil nil ""))
     (should (deb-packaging-dev--need-langs-prompt-p t fp fp))))
 
+;;; Project dispatch
+
+(ert-deftest deb-packaging-test-dev/project-uses-projectile-when-root-found ()
+  (let (used)
+    (cl-letf (((symbol-function 'deb-packaging-dev--tramp-path-for-current)
+               (lambda () "/lxc:c:/root/work/foo"))
+              ((symbol-function 'projectile-project-root)
+               (lambda () "/lxc:c:/root/work/foo/"))
+              ((symbol-function 'projectile-find-file)
+               (lambda () (interactive) (setq used 'projectile)))
+              ((symbol-function 'project-find-file)
+               (lambda () (interactive) (setq used 'project)))
+              ((symbol-function 'dired)
+               (lambda (&rest _) (setq used 'dired))))
+      (deb-packaging-dev-project)
+      (should (eq used 'projectile)))))
+
+(ert-deftest deb-packaging-test-dev/project-falls-to-project-el-without-root ()
+  (let (used)
+    (cl-letf (((symbol-function 'deb-packaging-dev--tramp-path-for-current)
+               (lambda () "/lxc:c:/root/work/foo"))
+              ((symbol-function 'projectile-project-root)
+               (lambda () nil))
+              ((symbol-function 'projectile-find-file)
+               (lambda () (interactive) (setq used 'projectile)))
+              ((symbol-function 'project-find-file)
+               (lambda () (interactive) (setq used 'project)))
+              ((symbol-function 'dired)
+               (lambda (&rest _) (setq used 'dired))))
+      (deb-packaging-dev-project)
+      (should (eq used 'project)))))
+
+(ert-deftest deb-packaging-test-dev/project-falls-to-dired-without-either ()
+  (let (used)
+    (cl-letf (((symbol-function 'deb-packaging-dev--tramp-path-for-current)
+               (lambda () "/lxc:c:/root/work/foo"))
+              ((symbol-function 'projectile-find-file) nil)
+              ((symbol-function 'project-find-file) nil)
+              ((symbol-function 'dired)
+               (lambda (&rest _) (setq used 'dired))))
+      (deb-packaging-dev-project)
+      (should (eq used 'dired)))))
+
+;;; Destroy existence check
+
+(ert-deftest deb-packaging-test-dev/destroy-errors-when-container-missing ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble")
+    (cl-letf (((symbol-function 'deb-packaging-dev--list-containers)
+               (lambda (&rest _) nil))
+              ((symbol-function 'deb-packaging-dev--container-exists-p)
+               (lambda (&rest _) nil))
+              ((symbol-function 'yes-or-no-p)
+               (lambda (&rest _) (error "must not confirm"))))
+      (should-error (deb-packaging-dev-destroy) :type 'user-error))))
+
+(ert-deftest deb-packaging-test-dev/destroy-wraps-sentinel-for-refresh ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble")
+    (let ((proc nil)
+          (original-sentinel nil)
+          (buf (generate-new-buffer " *deb-test-destroy*")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'deb-packaging-dev--container-exists-p)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                    ((symbol-function 'deb-packaging-commands--run-command)
+                     (lambda (&rest _)
+                       (setq proc (make-process :name "deb-test-true"
+                                                :buffer buf
+                                                :command '("true")
+                                                :noquery t))
+                       (setq original-sentinel (process-sentinel proc))
+                       buf)))
+            (deb-packaging-dev-destroy)
+            (should proc)
+            ;; The default sentinel was replaced by a wrapped one.
+            (should (not (eq (process-sentinel proc) original-sentinel))))
+        (when proc (delete-process proc))
+        (kill-buffer buf)))))
+
 (provide 'deb-packaging-test-dev)
 ;;; deb-packaging-test-dev.el ends here

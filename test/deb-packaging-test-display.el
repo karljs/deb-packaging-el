@@ -432,7 +432,8 @@ SESSIONS a list of session name strings."
   "With point on a chroot row, `u' updates just that chroot."
   (let (compiles)
     (cl-letf (((symbol-function 'compile)
-               (lambda (cmd &rest _) (push cmd compiles) nil)))
+               (lambda (cmd &rest _) (push cmd compiles) nil))
+              ((symbol-function 'y-or-n-p) #'always))
       (deb-packaging-test-display--with-schroots-buffer
           '((:name "noble-amd64" :description "Noble" :directory "/srv/noble")
             (:name "stonking-amd64" :description "Stonk" :directory "/srv/stonk"))
@@ -446,7 +447,8 @@ SESSIONS a list of session name strings."
   "With an active region over chroot rows, `u' updates them in one compile."
   (let (compiles)
     (cl-letf (((symbol-function 'compile)
-               (lambda (cmd &rest _) (push cmd compiles) nil)))
+               (lambda (cmd &rest _) (push cmd compiles) nil))
+              ((symbol-function 'y-or-n-p) #'always))
       (deb-packaging-test-display--with-schroots-buffer
           '((:name "noble-amd64" :description "Noble" :directory "/srv/noble")
             (:name "stonking-amd64" :description "Stonk" :directory "/srv/stonk"))

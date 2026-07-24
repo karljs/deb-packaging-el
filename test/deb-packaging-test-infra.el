@@ -275,8 +275,10 @@ yes-or-no-p declines so nothing runs."
     (deb-packaging-test--with-mocked-process '(("lxc" . 0))
       (cl-letf (((symbol-function 'deb-packaging-infra-refresh-lxd)
                  (lambda () (cl-incf refreshed))))
-        (deb-packaging-infra-stop-lxd-entry
-         (list :name "deb-dev-foo-noble" :type 'container))
+        (with-temp-buffer
+          (deb-packaging-infra-lxd-mode)
+          (deb-packaging-infra-stop-lxd-entry
+           (list :name "deb-dev-foo-noble" :type 'container)))
         (should (= refreshed 1))))))
 
 (ert-deftest deb-packaging-test-infra/start-lxd-reports-failure ()
@@ -365,6 +367,66 @@ yes-or-no-p declines so nothing runs."
                (lambda () (error "must not call ppa list"))))
       (should-error (deb-packaging-infra--read-ppa "PPA: ")
                     :type 'user-error))))
+
+;;; Single-update confirmation
+
+(ert-deftest deb-packaging-test-infra/update-schroots-confirms-before-compile ()
+  (let ((asked nil) (compiled nil))
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+               (lambda () (list (list :name "s1"))))
+              ((symbol-function 'deb-packaging-infra--chroot-targets)
+               (lambda () nil))
+              ((symbol-function 'completing-read) (lambda (&rest _) "s1"))
+              ((symbol-function 'y-or-n-p)
+               (lambda (&rest _) (setq asked t) t))
+              ((symbol-function 'compile)
+               (lambda (&rest _) (setq compiled t))))
+      (deb-packaging-infra-update-schroots)
+      (should asked)
+      (should compiled))))
+
+(ert-deftest deb-packaging-test-infra/update-schroots-declined-runs-nothing ()
+  (let ((compiled nil))
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+               (lambda () (list (list :name "s1"))))
+              ((symbol-function 'deb-packaging-infra--chroot-targets)
+               (lambda () nil))
+              ((symbol-function 'completing-read) (lambda (&rest _) "s1"))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) nil))
+              ((symbol-function 'compile)
+               (lambda (&rest _) (setq compiled t))))
+      (deb-packaging-infra-update-schroots)
+      (should-not compiled))))
+
+;;; Empty PPA name
+
+(ert-deftest deb-packaging-test-infra/create-ppa-empty-name-errors ()
+  (cl-letf (((symbol-function 'read-string) (lambda (&rest _) ""))
+            ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+    (should-error (deb-packaging-infra-create-ppa) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-infra/delete-ppa-empty-name-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa)
+             (lambda (&rest _) ""))
+            ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+    (should-error (call-interactively #'deb-packaging-infra-delete-ppa)
+                  :type 'user-error)))
+
+(ert-deftest deb-packaging-test-infra/show-ppa-empty-name-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa)
+             (lambda (&rest _) "")))
+    (should-error (call-interactively #'deb-packaging-infra-show-ppa)
+                  :type 'user-error)))
+
+;;; Refresh mode guards
+
+(ert-deftest deb-packaging-test-infra/refresh-errors-outside-its-mode ()
+  (dolist (fn '(deb-packaging-infra-refresh-schroots
+                deb-packaging-infra-refresh-lxd
+                deb-packaging-infra-refresh-qemu-images
+                deb-packaging-infra-refresh-ppas))
+    (with-temp-buffer
+      (should-error (funcall fn) :type 'user-error))))
 
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here

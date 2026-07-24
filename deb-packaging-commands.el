@@ -190,6 +190,17 @@ the package tree when the process itself must run in the parent build dir."
 
 ;;; Compilation wrapper
 
+(defun deb-packaging-commands--refresh-buffer (mode refresh-fn)
+  "Call REFRESH-FN in the live buffer derived from MODE, if any.
+REFRESH-FN may be a symbol that is not yet loaded; it is only called
+when `fboundp'."
+  (when (fboundp refresh-fn)
+    (dolist (buf (buffer-list))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (when (derived-mode-p mode)
+            (funcall refresh-fn)))))))
+
 (defun deb-packaging-commands--after-compile (buf action)
   "Call ACTION (no args) when the compilation in BUF finishes successfully.
 One-shot `compilation-finish-functions' hook; skips ACTION on failure

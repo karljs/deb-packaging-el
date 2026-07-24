@@ -28,6 +28,10 @@
 (require 'deb-packaging-commands)
 (require 'deb-packaging-display)
 
+;; Loaded after this file (infra requires us, so no cycle); referenced
+;; by name only, fboundp-guarded at call time.
+(declare-function deb-packaging-infra-refresh-lxd "deb-packaging-infra")
+
 ;;; Variables
 
 (defvar deb-packaging-dev-image-remote "ubuntu-daily"
@@ -459,18 +463,22 @@ Errors if container doesn't exist."
       (deb-packaging-display-buffer buf 'shell))))
 
 (defun deb-packaging-dev-project ()
-  "Find file in the container. Uses projectile or project.el, else dired."
+  "Find file in the container.
+Projectile only when it can see a project root (it errors otherwise),
+else built-in project.el, else dired on the mount."
   (interactive)
   (let ((tramp-path (deb-packaging-dev--tramp-path-for-current)))
     (cond
-     ((fboundp 'projectile-find-file)
+     ((and (fboundp 'projectile-find-file)
+           (fboundp 'projectile-project-root)
+           (let ((default-directory tramp-path))
+             (ignore-errors (projectile-project-root))))
       (let ((default-directory tramp-path))
         (call-interactively #'projectile-find-file)))
      ((fboundp 'project-find-file)
       (let ((default-directory tramp-path))
         (call-interactively #'project-find-file)))
      (t
-      (message "Install projectile for project navigation; falling back to dired")
       (dired tramp-path)))))
 
 ;;; Container inspection
@@ -576,12 +584,23 @@ With arg or outside a package: prompts with completion."
             (user-error "No dev containers found"))
            (t
             (completing-read "Delete container: " names nil t)))))
+    (unless (deb-packaging-dev--container-exists-p name)
+      (user-error "No dev container %s; nothing to destroy" name))
     (when (yes-or-no-p (format "Delete dev container %s? " name))
-      (deb-packaging-commands--run-command
-       "dev-destroy"
-       (list "sh" "-c" (format "lxc delete --force %s"
-                               (shell-quote-argument name)))
-       nil 'dev-destroy))))
+      (let ((buf (deb-packaging-commands--run-command
+                  "dev-destroy"
+                  (list "sh" "-c" (format "lxc delete --force %s"
+                                          (shell-quote-argument name)))
+                  nil 'dev-destroy)))
+        (when-let ((proc (get-buffer-process buf)))
+          (deb-packaging-commands--wrap-sentinel
+           proc
+           (lambda (p _event)
+             (when (and (eq (process-status p) 'exit)
+                        (zerop (process-exit-status p)))
+               (deb-packaging-commands--refresh-buffer
+                'deb-packaging-infra-lxd-mode
+                #'deb-packaging-infra-refresh-lxd)))))))))
 
 (provide 'deb-packaging-dev)
 ;;; deb-packaging-dev.el ends here

@@ -456,5 +456,60 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
     (should-error (deb-packaging-propagate--read-commit-one "/src" nil)
                   :type 'user-error)))
 
+;;; Clone robustness
+
+(ert-deftest deb-packaging-test-propagate/clone-checkout-failure-errors ()
+  "A failed checkout in the reset path must not silently continue."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (deb-packaging-test-propagate--with-clone-mocks (list t)
+      (cl-letf (((symbol-function 'magit-call-git)
+                 (lambda (&rest args)
+                   (if (equal (car args) "checkout") 1 0))))
+        (should-error (deb-packaging-propagate-clone) :type 'user-error)))))
+
+(ert-deftest deb-packaging-test-propagate/clone-offers-to-browse-fork-page ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let (browsed)
+      (deb-packaging-test-propagate--with-clone-mocks (list t t)
+        (cl-letf (((symbol-function 'deb-packaging-propagate--salsa-personal-url)
+                   (lambda (&rest _) "https://salsa.debian.org/u/foo.git"))
+                  ((symbol-function 'deb-packaging-propagate--fork-exists-p)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'deb-packaging-propagate--fork-url)
+                   (lambda (&rest _) "https://salsa.debian.org/debian/foo/-/forks/new"))
+                  ((symbol-function 'browse-url)
+                   (lambda (url &rest _) (setq browsed url)))
+                  ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+          (deb-packaging-propagate-clone)
+          (should (equal browsed
+                         "https://salsa.debian.org/debian/foo/-/forks/new")))))))
+
+(ert-deftest deb-packaging-test-propagate/export-displays-patch-without-switching ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3"
+            :patches '(("fix.patch" . "--- a/src/f.c\n+++ b/src/f.c\n@@ -1 +1 @@\n-old\n+new\n")))
+    (let ((output (expand-file-name "out.patch" temporary-file-directory))
+          (displayed nil)
+          (switched nil))
+      (unwind-protect
+          (cl-letf (((symbol-function 'find-file-read-only)
+                     (lambda (&rest _) (setq switched t)))
+                    ((symbol-function 'display-buffer)
+                     (lambda (buf &rest _) (setq displayed buf))))
+            (deb-packaging-propagate-export-patch
+             (list (list :type 'patch :name "fix.patch"
+                         :path (expand-file-name "debian/patches/fix.patch"
+                                                 pkg-dir)))
+             output)
+            (should-not switched)
+            (should (buffer-live-p displayed))
+            (should (equal (buffer-local-value 'buffer-file-name displayed)
+                           output))
+            (kill-buffer displayed))
+        (when (file-exists-p output)
+          (delete-file output))))))
+
 (provide 'deb-packaging-test-propagate)
 ;;; deb-packaging-test-propagate.el ends here

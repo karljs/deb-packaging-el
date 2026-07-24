@@ -487,8 +487,12 @@ in view-mode."
     (when (string-empty-p (string-trim content))
       (user-error "No patch content produced"))
     (write-region content nil output-path)
-    (with-current-buffer (find-file-read-only output-path)
-      (view-mode-enter))
+    ;; Display, don't switch: export may run from the status buffer and
+    ;; must not hijack the window.
+    (let ((buf (find-file-noselect output-path)))
+      (with-current-buffer buf
+        (view-mode 1))
+      (display-buffer buf))
     (message "Exported %d bytes to %s" (length content) output-path)
     output-path))
 
@@ -525,9 +529,11 @@ apply items."
            (let ((default-branch (or (deb-packaging-propagate--default-branch clone-dir)
                                      "main")))
              (let ((default-directory clone-dir))
-               (magit-call-git "checkout" default-branch)
-               (magit-call-git "reset" "--hard"
-                               (format "origin/%s" default-branch)))))
+               (unless (zerop (magit-call-git "checkout" default-branch))
+                 (user-error "git checkout failed.  See *magit-process* buffer ($ in Magit)."))
+               (unless (zerop (magit-call-git "reset" "--hard"
+                                              (format "origin/%s" default-branch)))
+                 (user-error "git reset failed.  See *magit-process* buffer ($ in Magit).")))))
         (message "Cloning %s..." vcs-url)
         (let ((default-directory (file-name-directory clone-dir)))
           (unless (zerop (magit-call-git "clone" vcs-url
@@ -571,8 +577,13 @@ apply items."
                 (if (deb-packaging-propagate--fork-exists-p personal-url)
                     (message "Personal fork ready at %s" personal-url)
                   (let ((fork-url (deb-packaging-propagate--fork-url vcs-url)))
-                    (message "Personal fork not found.  Fork at: %s"
-                             (or fork-url "salsa.debian.org"))))
+                    (if (and fork-url
+                             (y-or-n-p
+                              (format "Personal fork not found.  Open %s to create it? "
+                                      fork-url)))
+                        (browse-url fork-url)
+                      (message "Personal fork not found.  Fork at: %s"
+                               (or fork-url "salsa.debian.org")))))
               (message "Could not add personal remote (non-fatal)")))))
       (magit-status-setup-buffer clone-dir)
       (when (derived-mode-p 'magit-status-mode)
