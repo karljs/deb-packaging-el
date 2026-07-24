@@ -287,7 +287,8 @@
                (lambda () nil)))
       (deb-packaging-ppa-tests--fetch "ppa:me/x" "pkg" "noble")
       (deb-packaging-ppa-tests--fetch "ppa:me/x" "pkg" "noble")
-      (setq buf (get-buffer (deb-packaging-ppa-tests--buffer-name "ppa:me/x")))
+      (setq buf (get-buffer (deb-packaging-ppa-tests--buffer-name
+                             "ppa:me/x" "pkg" "noble")))
       (should (equal (length killed) 1))
       (should (eq (car killed) (cadr procs)))
       (when buf (kill-buffer buf)))))
@@ -305,6 +306,20 @@
                  (lambda (&rest _) (selected-window))))
         (deb-packaging-ppa-tests-show '("--ppa=ppa:someone/else"))
         (should (null saved))))))
+
+;;; Report buffer naming
+
+(ert-deftest deb-packaging-test-ppa-tests/buffer-name-keys-on-all-params ()
+  "Reports for different packages/distros in the same PPA must not clobber."
+  (should (not (equal
+                (deb-packaging-ppa-tests--buffer-name "ppa:me/x" "a" "noble")
+                (deb-packaging-ppa-tests--buffer-name "ppa:me/x" "b" "noble"))))
+  (should (not (equal
+                (deb-packaging-ppa-tests--buffer-name "ppa:me/x" "a" "noble")
+                (deb-packaging-ppa-tests--buffer-name "ppa:me/x" "a" "jammy"))))
+  (should (string-match-p "ppa:me/x"
+                          (deb-packaging-ppa-tests--buffer-name
+                           "ppa:me/x" "a" "noble"))))
 
 (provide 'deb-packaging-test-ppa-tests)
 ;;; deb-packaging-test-ppa-tests.el ends here

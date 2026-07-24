@@ -160,9 +160,11 @@ Return a plist with :triggers, :results, :running, :waiting."
 (defvar-local deb-packaging-ppa-tests--distro nil
   "Release filter of the current report buffer.")
 
-(defun deb-packaging-ppa-tests--buffer-name (ppa)
-  "Return the report buffer name for PPA."
-  (format "*deb-ppa-tests: %s*" ppa))
+(defun deb-packaging-ppa-tests--buffer-name (ppa name distro)
+  "Return the report buffer name for PPA/NAME/DISTRO.
+All three parameters key the buffer: a fetch is parameterized by them,
+so keying only on the PPA would clobber reports across packages."
+  (format "*deb-ppa-tests: %s (%s %s)*" ppa (or name "?") (or distro "?")))
 
 (defvar-keymap deb-packaging-ppa-tests-mode-map
   :doc "Keymap for `deb-packaging-ppa-tests-mode'."
@@ -354,7 +356,7 @@ Works anywhere inside a result section, not just on the URL line."
 A fetch already in flight for the report buffer is killed first, so two
 fetches cannot race to render."
   (let ((report-buf (get-buffer-create
-                     (deb-packaging-ppa-tests--buffer-name ppa)))
+                     (deb-packaging-ppa-tests--buffer-name ppa name distro)))
         (out-buf (generate-new-buffer " *deb-ppa-tests-output*")))
     (with-current-buffer report-buf
       (unless (derived-mode-p 'deb-packaging-ppa-tests-mode)
@@ -447,7 +449,7 @@ one-off check must not clobber the per-package+distro default."
            (name (deb-packaging-detect--package-name pkg-dir)))
       (deb-packaging-ppa-tests--fetch ppa name distro)
       (deb-packaging-display-buffer
-       (deb-packaging-ppa-tests--buffer-name ppa) 'report))))
+       (deb-packaging-ppa-tests--buffer-name ppa name distro) 'report))))
 
 (provide 'deb-packaging-ppa-tests)
 ;;; deb-packaging-ppa-tests.el ends here

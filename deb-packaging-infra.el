@@ -774,6 +774,19 @@ first call and after the TTL expires."
   (when (string-match "\\`ppa:[^/]+/\\(.+\\)" ppa)
     (match-string 1 ppa)))
 
+(defun deb-packaging-infra--read-ppa (prompt)
+  "Read a PPA name with PROMPT, or use the row at point.
+Inside the PPAs list buffer, candidates are the buffer's own rows, so
+reading never blocks on a synchronous `ppa list' call.  Elsewhere the
+cached list is used."
+  (or (tabulated-list-get-id)
+      (let ((ppas (if (derived-mode-p 'deb-packaging-infra-ppas-mode)
+                      (mapcar #'car tabulated-list-entries)
+                    (deb-packaging-infra--list-ppas))))
+        (unless ppas
+          (user-error "No PPAs listed yet; press g and try again"))
+        (completing-read prompt ppas nil nil))))
+
 (defun deb-packaging-infra-create-ppa ()
   "Create a Launchpad PPA via `ppa create'."
   (interactive)
@@ -788,9 +801,7 @@ first call and after the TTL expires."
   "Delete a Launchpad PPA via `ppa destroy'.
 Use PPA at point, or prompt."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let ((ppas (deb-packaging-infra--list-ppas)))
-               (completing-read "PPA to delete: " ppas nil nil)))))
+   (list (deb-packaging-infra--read-ppa "PPA to delete: ")))
   (when (and (not (string-empty-p name))
              (yes-or-no-p (format "Really delete PPA %s? " name)))
     (deb-packaging-infra--invalidate-ppa-cache)
@@ -803,9 +814,7 @@ Use PPA at point, or prompt."
   "Configure a Launchpad PPA via `ppa set'.
 Use PPA at point, or prompt.  Prompts for display name and description."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let ((ppas (deb-packaging-infra--list-ppas)))
-               (completing-read "PPA to configure: " ppas nil nil)))))
+   (list (deb-packaging-infra--read-ppa "PPA to configure: ")))
   (let ((displayname (read-string "Display name (blank to skip): "))
         (description (read-string "Description (blank to skip): ")))
     (let* ((args (append (list "ppa" "set" name)
@@ -825,9 +834,7 @@ Use PPA at point, or prompt.  Output goes to a read-only `special-mode'
 buffer; a compilation buffer would error-parse the text and send RET to
 bogus locations."
   (interactive
-   (list (or (tabulated-list-get-id)
-             (let ((ppas (deb-packaging-infra--list-ppas)))
-               (completing-read "PPA to show: " ppas nil nil)))))
+   (list (deb-packaging-infra--read-ppa "PPA to show: ")))
   (unless (string-empty-p name)
     (let ((buf (get-buffer-create (format "*deb-ppa: %s*" name))))
       (with-current-buffer buf

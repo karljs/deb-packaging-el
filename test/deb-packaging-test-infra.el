@@ -338,5 +338,33 @@ yes-or-no-p declines so nothing runs."
         (when (buffer-live-p temp-buf)
           (kill-buffer temp-buf))))))
 
+;;; PPA reading without network
+
+(ert-deftest deb-packaging-test-infra/read-ppa-uses-buffer-rows ()
+  "Inside the PPAs buffer, candidates come from the rows, not `ppa list'."
+  (let (seen-collection)
+    (with-temp-buffer
+      (deb-packaging-infra-ppas-mode)
+      (setq tabulated-list-entries
+            (list (deb-packaging-infra--make-ppa-entry "ppa:me/one")
+                  (deb-packaging-infra--make-ppa-entry "ppa:me/two")))
+      (cl-letf (((symbol-function 'deb-packaging-infra--list-ppas)
+                 (lambda () (error "must not call ppa list")))
+                ((symbol-function 'completing-read)
+                 (lambda (_p coll &rest _)
+                   (setq seen-collection coll) (car coll))))
+        (should (equal (deb-packaging-infra--read-ppa "PPA: ") "ppa:me/one"))
+        (should (equal seen-collection '("ppa:me/one" "ppa:me/two")))))))
+
+(ert-deftest deb-packaging-test-infra/read-ppa-empty-rows-errors ()
+  "No rows and no id at point is an upfront error, not a network call."
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (setq tabulated-list-entries nil)
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-ppas)
+               (lambda () (error "must not call ppa list"))))
+      (should-error (deb-packaging-infra--read-ppa "PPA: ")
+                    :type 'user-error))))
+
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here
