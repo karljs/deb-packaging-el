@@ -321,5 +321,14 @@
                           (deb-packaging-ppa-tests--buffer-name
                            "ppa:me/x" "a" "noble"))))
 
+(ert-deftest deb-packaging-test-ppa-tests/render-shows-fetched-at ()
+  "The report header shows when the data was fetched."
+  (let ((parsed (deb-packaging-ppa-tests--parse
+                 deb-packaging-test-ppa-tests--fixture)))
+    (with-temp-buffer
+      (deb-packaging-ppa-tests-mode)
+      (deb-packaging-ppa-tests--render parsed "ppa:me/x")
+      (should (string-match-p "Fetched:" (buffer-string))))))
+
 (provide 'deb-packaging-test-ppa-tests)
 ;;; deb-packaging-test-ppa-tests.el ends here

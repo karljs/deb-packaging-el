@@ -204,7 +204,9 @@ when `fboundp'."
 (defun deb-packaging-commands--after-compile (buf action)
   "Call ACTION (no args) when the compilation in BUF finishes successfully.
 One-shot `compilation-finish-functions' hook; skips ACTION on failure
-since the buffer already shows the error."
+since the buffer already shows the error.  With a reused *compilation*
+buffer, a second run kills the first and both hooks see the kill event:
+neither acts, so the affected row may need a manual refresh."
   (letrec ((hook (lambda (finished-buf msg)
                    (when (eq finished-buf buf)
                      (remove-hook 'compilation-finish-functions hook)

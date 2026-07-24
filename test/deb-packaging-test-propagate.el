@@ -511,5 +511,61 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
         (when (file-exists-p output)
           (delete-file output))))))
 
+;;; Apply-path normalization
+
+(ert-deftest deb-packaging-test-propagate/apply-normalizes-quilt-paths ()
+  "Quilt patches are normalized to a/ b/ prefixes for `git apply', as on export."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3"
+            :patches '(("fix.patch" . "--- src/f.c\n+++ src/f.c\n@@ -1 +1 @@\n-old\n+new\n")))
+    (let* ((item (list :type 'patch :name "fix.patch"
+                       :path (expand-file-name "debian/patches/fix.patch"
+                                               pkg-dir)))
+           (produced (deb-packaging-propagate--produce-patch-file item)))
+      (unwind-protect
+          (with-temp-buffer
+            (insert-file-contents produced)
+            (should (string-match-p "^--- a/src/f.c" (buffer-string)))
+            (should (string-match-p "^\\+\\+\\+ b/src/f.c" (buffer-string))))
+        (unless (equal produced (plist-get item :path))
+          (delete-file produced))))))
+
+;;; Stale pending patch
+
+(ert-deftest deb-packaging-test-propagate/apply-quit-clears-pending-patch ()
+  (cl-letf (((symbol-function 'magit-toplevel) (lambda () "/repo"))
+            ((symbol-function 'deb-packaging-propagate--read-fix-source-one)
+             (lambda (&rest _) (list :type 'patch :name "p")))
+            ((symbol-function 'deb-packaging-propagate--produce-patch-file)
+             (lambda (&rest _) "/tmp/x.patch"))
+            ((symbol-function 'call-interactively) (lambda (&rest _) nil))
+            ((symbol-function 'message) #'ignore)
+            (transient-post-exit-hook nil))
+    (with-temp-buffer
+      (deb-packaging-propagate-apply)
+      (should (equal deb-packaging-propagate--pending-patch "/tmp/x.patch"))
+      ;; Simulate the transient exiting without applying.
+      (run-hooks 'transient-post-exit-hook)
+      (should (null deb-packaging-propagate--pending-patch))
+      (should (null transient-post-exit-hook)))))
+
+;;; Header-line preservation
+
+(ert-deftest deb-packaging-test-propagate/clone-mode-restores-header-line ()
+  (with-temp-buffer
+    (setq header-line-format "preserved")
+    (deb-packaging-propagate-clone-mode 1)
+    (should (string-match-p "C-c a" (format "%s" header-line-format)))
+    (deb-packaging-propagate-clone-mode -1)
+    (should (equal header-line-format "preserved"))))
+
+(ert-deftest deb-packaging-test-propagate/do-apply-deletes-temp-patch ()
+  (let ((file (make-temp-file "propagate-test-" nil ".patch" "diff")))
+    (cl-letf (((symbol-function 'magit-run-git) (lambda (&rest _) t)))
+      (with-temp-buffer
+        (setq deb-packaging-propagate--pending-patch file)
+        (deb-packaging-propagate-do-apply '("--index"))
+        (should-not (file-exists-p file))))))
+
 (provide 'deb-packaging-test-propagate)
 ;;; deb-packaging-test-propagate.el ends here

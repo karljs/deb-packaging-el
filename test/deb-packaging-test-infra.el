@@ -37,7 +37,7 @@
                  (lambda (cmd &rest _) (push cmd compiled))))
         (deb-packaging-infra-delete-qemu "img")
         (should (equal (length compiled) 1))
-        (should (string-match-p "sudo rm /var/lib/img.qcow2" (car compiled)))))))
+        (should (string-match-p "sudo -n rm /var/lib/img.qcow2" (car compiled)))))))
 
 (ert-deftest deb-packaging-test-infra/delete-schroot-errors-when-sudo-not-cached ()
   (let (compiled)
@@ -65,29 +65,48 @@
                  (lambda (cmd &rest _) (push cmd compiled))))
         (deb-packaging-infra-delete-schroot "s")
         (should (equal (length compiled) 1))
-        (should (string-match-p "sudo rm -rf /srv/schroot/s" (car compiled)))))))
+        (should (string-match-p "sudo -n rm -rf /srv/schroot/s" (car compiled)))))))
 
 ;;; ppa show rendering
 
+(defun deb-packaging-test-infra--show-ppa-with-command (command)
+  "Run `deb-packaging-infra-show-ppa' with make-process swapping in COMMAND.
+Return the report buffer once its sentinel has fired."
+  (let ((real-make-process (symbol-function 'make-process))
+        (proc nil)
+        (displayed nil))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest props)
+                 (setq proc
+                       (apply real-make-process
+                              (plist-put props :command command)))))
+              ((symbol-function 'deb-packaging-display-buffer)
+               (lambda (buf _cat) (setq displayed buf))))
+      (deb-packaging-infra-show-ppa "ppa:foo/bar")
+      (deb-packaging-test-run--wait proc)
+      displayed)))
+
 (ert-deftest deb-packaging-test-infra/show-ppa-displays-special-buffer ()
-  (let (displayed)
-    (deb-packaging-test--with-mocked-process '(("ppa" . "owner: foo\ndesc"))
-      (cl-letf (((symbol-function 'deb-packaging-display-buffer)
-                 (lambda (buf cat) (setq displayed (cons buf cat)))))
-        (deb-packaging-infra-show-ppa "ppa:foo/bar")
-        (let ((buf (car displayed)))
-          (should (eq (cdr displayed) 'report))
+  (let ((buf (deb-packaging-test-infra--show-ppa-with-command
+              '("sh" "-c" "echo 'owner: foo'"))))
+    (unwind-protect
+        (progn
           (should (buffer-live-p buf))
           (with-current-buffer buf
             (should (derived-mode-p 'special-mode))
             (should (string-match-p "owner: foo" (buffer-string)))
-            (should buffer-read-only))
-          (kill-buffer buf))))))
+            (should buffer-read-only)
+            (should (eq deb-packaging-display-category 'report))))
+      (kill-buffer buf))))
 
-(ert-deftest deb-packaging-test-infra/show-ppa-failure-is-user-error ()
-  (deb-packaging-test--with-mocked-process '(("ppa" . (1 . "boom happened")))
-    (should-error (deb-packaging-infra-show-ppa "ppa:foo/bar")
-                  :type 'user-error)))
+(ert-deftest deb-packaging-test-infra/show-ppa-failure-shows-error ()
+  (let ((buf (deb-packaging-test-infra--show-ppa-with-command '("false"))))
+    (unwind-protect
+        (progn
+          (should (buffer-live-p buf))
+          (with-current-buffer buf
+            (should (string-match-p "failed" (buffer-string)))))
+      (kill-buffer buf))))
 
 ;;; Empty-list prompts
 
@@ -427,6 +446,35 @@ yes-or-no-p declines so nothing runs."
                 deb-packaging-infra-refresh-ppas))
     (with-temp-buffer
       (should-error (funcall fn) :type 'user-error))))
+
+(ert-deftest deb-packaging-test-infra/ppa-list-killed-process-kills-temp-buffer ()
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (let ((temp-buf (generate-new-buffer " *t*"))
+          (proc (make-process :name "s" :command '("sleep" "30") :noquery t)))
+      (delete-process proc)
+      (funcall (deb-packaging-infra--ppa-list-sentinel (current-buffer) temp-buf)
+               proc "deleted\n")
+      (should-not (buffer-live-p temp-buf)))))
+
+(ert-deftest deb-packaging-test-infra/ppa-list-failure-shows-honest-empty-state ()
+  "A failed first fetch must not masquerade as an empty list."
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (setq tabulated-list-entries nil)
+    (let ((temp-buf (generate-new-buffer " *t*"))
+          (proc (make-process :name "f" :command '("false") :noquery t)))
+      (unwind-protect
+          (progn
+            (deb-packaging-test-run--wait proc)
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (funcall (deb-packaging-infra--ppa-list-sentinel
+                        (current-buffer) temp-buf)
+                       proc "exited abnormally\n"))
+            (should (string-match-p "failed" (buffer-string)))
+            (should-not (string-match-p "No PPAs found" (buffer-string))))
+        (when (buffer-live-p temp-buf)
+          (kill-buffer temp-buf))))))
 
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here

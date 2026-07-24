@@ -69,6 +69,13 @@
     (should-error (deb-packaging-detect--find-package-dir "/ssh:host:/tmp/foo" t)
                   :type 'user-error)))
 
+(ert-deftest deb-packaging-test-detect/find-package-dir-host-only-never-probes-tramp ()
+  "The remote check must fire before locate-dominating-file can open a connection."
+  (cl-letf (((symbol-function 'locate-dominating-file)
+             (lambda (&rest _) (error "must not probe TRAMP"))))
+    (should-error (deb-packaging-detect--find-package-dir "/ssh:host:/tmp/foo" t)
+                  :type 'user-error)))
+
 ;;; Interactive package-dir prompt
 
 (ert-deftest deb-packaging-test-detect/read-package-dir-accepts-subdir ()
@@ -115,7 +122,10 @@
         (should (file-equal-p (deb-packaging-detect--read-package-dir)
                               pkg-dir))
         (should (null answers))
-        (should (cl-some (lambda (m) (string-match-p "host" m)) messages))))))
+        (should (cl-some (lambda (m) (string-match-p "host" m)) messages))
+        ;; The specific reason must not be clobbered by the generic one.
+        (should-not (cl-some (lambda (m) (string-match-p "debian/changelog" m))
+                             messages))))))
 
 ;;; Control field extraction
 

@@ -386,11 +386,20 @@ Return plist: :description, :author.  Description may be multi-line."
 
 (defun deb-packaging-propagate--produce-patch-file (item)
   "Produce a patch file path for ITEM suitable for `git apply'.
-Quilt patches return their path directly. Commits get format-patch
-output written to a temp file and their message pushed to the kill ring."
+Quilt patches are normalized to a/ b/ prefixes into a temp file (the
+same treatment export gives them); raw quilt paths fail under git
+apply -p1.  Commits get format-patch output written to a temp file and
+their message pushed to the kill ring."
   (pcase (plist-get item :type)
     ('patch
-     (plist-get item :path))
+     (let ((patch-file (make-temp-file "propagate-" nil ".patch")))
+       (write-region
+        (deb-packaging-propagate--normalize-diff-paths
+         (with-temp-buffer
+           (insert-file-contents (plist-get item :path))
+           (buffer-string)))
+        nil patch-file nil 'silent)
+       patch-file))
     ('commit
      (let* ((source-dir (plist-get item :source-dir))
             (ref (plist-get item :ref))
@@ -439,7 +448,12 @@ The patch file is pre-filled by `deb-packaging-propagate-apply'."
     (user-error "No pending patch"))
   (let ((file deb-packaging-propagate--pending-patch))
     (setq deb-packaging-propagate--pending-patch nil)
-    (magit-run-git "apply" args "--" file)))
+    ;; The pending patch is always a temp file produced for this apply;
+    ;; clean up regardless of outcome.
+    (unwind-protect
+        (magit-run-git "apply" args "--" file)
+      (when (file-exists-p file)
+        (delete-file file)))))
 
 ;;; Commands
 
@@ -602,6 +616,15 @@ commit (marking already-applied items), and opens the apply transient."
          (item (deb-packaging-propagate--read-fix-source-one clone-dir))
          (patch-file (deb-packaging-propagate--produce-patch-file item)))
     (setq deb-packaging-propagate--pending-patch patch-file)
+    ;; Clear the pending patch if the transient exits without applying;
+    ;; otherwise a stale pick could be applied by a later stray do-apply.
+    (letrec ((owner (current-buffer))
+             (cleanup (lambda ()
+                        (when (buffer-live-p owner)
+                          (with-current-buffer owner
+                            (setq deb-packaging-propagate--pending-patch nil)))
+                        (remove-hook 'transient-post-exit-hook cleanup))))
+      (add-hook 'transient-post-exit-hook cleanup))
     (call-interactively #'deb-packaging-propagate-apply-patch)
     (message "Patch ready: %s.  Toggle flags and press `a' to apply."
              (deb-packaging-propagate--item-description item))))
@@ -612,6 +635,9 @@ commit (marking already-applied items), and opens the apply transient."
   :doc "Keymap for `deb-packaging-propagate-clone-mode'."
   "C-c a" #'deb-packaging-propagate-apply)
 
+(defvar-local deb-packaging-propagate--saved-header-line nil
+  "Buffer's header-line-format before `deb-packaging-propagate-clone-mode'.")
+
 (define-minor-mode deb-packaging-propagate-clone-mode
   "Minor mode for Magit status buffers backed by a propagate clone.
 Binds `C-c a' to pick a fix item and open the apply transient.  `P'
@@ -620,10 +646,12 @@ last step of this workflow."
   :lighter deb-packaging-config-propagate-clone-mode-lighter
   :keymap deb-packaging-propagate-clone-mode-map
   (if deb-packaging-propagate-clone-mode
-      (setq header-line-format
-            (format "Press [%s] to apply a propagate fix item"
-                    (propertize "C-c a" 'face 'bold)))
-    (setq header-line-format nil)))
+      (progn
+        (setq deb-packaging-propagate--saved-header-line header-line-format)
+        (setq header-line-format
+              (format "Press [%s] to apply a propagate fix item"
+                      (propertize "C-c a" 'face 'bold))))
+    (setq header-line-format deb-packaging-propagate--saved-header-line)))
 
 ;;; Transient
 

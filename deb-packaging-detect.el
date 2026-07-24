@@ -20,15 +20,16 @@
 
 (defun deb-packaging-detect--find-package-dir (&optional start-dir host-only)
   "Find directory containing debian/changelog, walking up from START-DIR.
-With HOST-ONLY, error on TRAMP paths so host commands stay off containers."
-  (let ((dir (locate-dominating-file (or start-dir default-directory)
-                                     "debian/changelog")))
-    (when dir
-      (let ((expanded (expand-file-name dir)))
-        (when (and host-only (file-remote-p expanded))
-          (user-error
-           "This command runs on the host, but the current file is inside a dev container.  Run it from the status buffer (M-x deb-packaging-status) or a host file."))
-        expanded))))
+With HOST-ONLY, error on TRAMP paths so host commands stay off containers.
+The remote check comes first: `locate-dominating-file' on a TRAMP path
+can open a connection before it ever fails."
+  (let ((start (or start-dir default-directory)))
+    (when (and host-only (file-remote-p start))
+      (user-error
+       "This command runs on the host, but the current file is inside a dev container.  Run it from the status buffer (M-x deb-packaging-status) or a host file."))
+    (let ((dir (locate-dominating-file start "debian/changelog")))
+      (when dir
+        (expand-file-name dir)))))
 
 (defun deb-packaging-detect--read-package-dir (&optional prompt)
   "Prompt for a package directory, re-prompting until one qualifies.
@@ -40,13 +41,18 @@ Remote picks are rejected with the host-only message from
   (let ((prompt (or prompt "Package directory: "))
         (pkg-dir nil))
     (while (not pkg-dir)
-      (let ((dir (read-directory-name prompt nil nil t)))
-        (setq pkg-dir
-              (condition-case err
-                  (deb-packaging-detect--find-package-dir dir t)
-                (user-error (message "%s" (cadr err)) nil)))
-        (unless pkg-dir
-          (message "No debian/changelog in %s or any parent directory" dir))))
+      (let* ((dir (read-directory-name prompt nil nil t))
+             (rejection nil)
+             (found (condition-case err
+                        (deb-packaging-detect--find-package-dir dir t)
+                      (user-error (setq rejection (cadr err)) nil))))
+        (if found
+            (setq pkg-dir found)
+          ;; Show the specific rejection (e.g. host-only) when there is
+          ;; one; the generic line would only clobber it.
+          (message "%s" (or rejection
+                            (format "No debian/changelog in %s or any parent directory"
+                                    dir))))))
     pkg-dir))
 
 ;;; Shared helpers

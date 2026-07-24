@@ -279,7 +279,7 @@ Use schroot at point, or prompt."
                          config-file directory)))
         (when (yes-or-no-p msg)
           (deb-packaging-infra--ensure-sudo-timestamp)
-          (let ((cmd (format "sudo rm -rf %s && sudo rm %s"
+          (let ((cmd (format "sudo -n rm -rf %s && sudo -n rm %s"
                              (shell-quote-argument directory)
                              (shell-quote-argument config-file))))
             (deb-packaging-infra--compile-then-refresh
@@ -645,7 +645,7 @@ Use image at point, or prompt."
     (when (yes-or-no-p (format "Delete %s?" path))
       (deb-packaging-infra--ensure-sudo-timestamp)
       (deb-packaging-infra--compile-then-refresh
-       (format "sudo rm %s" (shell-quote-argument path))
+       (format "sudo -n rm %s" (shell-quote-argument path))
        'deb-packaging-infra-qemu-images-mode
        #'deb-packaging-infra-refresh-qemu-images))))
 
@@ -838,28 +838,51 @@ Use PPA at point, or prompt.  Prompts for display name and description."
 
 (defun deb-packaging-infra-show-ppa (&optional name)
   "Show Launchpad PPA info via `ppa show'.
-Use PPA at point, or prompt.  Output goes to a read-only `special-mode'
-buffer; a compilation buffer would error-parse the text and send RET to
-bogus locations."
+Use PPA at point, or prompt.  Runs asynchronously (a synchronous call
+would freeze Emacs on the Launchpad round trip) and fills a read-only
+`special-mode' buffer when done; a compilation buffer would error-parse
+the text and send RET to bogus locations."
   (interactive
    (list (deb-packaging-infra--read-ppa "PPA to show: ")))
   (when (string-empty-p name)
     (user-error "No PPA name given"))
-  (let ((buf (get-buffer-create (format "*deb-ppa: %s*" name))))
+  (let ((buf (get-buffer-create (format "*deb-ppa: %s*" name)))
+        (out-buf (generate-new-buffer " *deb-ppa-show*")))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (let ((code (call-process "ppa" nil buf nil "show" name)))
-          (unless (zerop code)
-            (let ((out (string-trim (buffer-string))))
-              (kill-buffer buf)
-              (user-error "ppa show %s failed%s" name
-                          (if (string-empty-p out)
-                              ""
-                            (concat ": " out)))))
-          (goto-char (point-min))
-          (special-mode)
-          (setq deb-packaging-display-category 'report))))
+        (insert (propertize (format "Fetching ppa show %s...\n" name)
+                            'font-lock-face 'shadow))))
+    (make-process
+     :name "deb-ppa-show"
+     :buffer out-buf
+     :command (list "ppa" "show" name)
+     :noquery t
+     :sentinel
+     (lambda (proc _event)
+       (when (memq (process-status proc) '(exit signal))
+         (unwind-protect
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (let ((inhibit-read-only t))
+                   (erase-buffer)
+                   (if (and (eq (process-status proc) 'exit)
+                            (zerop (process-exit-status proc)))
+                       (insert-buffer-substring out-buf)
+                     (insert (propertize
+                              (format "ppa show %s failed (exit %s)\n\n"
+                                      name
+                                      (if (eq (process-status proc) 'exit)
+                                          (process-exit-status proc)
+                                        "killed"))
+                              'font-lock-face 'error))
+                     (insert-buffer-substring out-buf))
+                   (goto-char (point-min))
+                   (special-mode)
+                   (setq deb-packaging-display-category 'report)
+                   (deb-packaging-display-buffer buf 'report))))
+           (when (buffer-live-p out-buf)
+             (kill-buffer out-buf))))))
     (deb-packaging-display-buffer buf 'report)))
 
 ;;; PPA list buffer
@@ -895,6 +918,9 @@ bogus locations."
 (defvar-local deb-packaging-infra--ppa-processes nil
   "In-flight async `ppa list' processes for the PPAs buffer.")
 
+(defvar-local deb-packaging-infra--ppa-fetch-failed nil
+  "Non-nil when the last `ppa list' fetch exited non-zero.")
+
 (defun deb-packaging-infra--cancel-ppa-processes ()
   "Cancel in-flight async PPA listing processes."
   (dolist (proc deb-packaging-infra--ppa-processes)
@@ -921,16 +947,20 @@ bogus locations."
                  (null tabulated-list-entries))
         (let ((inhibit-read-only t))
           (goto-char (point-max))
-          (insert (propertize "\nNo PPAs found.\nCreate one with 'c'."
-                              'face 'shadow)))))))
+          (insert (propertize
+                   (if deb-packaging-infra--ppa-fetch-failed
+                       "\nppa list failed; press g to retry."
+                     "\nNo PPAs found.\nCreate one with 'c'.")
+                   'face 'shadow)))))))
 
 (defun deb-packaging-infra--ppa-list-sentinel (buf temp-buf)
   "Return a sentinel for an async `ppa list' process.
 BUF is the PPAs list buffer; TEMP-BUF holds output.  A non-zero exit
-reports the failure instead of masquerading as an empty list."
+reports the failure instead of masquerading as an empty list.  Killed
+processes (refresh cancels them) only clean up."
   (lambda (proc _event)
     (let ((status (process-status proc)))
-      (when (memq status '(exit failed))
+      (when (memq status '(exit failed signal))
         (unwind-protect
             (when (buffer-live-p buf)
               (with-current-buffer buf
@@ -941,7 +971,9 @@ reports the failure instead of masquerading as an empty list."
                       (let ((output (with-current-buffer temp-buf
                                       (buffer-string))))
                         (dolist (ppa (deb-packaging-infra--parse-ppa-lines output))
-                          (deb-packaging-infra--append-ppa ppa)))
+                          (deb-packaging-infra--append-ppa ppa))
+                        (setq deb-packaging-infra--ppa-fetch-failed nil))
+                    (setq deb-packaging-infra--ppa-fetch-failed t)
                     (message "ppa list failed (exit %d); keeping previous list"
                              (process-exit-status proc))))
                 (deb-packaging-infra--finalize-ppas buf)))

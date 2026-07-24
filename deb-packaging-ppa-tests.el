@@ -283,6 +283,8 @@ so keying only on the PPA would clobber reports across packages."
     (erase-buffer)
     (magit-insert-section (deb-packaging-ppa-tests-root)
       (magit-insert-heading (format "PPA tests: %s" ppa))
+      (deb-packaging-ppa-tests--insert-note
+       (format "Fetched: %s" (format-time-string "%b %e %H:%M:%S")))
       (deb-packaging-ppa-tests--insert-results (plist-get parsed :results))
       (deb-packaging-ppa-tests--insert-triggers (plist-get parsed :triggers))
       (deb-packaging-ppa-tests--insert-queue
