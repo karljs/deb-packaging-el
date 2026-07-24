@@ -114,7 +114,8 @@ Fooled by rewording; only used for indicators."
 
 (defun deb-packaging-propagate--patch-choices (&optional clone-dir)
   "Return an alist of (display-string . item-plist) for quilt patches.
-CLONE-DIR, if non-nil, annotates already-applied patches."
+Names stay clean so candidates match what the user types; CLONE-DIR, if
+non-nil, flags already-applied patches with :applied for annotation."
   (when-let ((patches (deb-packaging-detect--list-patches)))
     (mapcar
      (lambda (p)
@@ -123,9 +124,22 @@ CLONE-DIR, if non-nil, annotates already-applied patches."
               (applied (and clone-dir
                              (deb-packaging-propagate--patch-applied-p
                               path clone-dir))))
-         (cons (if applied (format "✓ %s" name) name)
-               (list :type 'patch :name name :path path))))
+         (cons name
+               (list :type 'patch :name name :path path :applied applied))))
      patches)))
+
+(defun deb-packaging-propagate--annotated-table (choices)
+  "Return a completion table over CHOICES annotating :applied items.
+CHOICES is an alist of (string . item-plist).  The check goes in an
+annotation, not the candidate, so applied items stay typeable."
+  (lambda (string pred action)
+    (if (eq action 'metadata)
+        (list 'metadata
+              (cons 'annotation-function
+                    (lambda (candidate)
+                      (when (plist-get (cdr (assoc candidate choices)) :applied)
+                        " ✓ applied"))))
+      (complete-with-action action choices string pred))))
 
 (defun deb-packaging-propagate--read-patches-multi (&optional clone-dir)
   "Prompt for one or more quilt patches.  Returns a list of item plists."
@@ -134,7 +148,8 @@ CLONE-DIR, if non-nil, annotates already-applied patches."
       (user-error "No patches found in debian/patches/series"))
     (let* ((selection (completing-read-multiple
                        "Patches (comma-separated): "
-                       (mapcar #'car choices) nil t))
+                       (deb-packaging-propagate--annotated-table choices)
+                       nil t))
            (items (delq nil
                         (mapcar (lambda (s)
                                   (when-let ((entry (assoc (string-trim s) choices)))
@@ -149,15 +164,23 @@ CLONE-DIR, if non-nil, annotates already-applied patches."
     (unless choices
       (user-error "No patches found in debian/patches/series"))
     (let* ((selection (completing-read "Patch: "
-                                       (mapcar #'car choices) nil t))
+                                       (deb-packaging-propagate--annotated-table
+                                        choices)
+                                       nil t))
            (entry (assoc selection choices)))
       (unless entry
         (user-error "No patch selected"))
       (cdr entry))))
 
+(defun deb-packaging-propagate--git-ok-p (dir &rest args)
+  "Return non-nil if git with ARGS exits 0 in DIR."
+  (zerop (apply #'call-process "git" nil nil nil
+                (append (when dir (list "-C" dir)) args))))
+
 (defun deb-packaging-propagate--read-commit-one (source-dir &optional clone-dir)
   "Prompt for a single git commit from SOURCE-DIR.
-CLONE-DIR, if non-nil, annotates already-applied commits."
+Candidates are the last 20 commits, annotated when already applied to
+CLONE-DIR.  Any other ref may be typed; it is validated with rev-parse."
   (let* ((log-output (deb-packaging-propagate--git-quiet
                       source-dir "log" "--oneline" "-20"))
          (lines (split-string log-output "\n" t))
@@ -171,26 +194,50 @@ CLONE-DIR, if non-nil, annotates already-applied commits."
                             (applied (and clone-dir
                                           (deb-packaging-propagate--commit-applied-p
                                            subject clone-dir))))
-                       (cons (if applied (format "✓ %s" line) line)
+                       (cons line
                              (list :type 'commit
                                    :ref ref
                                    :subject subject
-                                   :source-dir source-dir)))))
+                                   :source-dir source-dir
+                                   :applied applied)))))
                  lines))))
     (unless choices
       (user-error "No commits found in %s" source-dir))
     (let* ((selection (completing-read "Commit: "
-                                       (mapcar #'car choices) nil t))
+                                       (deb-packaging-propagate--annotated-table
+                                        choices)
+                                       nil nil))
            (entry (assoc selection choices)))
-      (unless entry
-        (user-error "No commit selected"))
-      (cdr entry))))
+      (if entry
+          (cdr entry)
+        ;; Not one of the recent candidates: resolve any ref.
+        (unless (deb-packaging-propagate--git-ok-p
+                 source-dir "rev-parse" "--verify"
+                 (concat selection "^{commit}"))
+          (user-error "Not a commit: %s" selection))
+        (list :type 'commit
+              :ref (deb-packaging-propagate--git-quiet
+                    source-dir "rev-parse" "--verify"
+                    (concat selection "^{commit}"))
+              :subject (deb-packaging-propagate--git-quiet
+                        source-dir "log" "-1" "--format=%s" selection)
+              :source-dir source-dir)))))
 
 (defun deb-packaging-propagate--read-range (source-dir)
-  "Prompt for a git refspec range from SOURCE-DIR."
-  (let ((range (read-string "Range (e.g. HEAD~3..HEAD): ")))
+  "Prompt for a git refspec range from SOURCE-DIR.
+Offers HEAD and local refs as candidates; the range is validated with
+rev-list before returning."
+  (let* ((refs (split-string
+                (deb-packaging-propagate--git-quiet
+                 source-dir "for-each-ref" "--format=%(refname:short)")
+                "\n" t))
+         (range (completing-read "Range (e.g. HEAD~3..HEAD): "
+                                 (cons "HEAD" refs) nil nil)))
     (when (string-empty-p range)
       (user-error "No range specified"))
+    (unless (deb-packaging-propagate--git-ok-p
+             source-dir "rev-list" "--max-count=1" range)
+      (user-error "Not a valid range: %s" range))
     (list :type 'range
           :range range
           :source-dir source-dir)))
@@ -457,7 +504,8 @@ apply items."
     (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
            (pkg-name (deb-packaging-detect--package-name pkg-dir))
            (detected-url (or (deb-packaging-detect--vcs-git pkg-dir) ""))
-           (vcs-url (read-string "Clone URL: " detected-url))
+           (vcs-url (read-string (format "Clone URL (default %s): " detected-url)
+                                 nil nil detected-url))
            (clone-dir (deb-packaging-propagate--clone-dir pkg-name)))
       (when (string-empty-p vcs-url)
         (user-error "No clone URL provided"))
@@ -493,11 +541,13 @@ apply items."
              (default-br (or (deb-packaging-propagate--default-branch clone-dir)
                              "main"))
              (base (if branches
-                       (magit-completing-read "Base branch: " branches nil t default-br)
+                       (magit-completing-read "Base branch: " branches nil t
+                                              nil nil default-br)
                      default-br))
-             (branch (read-string "Branch name: "
-                                  (format "wip/propagate-%s"
-                                          (or pkg-name "fix")))))
+             (branch-default (format "wip/propagate-%s" (or pkg-name "fix")))
+             (branch (read-string (format "Branch name (default %s): "
+                                          branch-default)
+                                  nil nil branch-default)))
         (let ((default-directory clone-dir))
           (magit-call-git "checkout" base))
         ;; Recreate work branch fresh, but never silently: it may hold

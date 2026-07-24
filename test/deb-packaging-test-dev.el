@@ -174,5 +174,28 @@ the langs or tools layer had packages to install."
           (should (eq displayed dired-buf)))
       (kill-buffer dired-buf))))
 
+;;; Language selection persistence
+
+(ert-deftest deb-packaging-test-dev/select-profiles-none-persists ()
+  "Choosing no languages writes the sentinel so the prompt stops recurring."
+  (let ((tmp (make-temp-file "deb-dev-test-" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'deb-packaging-detect--cache-dir)
+                   (lambda () tmp))
+                  ((symbol-function 'completing-read-multiple)
+                   (lambda (&rest _) nil)))
+          (deb-packaging-dev--select-profiles "foo" "noble")
+          (should (equal (deb-packaging-dev--read-langs-cache "foo" "noble")
+                         (list deb-packaging-dev--no-langs-key))))
+      (delete-directory tmp t))))
+
+(ert-deftest deb-packaging-test-dev/need-langs-prompt-decisions ()
+  (let ((fp (deb-packaging-dev--langs-fingerprint nil)))
+    (should (deb-packaging-dev--need-langs-prompt-p nil fp "other"))
+    (should-not (deb-packaging-dev--need-langs-prompt-p nil fp fp))
+    (should-not (deb-packaging-dev--need-langs-prompt-p nil fp ""))
+    (should (deb-packaging-dev--need-langs-prompt-p nil nil ""))
+    (should (deb-packaging-dev--need-langs-prompt-p t fp fp))))
+
 (provide 'deb-packaging-test-dev)
 ;;; deb-packaging-test-dev.el ends here

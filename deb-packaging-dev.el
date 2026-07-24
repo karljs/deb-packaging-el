@@ -132,6 +132,11 @@ Best-effort install.")
               (insert (format "%s\n" key))))))
     (error nil)))
 
+(defconst deb-packaging-dev--no-langs-key '--none--
+  "Cache key meaning the user explicitly chose no language servers.
+Without it an empty selection reads back as \"no cache\" and the prompt
+recurs on every dev-shell.")
+
 (defun deb-packaging-dev--select-profiles (pkg distro)
   "Prompt for language profiles. Pre-selects from cache. Writes back."
   (let* ((cached-keys (deb-packaging-dev--read-langs-cache pkg distro))
@@ -140,9 +145,9 @@ Best-effort install.")
                     (mapconcat #'identity
                                (delq nil
                                      (mapcar (lambda (key)
-                                                (let ((entry (deb-packaging-dev--profile-lookup key)))
-                                                  (when entry (cadr entry))))
-                                              cached-keys))
+                                                 (let ((entry (deb-packaging-dev--profile-lookup key)))
+                                                   (when entry (cadr entry))))
+                                               cached-keys))
                                ",")))
          (chosen (completing-read-multiple
                   "Language servers (comma-separated, empty for none): "
@@ -154,7 +159,8 @@ Best-effort install.")
                        (cl-remove-if #'string-empty-p
                                      (mapcar #'string-trim chosen))))
          (entries (delq nil (mapcar #'deb-packaging-dev--profile-lookup keys))))
-    (deb-packaging-dev--write-langs-cache pkg distro keys)
+    (deb-packaging-dev--write-langs-cache
+     pkg distro (or keys (list deb-packaging-dev--no-langs-key)))
     entries))
 
 (defun deb-packaging-dev--control-fingerprint (pkg-dir)
@@ -171,6 +177,16 @@ Best-effort install.")
 (defun deb-packaging-dev--langs-fingerprint (profiles)
   "SHA256 of PROFILES."
   (secure-hash 'sha256 (format "%S" profiles)))
+
+(defun deb-packaging-dev--need-langs-prompt-p (force cached-fp marker-val)
+  "Return non-nil when the language prompt should run.
+FORCE (re-provision) and a missing cache always prompt.  A readable
+MARKER-VAL differing from CACHED-FP prompts (out-of-band change); an
+unreadable marker (stopped container) trusts the cache."
+  (or force
+      (null cached-fp)
+      (and (not (string-empty-p marker-val))
+           (not (string= marker-val cached-fp)))))
 
 (defun deb-packaging-dev--tools-fingerprint ()
   "SHA256 of `deb-packaging-dev-extra-packages'."
@@ -517,16 +533,15 @@ C-u forces re-provision of all layers."
            (cached-profiles (delq nil
                                   (mapcar #'deb-packaging-dev--profile-lookup
                                           cached-keys)))
-           (cached-fp (when cached-profiles
+           (cached-fp (when cached-keys
                         (deb-packaging-dev--langs-fingerprint cached-profiles)))
            (marker-val (when (deb-packaging-dev--container-exists-p name)
                          (or (deb-packaging-detect--call-process-string
                               "lxc" "exec" name "--" "cat"
                               "/root/.deb-dev-marker-langs")
                              "")))
-           (need-prompt (or force
-                            (null cached-fp)
-                            (not (string= marker-val cached-fp)))))
+           (need-prompt (deb-packaging-dev--need-langs-prompt-p
+                         force cached-fp marker-val)))
       (if need-prompt
           (setq profiles (deb-packaging-dev--select-profiles pkg distro)
                 langs-fp (deb-packaging-dev--langs-fingerprint profiles))

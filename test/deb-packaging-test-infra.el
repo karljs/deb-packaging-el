@@ -175,5 +175,49 @@
   (should (eq (lookup-key deb-packaging-infra-schroots-mode-map "?")
               #'deb-packaging-infra-dispatch)))
 
+;;; Real defaults in create prompts
+
+(defun deb-packaging-test-infra--capture-prompts (fn)
+  "Call FN with prompt functions mocked; return (read-string-args cr-args).
+yes-or-no-p declines so nothing runs."
+  (let (rs-args cr-args)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest args) (setq rs-args args) (nth 3 args)))
+              ((symbol-function 'completing-read)
+               (lambda (&rest args) (setq cr-args args) (nth 6 args)))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+      (funcall fn)
+      (list rs-args cr-args))))
+
+(ert-deftest deb-packaging-test-infra/create-schroot-passes-real-defaults ()
+  (let* ((res (deb-packaging-test-infra--capture-prompts
+               #'deb-packaging-infra-create-schroot))
+         (rs (car res))
+         (cr (cadr res)))
+    (should (null (nth 1 rs)))
+    (should (equal (nth 3 rs) deb-packaging-config-target-distro))
+    (should (null (nth 4 cr)))
+    (should (equal (nth 6 cr) "amd64"))))
+
+(ert-deftest deb-packaging-test-infra/create-lxd-passes-real-defaults ()
+  (let* ((res (deb-packaging-test-infra--capture-prompts
+               #'deb-packaging-infra-create-lxd))
+         (rs (car res))
+         (cr (cadr res)))
+    (should (null (nth 1 rs)))
+    (should (equal (nth 3 rs) deb-packaging-config-target-distro))
+    (should (null (nth 4 cr)))
+    (should (equal (nth 6 cr) "amd64"))))
+
+(ert-deftest deb-packaging-test-infra/create-qemu-passes-real-defaults ()
+  (let* ((res (deb-packaging-test-infra--capture-prompts
+               #'deb-packaging-infra-create-qemu))
+         (rs (car res))
+         (cr (cadr res)))
+    (should (null (nth 1 rs)))
+    (should (equal (nth 3 rs) deb-packaging-config-target-distro))
+    (should (null (nth 4 cr)))
+    (should (equal (nth 6 cr) "amd64"))))
+
 (provide 'deb-packaging-test-infra)
 ;;; deb-packaging-test-infra.el ends here

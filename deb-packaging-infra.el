@@ -162,8 +162,13 @@ The parent is the longest chroot name that is a prefix of SESSION."
 (defun deb-packaging-infra-create-schroot ()
   "Create a schroot with mk-sbuild."
   (interactive)
-  (let* ((distro (read-string "Distro: " deb-packaging-config-target-distro))
-         (arch (completing-read "Arch: " '("amd64" "i386" "arm64" "armhf") nil t "amd64"))
+  (let* ((distro (read-string
+                  (format "Distro (default %s): "
+                          deb-packaging-config-target-distro)
+                  nil nil deb-packaging-config-target-distro))
+         (arch (completing-read "Arch (default amd64): "
+                                '("amd64" "i386" "arm64" "armhf")
+                                nil t nil nil "amd64"))
          (cmd (format "mk-sbuild --arch=%s %s" arch distro)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
       (deb-packaging-commands--compile cmd))))
@@ -392,8 +397,12 @@ Each plist has :name, :type, :status, and type-specific keys."
 (defun deb-packaging-infra-create-lxd ()
   "Create an autopkgtest LXD image."
   (interactive)
-  (let* ((distro (read-string "Distro: " deb-packaging-config-target-distro))
-         (arch (completing-read "Arch: " '("amd64" "arm64") nil t "amd64"))
+  (let* ((distro (read-string
+                  (format "Distro (default %s): "
+                          deb-packaging-config-target-distro)
+                  nil nil deb-packaging-config-target-distro))
+         (arch (completing-read "Arch (default amd64): "
+                                '("amd64" "arm64") nil t nil nil "amd64"))
          (cmd (format "autopkgtest-build-lxd ubuntu-daily:%s/%s" distro arch)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
       (deb-packaging-commands--compile cmd))))
@@ -583,8 +592,12 @@ Each plist has keys: :name, :path, :size."
 (defun deb-packaging-infra-create-qemu ()
   "Create a QEMU image for autopkgtest."
   (interactive)
-  (let* ((distro (read-string "Distro: " deb-packaging-config-target-distro))
-         (arch (completing-read "Arch: " '("amd64" "arm64" "i386") nil t "amd64"))
+  (let* ((distro (read-string
+                  (format "Distro (default %s): "
+                          deb-packaging-config-target-distro)
+                  nil nil deb-packaging-config-target-distro))
+         (arch (completing-read "Arch (default amd64): "
+                                '("amd64" "arm64" "i386") nil t nil nil "amd64"))
          (cmd (format "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s"
                       distro arch deb-packaging-infra-qemu-dir)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
