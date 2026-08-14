@@ -97,11 +97,14 @@ lint-transient pattern)."
 
 (defun deb-packaging-transients--binary-default-value ()
   "Dynamic default for the binary-build transient, seeding distro from changelog.
-Also restores the saved extra-repository set for the current package and distro."
+Also restores the saved extra-repository set for the current package and
+distro; with no saved set, defaults to the distro's -proposed pocket."
   (let* ((distro (deb-packaging-config--effective-distro))
          (pkg-name (deb-packaging-detect--package-name))
-         (repos (when pkg-name
-                  (deb-packaging-repos-load pkg-name distro))))
+         (repos (if pkg-name
+                    (deb-packaging-repos-load pkg-name distro)
+                  'unset))
+         (repos (if (eq repos 'unset) (list "proposed") repos)))
     (append (list (format "--dist=%s" distro) "-A")
             (mapcar (lambda (r) (concat "--extra-repository=" r))
                     repos))))

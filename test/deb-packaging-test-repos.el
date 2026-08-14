@@ -36,16 +36,16 @@
     (deb-packaging-repos-save "mypkg" "noble" nil)
     (should (null (deb-packaging-repos-load "mypkg" "noble")))))
 
-(ert-deftest deb-packaging-test-repos/missing-file-returns-nil ()
-  "Loading when no file exists returns nil, not an error."
+(ert-deftest deb-packaging-test-repos/missing-file-returns-unset ()
+  "Loading when no file exists returns `unset', distinct from an empty set."
   (deb-packaging-test-repos--with-cache
-    (should (null (deb-packaging-repos-load "nonsuch" "noble")))))
+    (should (eq (deb-packaging-repos-load "nonsuch" "noble") 'unset))))
 
 (ert-deftest deb-packaging-test-repos/per-distro-isolation ()
   "Saving for noble does not affect jammy."
   (deb-packaging-test-repos--with-cache
     (deb-packaging-repos-save "mypkg" "noble" '("ppa:me/x"))
-    (should (null (deb-packaging-repos-load "mypkg" "jammy")))
+    (should (eq (deb-packaging-repos-load "mypkg" "jammy") 'unset))
     (should (equal (deb-packaging-repos-load "mypkg" "noble") '("ppa:me/x")))))
 
 (provide 'deb-packaging-test-repos)

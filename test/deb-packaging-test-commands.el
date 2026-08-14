@@ -369,7 +369,7 @@ and re-emit without doubling the argument."
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/binary-default-value-no-saved-repos ()
-  "With no saved repos, the default value has no --extra-repository= entries."
+  "With no saved repos, the default value enables the -proposed pocket."
   (deb-packaging-test--with-package-tree
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-repos-test-" t))
@@ -380,9 +380,30 @@ and re-emit without doubling the argument."
       (unwind-protect
           (let ((default (deb-packaging-transients--binary-default-value)))
             (should (member "--dist=noble" default))
-            (should-not (cl-some (lambda (a)
-                                   (string-prefix-p "--extra-repository=" a))
-                                 default)))
+            (should (equal (cl-remove-if-not
+                            (lambda (a)
+                              (string-prefix-p "--extra-repository=" a))
+                            default)
+                           '("--extra-repository=proposed"))))
+        (delete-directory tmp t)))))
+
+(ert-deftest deb-packaging-test-commands/binary-default-value-cleared-repos-stick ()
+  "A saved empty set stays empty: opting out of -proposed persists."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-repos-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (deb-packaging-config-target-distro "noble")
+           (deb-packaging-config--distro-user-set t))
+      (unwind-protect
+          (progn
+            (deb-packaging-repos-save "mypkg" "noble" nil)
+            (let ((default (deb-packaging-transients--binary-default-value)))
+              (should (member "--dist=noble" default))
+              (should-not (cl-some (lambda (a)
+                                     (string-prefix-p "--extra-repository=" a))
+                                   default))))
         (delete-directory tmp t)))))
 
 ;;; deb-packaging-commands--ppa-repo-line
