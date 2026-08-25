@@ -76,10 +76,14 @@ Remote picks are rejected with the host-only message from
   (cadr (deb-packaging-detect--package-info pkg-dir)))
 
 (defun deb-packaging-detect--call-process-string (program &rest args)
-  "Run PROGRAM with ARGS, returning trimmed stdout, or nil if empty."
+  "Run PROGRAM with ARGS, returning trimmed stdout, or nil if empty.
+Also nil when PROGRAM is not installed: a missing binary must not
+crash callers like the status render, which probes dpkg, schroot, lxc."
   (let ((output (with-output-to-string
                   (with-current-buffer standard-output
-                    (apply #'call-process program nil t nil args)))))
+                    (condition-case nil
+                        (apply #'call-process program nil t nil args)
+                      (file-missing nil))))))
     (unless (string-empty-p output)
       (string-trim output))))
 

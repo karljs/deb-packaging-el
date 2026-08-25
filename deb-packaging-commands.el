@@ -474,8 +474,10 @@ Shown when a test image is missing.")
   (mapcar #'car deb-packaging-commands-test-runners))
 
 (defun deb-packaging-commands--lxd-image-exists-p (image)
-  "Return non-nil if LXD IMAGE exists locally."
-  (zerop (call-process "lxc" nil nil nil "image" "info" image)))
+  "Return non-nil if LXD IMAGE exists locally.
+Nil when lxc is not installed (the image is then not available either)."
+  (ignore-errors
+    (zerop (call-process "lxc" nil nil nil "image" "info" image))))
 
 (defun deb-packaging-commands--test-image-info (&optional runner distro)
   "Return a plist describing the test image for RUNNER and DISTRO.

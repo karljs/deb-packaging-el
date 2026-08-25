@@ -466,5 +466,34 @@
         (should (null (deb-packaging-detect--scan-context tmp)))
       (delete-directory tmp t))))
 
+;;; Missing binaries
+
+(defmacro deb-packaging-test-detect--with-missing-binaries (&rest body)
+  "Run BODY with every `call-process' signaling `file-missing'.
+Simulates the probed tools (dpkg, schroot, lxc) being absent."
+  (declare (indent 0) (debug (body)))
+  `(cl-letf (((symbol-function 'call-process)
+              (lambda (&rest _)
+                (signal 'file-missing "No such file or directory"))))
+     ,@body))
+
+(ert-deftest deb-packaging-test-detect/call-process-string-nil-when-binary-missing ()
+  (deb-packaging-test-detect--with-missing-binaries
+    (should (null (deb-packaging-detect--call-process-string "dpkg"
+                                                             "--print-architecture")))))
+
+(ert-deftest deb-packaging-test-detect/scan-context-arch-nil-when-dpkg-missing ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble")
+    (deb-packaging-test-detect--with-missing-binaries
+      (let ((ctx (deb-packaging-detect--scan-context pkg-dir)))
+        (should ctx)
+        (should (string= (plist-get ctx :name) "foo"))
+        (should (null (plist-get ctx :arch)))))))
+
+(ert-deftest deb-packaging-test-detect/schroot-exists-p-nil-when-schroot-missing ()
+  (deb-packaging-test-detect--with-missing-binaries
+    (should (null (deb-packaging-detect--schroot-exists-p "noble" "amd64")))))
+
 (provide 'deb-packaging-test-detect)
 ;;; deb-packaging-test-detect.el ends here

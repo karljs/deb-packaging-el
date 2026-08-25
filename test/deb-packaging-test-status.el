@@ -5,8 +5,9 @@
 ;;; Commentary:
 
 ;; ERT tests for the status-buffer phase state machine and fold decisions
-;; in deb-packaging-status.el.  Rendering itself is not tested; only the
-;; pure state/decision logic.
+;; in deb-packaging-status.el. Rendering is tested only for regressions
+;; (e.g. missing tools must not crash the render); the state/decision
+;; logic is the main coverage.
 
 ;;; Code:
 
@@ -355,6 +356,28 @@
                    (lambda (buf _category) (setq displayed buf))))
           (deb-packaging-status))
         (should (string= (buffer-name displayed) "*deb-packaging: foo*"))
+        (kill-buffer displayed)))))
+
+(ert-deftest deb-packaging-test-status/render-with-missing-tools ()
+  "The render must not crash when dpkg/schroot/lxc are all absent."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((displayed nil))
+      (cl-letf (((symbol-function 'call-process)
+                 (lambda (&rest _)
+                   (signal 'file-missing "No such file or directory")))
+                ((symbol-function 'read-directory-name)
+                 (lambda (&rest _) (error "must not prompt")))
+                ((symbol-function 'deb-packaging-display-buffer)
+                 (lambda (buf _category) (setq displayed buf))))
+        (deb-packaging-status))
+      (unwind-protect
+          (with-current-buffer displayed
+            (goto-char (point-min))
+            (should (search-forward "Source build" nil t))
+            ;; Arch row absent (nil arch), not a crash.
+            (should (string= (plist-get deb-packaging-status--context :name)
+                             "foo")))
         (kill-buffer displayed)))))
 
 (provide 'deb-packaging-test-status)
