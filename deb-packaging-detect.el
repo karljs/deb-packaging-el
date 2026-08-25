@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 
 ;;; Package Directory Detection
 
@@ -185,8 +186,9 @@ Name (not just a boolean) so callers can reuse it."
           (target (format "%s-%s" distro arch)))
       (cl-some
        (lambda (line)
-         (when (string-match-p (regexp-quote target) line)
-           (string-trim (replace-regexp-in-string ":.*$" "" line))))
+         (when (and (string-prefix-p "chroot:" line)
+                    (string-match-p (regexp-quote target) line))
+           (string-remove-prefix "chroot:" line)))
        (split-string (or output "") "\n" t)))))
 
 ;;; Artifact Scanning

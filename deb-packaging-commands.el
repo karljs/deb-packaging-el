@@ -24,6 +24,7 @@
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
 (require 'deb-packaging-ppa)
+(require 'deb-packaging-regen)
 (require 'deb-packaging-display)
 
 (declare-function deb-packaging-infra--ppa-owner "deb-packaging-infra")
@@ -625,6 +626,32 @@ Moves files to trash from the output (parent) directory only."
         (deb-packaging-commands--record-run 'clean 'success nil)
         (deb-packaging-commands--notify-status-refresh)
         (message "Moved %d file(s) to trash" (length files))))))
+
+;;; Regenerate templated files
+
+(defun deb-packaging-commands-regenerate ()
+  "Regenerate templated files (e.g. debian/control.in -> debian/control).
+Prompts for the shell command, prefilled with the last one used for this
+package+distro; the command runs verbatim in the package directory, so
+env vars and multi-step chains work.  The chosen command is saved."
+  (interactive)
+  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
+    (unless pkg-dir
+      (user-error "Not in a Debian package directory"))
+    (let* ((name (deb-packaging-detect--package-name pkg-dir))
+           (distro (deb-packaging-config--effective-distro))
+           (stored (when name (deb-packaging-regen-load name distro)))
+           (default (or stored
+                        (deb-packaging-regen--default-command pkg-dir)))
+           (command (read-shell-command "Regenerate command: " default)))
+      (when (string-empty-p command)
+        (user-error "No command given"))
+      (when name
+        (deb-packaging-regen-save name distro command))
+      (deb-packaging-commands--run-command "regen"
+                                  (list "sh" "-c" command)
+                                  pkg-dir
+                                  'regen))))
 
 ;;; Reset source tree
 

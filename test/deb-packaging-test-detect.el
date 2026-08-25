@@ -259,6 +259,25 @@
       (list :name "foo" :version "1.2-3")
     (should (null (deb-packaging-detect--vcs-git pkg-dir)))))
 
+;;; Schroots
+
+(ert-deftest deb-packaging-test-detect/schroot-exists-p-returns-full-name ()
+  "Real `schroot -l' output shape: chroot:NAME, not the bare \"chroot\"."
+  (deb-packaging-test--with-mocked-process
+      '(("schroot" . "chroot:noble-amd64-sbuild\nchroot:sid-amd64-sbuild\n"))
+    (should (string= (deb-packaging-detect--schroot-exists-p "noble" "amd64")
+                     "noble-amd64-sbuild"))))
+
+(ert-deftest deb-packaging-test-detect/schroot-exists-p-ignores-source-and-session-lines ()
+  (deb-packaging-test--with-mocked-process
+      '(("schroot" . "source:noble-amd64-sbuild\nsession:noble-amd64-sbuild-4f2c-9a1b\n"))
+    (should (null (deb-packaging-detect--schroot-exists-p "noble" "amd64")))))
+
+(ert-deftest deb-packaging-test-detect/schroot-exists-p-no-match ()
+  (deb-packaging-test--with-mocked-process
+      '(("schroot" . "chroot:sid-amd64-sbuild\n"))
+    (should (null (deb-packaging-detect--schroot-exists-p "noble" "amd64")))))
+
 ;;; Changes file parsing
 
 (ert-deftest deb-packaging-test-detect/parse-changes-file-single-file ()

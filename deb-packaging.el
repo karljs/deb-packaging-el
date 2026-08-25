@@ -65,6 +65,7 @@ Set the target distro with `d'; other transients inherit it."
    ("t" "Autopkgtest..."   deb-packaging-test-transient)]
   ["Develop & Propagate"
    ("e" "Dev shell..."       deb-packaging-dev-transient)
+   ("g" "Regenerate templated files" deb-packaging-commands-regenerate)
    ("u" "Patch queue (gbp pq)..." deb-packaging-pq-transient)
    ("P" "Propagate..."       deb-packaging-propagate-transient)]
   ["Publish"
