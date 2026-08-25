@@ -369,7 +369,7 @@ Must be visiting a file under /lxc:. Call manually or wire into your own
 Container must exist. C/C++ profile must have been selected (installs bear).
 Partial builds produce partial results. Re-run after changing build flags."
   (interactive)
-  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir nil t)
                       (user-error "Not in a Debian package directory")))
          (pkg (deb-packaging-detect--package-name pkg-dir))
          (distro (deb-packaging-config--effective-distro))
@@ -409,7 +409,7 @@ Partial builds produce partial results. Re-run after changing build flags."
 (defun deb-packaging-dev--tramp-path-for-current ()
   "Return TRAMP path for current package's container. Starts if stopped.
 Errors if container doesn't exist."
-  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir nil t)
                       (user-error "Not in a Debian package directory")))
          (pkg (deb-packaging-detect--package-name pkg-dir))
          (distro (deb-packaging-config--effective-distro))
@@ -496,7 +496,7 @@ Prompts for languages only when the langs layer needs provisioning.
 C-u forces re-provision of all layers."
   (interactive "P")
   (deb-packaging-dev--ensure-tramp-method)
-  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir)
+  (let* ((pkg-dir (or (deb-packaging-detect--find-package-dir nil t)
                       (user-error "Not in a Debian package directory")))
          (pkg (deb-packaging-detect--package-name pkg-dir))
          (distro (deb-packaging-config--effective-distro))
@@ -542,19 +542,20 @@ C-u forces re-provision of all layers."
 Inside a package with no arg: deletes that package's container.
 With arg or outside a package: prompts with completion."
   (interactive "P")
-  (let* ((containers (deb-packaging-dev--list-containers))
+  (let* ((pkg-dir (and (not arg)
+                       (deb-packaging-detect--find-package-dir nil t)))
+         (containers (deb-packaging-dev--list-containers))
          (names (mapcar (lambda (c) (plist-get c :name)) containers))
          (name
-          (cond
-           ((and (not arg) (deb-packaging-detect--find-package-dir))
-            (let* ((pkg-dir (deb-packaging-detect--find-package-dir))
-                   (pkg (deb-packaging-detect--package-name pkg-dir))
-                   (distro (deb-packaging-config--effective-distro)))
-              (deb-packaging-dev--container-name pkg distro)))
-           ((null names)
-            (user-error "No dev containers found"))
-           (t
-            (completing-read "Delete container: " names nil t)))))
+            (cond
+             (pkg-dir
+              (let* ((pkg (deb-packaging-detect--package-name pkg-dir))
+                    (distro (deb-packaging-config--effective-distro)))
+               (deb-packaging-dev--container-name pkg distro)))
+            ((null names)
+             (user-error "No dev containers found"))
+            (t
+             (completing-read "Delete container: " names nil t)))))
     (unless (deb-packaging-dev--container-exists-p name)
       (user-error "No dev container %s; nothing to destroy" name))
     (when (yes-or-no-p (format "Delete dev container %s? " name))

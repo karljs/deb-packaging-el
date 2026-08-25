@@ -274,5 +274,43 @@ the langs or tools layer had packages to install."
         (when proc (delete-process proc))
         (kill-buffer buf)))))
 
+;;; Host-only guard
+
+;; A remote default-directory must produce the friendly host-only
+;; user-error, not a TRAMP pkg-dir and lxc calls on the wrong host.
+;; "/ssh:host:/..." satisfies `file-remote-p' without connecting.
+
+(defmacro deb-packaging-test-dev--with-remote-default-dir (&rest body)
+  "Run BODY with `default-directory' on a fake remote host.
+`locate-dominating-file' and `call-process' are mocked to fail loudly,
+proving neither the TRAMP probe nor any lxc call leaks out."
+  (declare (indent 0) (debug (body)))
+  `(let ((default-directory "/ssh:host:/tmp/pkg/"))
+     (cl-letf (((symbol-function 'locate-dominating-file)
+                (lambda (&rest _) (error "must not probe TRAMP")))
+               ((symbol-function 'call-process)
+                (lambda (&rest _) (error "must not call-process"))))
+       ,@body)))
+
+(ert-deftest deb-packaging-test-dev/dev-shell-host-only-errors ()
+  (deb-packaging-test-dev--with-remote-default-dir
+    (should-error (deb-packaging-dev-shell) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-dev/dev-open-host-only-errors ()
+  (deb-packaging-test-dev--with-remote-default-dir
+    (should-error (deb-packaging-dev-open) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-dev/dev-exec-host-only-errors ()
+  (deb-packaging-test-dev--with-remote-default-dir
+    (should-error (deb-packaging-dev-exec) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-dev/dev-compile-db-host-only-errors ()
+  (deb-packaging-test-dev--with-remote-default-dir
+    (should-error (deb-packaging-dev-compile-db) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-dev/dev-destroy-host-only-errors ()
+  (deb-packaging-test-dev--with-remote-default-dir
+    (should-error (deb-packaging-dev-destroy) :type 'user-error)))
+
 (provide 'deb-packaging-test-dev)
 ;;; deb-packaging-test-dev.el ends here
