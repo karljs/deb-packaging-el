@@ -42,6 +42,39 @@
       (should (string= (plist-get (deb-packaging-commands-run-record 'test-run) :time)
                        orig-time)))))
 
+(ert-deftest deb-packaging-test-run/new-run-restamps-time ()
+  "A new `running' record refreshes :time; closing it out keeps that stamp.
+Uses a controlled clock: real %H:%M:%S granularity could alias the two
+runs into the same second."
+  (let ((deb-packaging-commands--run-history nil)
+        (stamp 0))
+    (cl-letf (((symbol-function 'format-time-string)
+               (lambda (&rest _) (format "12:00:%02d" (cl-incf stamp)))))
+      (deb-packaging-commands--record-run 'test-run 'running "*buf1*")
+      (deb-packaging-commands--record-run 'test-run 'success "*buf1*")
+      (should (string= (plist-get (deb-packaging-commands-run-record 'test-run) :time)
+                       "12:00:01"))
+      (deb-packaging-commands--record-run 'test-run 'running "*buf2*")
+      (should (string= (plist-get (deb-packaging-commands-run-record 'test-run) :time)
+                       "12:00:02"))
+      (deb-packaging-commands--record-run 'test-run 'failure "*buf2*")
+      (should (string= (plist-get (deb-packaging-commands-run-record 'test-run) :time)
+                       "12:00:02")))))
+
+(ert-deftest deb-packaging-test-run/direct-terminal-record-restamps-time ()
+  "Keys that only record terminal status (e.g. clean) get a fresh stamp
+per record, not the first run's time forever."
+  (let ((deb-packaging-commands--run-history nil)
+        (stamp 0))
+    (cl-letf (((symbol-function 'format-time-string)
+               (lambda (&rest _) (format "12:00:%02d" (cl-incf stamp)))))
+      (deb-packaging-commands--record-run 'clean 'success nil)
+      (should (string= (plist-get (deb-packaging-commands-run-record 'clean) :time)
+                       "12:00:01"))
+      (deb-packaging-commands--record-run 'clean 'success nil)
+      (should (string= (plist-get (deb-packaging-commands-run-record 'clean) :time)
+                       "12:00:02")))))
+
 (ert-deftest deb-packaging-test-run/nil-key-no-op ()
   (let ((deb-packaging-commands--run-history nil))
     (deb-packaging-commands--record-run nil 'running "*buf*")

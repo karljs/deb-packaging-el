@@ -48,13 +48,19 @@ Keys: :status (`running'/`success'/`failure'), :time, :buffer, :summary.
 Session-only.")
 
 (defun deb-packaging-commands--record-run (key status buf-name &optional summary)
-  "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY."
+  "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY.
+The :time stamp marks the start of a run: closing out an in-flight
+`running' record keeps its start time; any other record stamps now,
+so a re-run refreshes the displayed time."
   (when key
-    (let ((existing (alist-get key deb-packaging-commands--run-history)))
+    (let* ((existing (alist-get key deb-packaging-commands--run-history))
+           (in-flight (and existing
+                           (eq (plist-get existing :status) 'running))))
       (setf (alist-get key deb-packaging-commands--run-history)
             (list :status status
-                  :time (or (and existing (plist-get existing :time))
-                            (format-time-string "%H:%M:%S"))
+                  :time (if in-flight
+                            (plist-get existing :time)
+                          (format-time-string "%H:%M:%S"))
                   :buffer buf-name
                   :summary summary)))))
 
