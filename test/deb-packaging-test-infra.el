@@ -13,59 +13,59 @@
 (require 'deb-packaging-test-run)
 (require 'deb-packaging-infra)
 
-;;; sudo preflight for deletions
+;;; Privileged commands run via the comint runner (pty for authd prompts)
 
-(ert-deftest deb-packaging-test-infra/delete-qemu-errors-when-sudo-not-cached ()
-  (let (compiled)
-    (deb-packaging-test--with-mocked-process '(("sudo" . 1))
-      (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
-                 (lambda () (list (list :name "img" :path "/var/lib/img.qcow2"))))
-                ((symbol-function 'yes-or-no-p) (lambda (_p) t))
-                ((symbol-function 'compile)
-                 (lambda (cmd &rest _) (push cmd compiled))))
-        (should-error (deb-packaging-infra-delete-qemu "img")
-                      :type 'user-error)
-        (should (null compiled))))))
+(ert-deftest deb-packaging-test-infra/delete-qemu-plain-rm-when-writable ()
+  (let (args)
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
+               (lambda () (list (list :name "img" :path "/x.img"))))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'file-writable-p) (lambda (&rest _) t))
+              ((symbol-function 'deb-packaging-commands--run-command)
+               (lambda (_name a &rest _) (setq args a) nil)))
+      (deb-packaging-infra-delete-qemu "img")
+      (should (equal args '("rm" "/x.img"))))))
 
-(ert-deftest deb-packaging-test-infra/delete-qemu-runs-when-sudo-cached ()
-  (let (compiled)
-    (deb-packaging-test--with-mocked-process '(("sudo" . 0))
-      (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
-                 (lambda () (list (list :name "img" :path "/var/lib/img.qcow2"))))
-                ((symbol-function 'yes-or-no-p) (lambda (_p) t))
-                ((symbol-function 'compile)
-                 (lambda (cmd &rest _) (push cmd compiled))))
-        (deb-packaging-infra-delete-qemu "img")
-        (should (equal (length compiled) 1))
-        (should (string-match-p "sudo -n rm /var/lib/img.qcow2" (car compiled)))))))
+(ert-deftest deb-packaging-test-infra/delete-qemu-sudo-when-not-writable ()
+  "Interactive sudo (no -n): the prompt renders in the comint buffer."
+  (let (args)
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
+               (lambda () (list (list :name "img" :path "/x.img"))))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'file-writable-p) (lambda (&rest _) nil))
+              ((symbol-function 'deb-packaging-commands--run-command)
+               (lambda (_name a &rest _) (setq args a) nil)))
+      (deb-packaging-infra-delete-qemu "img")
+      (should (equal args '("sudo" "rm" "/x.img"))))))
 
-(ert-deftest deb-packaging-test-infra/delete-schroot-errors-when-sudo-not-cached ()
-  (let (compiled)
-    (deb-packaging-test--with-mocked-process '(("sudo" . 1))
-      (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
-                 (lambda ()
-                   (list (list :name "s" :config-file "/etc/schroot/s"
-                               :directory "/srv/schroot/s"))))
-                ((symbol-function 'yes-or-no-p) (lambda (_p) t))
-                ((symbol-function 'compile)
-                 (lambda (cmd &rest _) (push cmd compiled))))
-        (should-error (deb-packaging-infra-delete-schroot "s")
-                      :type 'user-error)
-        (should (null compiled))))))
+(ert-deftest deb-packaging-test-infra/delete-schroot-one-shell-two-sudos ()
+  "Both sudo calls share one pty; the whole command is a single sh -c."
+  (let (args)
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+               (lambda ()
+                 (list (list :name "s" :config-file "/etc/schroot/s"
+                             :directory "/srv/schroot/s"))))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'deb-packaging-commands--run-command)
+               (lambda (_name a &rest _) (setq args a) nil)))
+      (deb-packaging-infra-delete-schroot "s")
+      (should (equal args
+                     (list "sh" "-c"
+                           "sudo rm -rf /srv/schroot/s && sudo rm /etc/schroot/s"))))))
 
-(ert-deftest deb-packaging-test-infra/delete-schroot-runs-when-sudo-cached ()
-  (let (compiled)
-    (deb-packaging-test--with-mocked-process '(("sudo" . 0))
-      (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
-                 (lambda ()
-                   (list (list :name "s" :config-file "/etc/schroot/s"
-                               :directory "/srv/schroot/s"))))
-                ((symbol-function 'yes-or-no-p) (lambda (_p) t))
-                ((symbol-function 'compile)
-                 (lambda (cmd &rest _) (push cmd compiled))))
-        (deb-packaging-infra-delete-schroot "s")
-        (should (equal (length compiled) 1))
-        (should (string-match-p "sudo -n rm -rf /srv/schroot/s" (car compiled)))))))
+(ert-deftest deb-packaging-test-infra/create-schroot-runs-mk-sbuild-on-confirm ()
+  "mk-sbuild self-sudos; no sudo prefix and no sudo preflight."
+  (let (args (probed nil))
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "noble"))
+              ((symbol-function 'completing-read) (lambda (&rest _) "amd64"))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'call-process)
+               (lambda (&rest _) (setq probed t) 0))
+              ((symbol-function 'deb-packaging-commands--run-command)
+               (lambda (_name a &rest _) (setq args a) nil)))
+      (deb-packaging-infra-create-schroot)
+      (should-not probed)
+      (should (equal args '("mk-sbuild" "--arch=amd64" "noble"))))))
 
 ;;; ppa show rendering
 
@@ -239,45 +239,42 @@ yes-or-no-p declines so nothing runs."
     (should (null (nth 4 cr)))
     (should (equal (nth 6 cr) "amd64"))))
 
-;;; Refresh after delete
+;;; Refresh after delete (via the run-privileged sentinel)
+
+(defun deb-packaging-test-infra--delete-qemu-with-command (command refreshed)
+  "Run `deb-packaging-infra-delete-qemu' inside a live qemu-mode buffer.
+--run-command is mocked to start COMMAND as a real process; each call of
+`deb-packaging-infra-refresh-qemu-images' increments REFRESHED (a place).
+The sentinel fires during the wait, while the mode buffer is alive."
+  (let ((buf (generate-new-buffer " *qdel*")))
+    (unwind-protect
+        (with-temp-buffer
+          (deb-packaging-infra-qemu-images-mode)
+          (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
+                     (lambda () (list (list :name "img" :path "/x.img"))))
+                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                    ((symbol-function 'file-writable-p) (lambda (&rest _) t))
+                    ((symbol-function 'deb-packaging-infra-refresh-qemu-images)
+                     (lambda () (cl-incf (car refreshed))))
+                    ((symbol-function 'deb-packaging-commands--run-command)
+                     (lambda (_name _a &rest _)
+                       (make-process :name "qdel" :buffer buf
+                                     :command command :noquery t)
+                       buf)))
+            (deb-packaging-infra-delete-qemu "img")
+            (deb-packaging-test-run--wait
+             (get-buffer-process buf))))
+      (kill-buffer buf))))
 
 (ert-deftest deb-packaging-test-infra/delete-qemu-refreshes-on-success ()
-  (let ((refreshed 0))
-    (deb-packaging-test--with-mocked-process '(("sudo" . 0))
-      (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
-                 (lambda () (list (list :name "img" :path "/x.img"))))
-                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
-                ((symbol-function 'deb-packaging-commands--compile)
-                 (lambda (&rest _) (get-buffer-create " *c*")))
-                ((symbol-function 'deb-packaging-infra-refresh-qemu-images)
-                 (lambda () (cl-incf refreshed))))
-        (unwind-protect
-            (with-temp-buffer
-              (deb-packaging-infra-qemu-images-mode)
-              (deb-packaging-infra-delete-qemu "img")
-              (run-hook-with-args 'compilation-finish-functions
-                                  (get-buffer " *c*") "finished\n")
-              (should (= refreshed 1)))
-          (kill-buffer " *c*"))))))
+  (let ((refreshed (list 0)))
+    (deb-packaging-test-infra--delete-qemu-with-command '("true") refreshed)
+    (should (= (car refreshed) 1))))
 
 (ert-deftest deb-packaging-test-infra/delete-qemu-no-refresh-on-failure ()
-  (let ((refreshed 0))
-    (deb-packaging-test--with-mocked-process '(("sudo" . 0))
-      (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
-                 (lambda () (list (list :name "img" :path "/x.img"))))
-                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
-                ((symbol-function 'deb-packaging-commands--compile)
-                 (lambda (&rest _) (get-buffer-create " *c*")))
-                ((symbol-function 'deb-packaging-infra-refresh-qemu-images)
-                 (lambda () (cl-incf refreshed))))
-        (unwind-protect
-            (with-temp-buffer
-              (deb-packaging-infra-qemu-images-mode)
-              (deb-packaging-infra-delete-qemu "img")
-              (run-hook-with-args 'compilation-finish-functions
-                                  (get-buffer " *c*") "abnormally\n")
-              (should (= refreshed 0)))
-          (kill-buffer " *c*"))))))
+  (let ((refreshed (list 0)))
+    (deb-packaging-test-infra--delete-qemu-with-command '("false") refreshed)
+    (should (= (car refreshed) 0))))
 
 ;;; Honest lxc start/stop
 

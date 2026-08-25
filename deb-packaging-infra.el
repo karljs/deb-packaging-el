@@ -152,7 +152,8 @@ The parent is the longest chroot name that is a prefix of SESSION."
         (list name))))
 
 (defun deb-packaging-infra-create-schroot ()
-  "Create a schroot with mk-sbuild."
+  "Create a schroot with mk-sbuild.
+mk-sbuild self-sudos; the comint buffer's pty carries its prompt."
   (interactive)
   (let* ((distro (read-string
                   (format "Distro (default %s): "
@@ -160,10 +161,13 @@ The parent is the longest chroot name that is a prefix of SESSION."
                   nil nil deb-packaging-config-target-distro))
          (arch (completing-read "Arch (default amd64): "
                                 '("amd64" "i386" "arm64" "armhf")
-                                nil t nil nil "amd64"))
-         (cmd (format "mk-sbuild --arch=%s %s" arch distro)))
-    (when (yes-or-no-p (format "Run: %s? " cmd))
-      (deb-packaging-commands--compile cmd))))
+                                nil t nil nil "amd64")))
+    (when (yes-or-no-p (format "Run: mk-sbuild --arch=%s %s? " arch distro))
+      (deb-packaging-infra--run-privileged
+       "mk-sbuild"
+       (list "mk-sbuild" (format "--arch=%s" arch) distro)
+       'deb-packaging-infra-schroots-mode
+       #'deb-packaging-infra-refresh-schroots))))
 
 (defun deb-packaging-infra--update-command (names)
   "Return a shell command updating schroots NAMES sequentially.
@@ -238,13 +242,20 @@ Keeps the row of a deleted item from lingering until a manual `g'."
      (lambda ()
        (deb-packaging-commands--refresh-buffer mode refresh-fn)))))
 
-(defun deb-packaging-infra--ensure-sudo-timestamp ()
-  "Signal `user-error' unless sudo credentials are currently cached.
-Sudo runs inside a compilation buffer, which cannot answer password
-prompts (authd and other non-standard PAM prompts included).  Prime the
-timestamp with `sudo -v' in a terminal first."
-  (unless (zerop (call-process "sudo" nil nil nil "-n" "true"))
-    (user-error "sudo credentials not cached; run `sudo -v' in a terminal first")))
+(defun deb-packaging-infra--run-privileged (name args mode refresh-fn)
+  "Run a privileged command through the comint runner; refresh on success.
+ARGS is the command list; interactive sudo and mk-sbuild need a pty for
+their password prompts (authd included), which the comint output buffer
+provides.  MODE and REFRESH-FN refresh the affected list buffer when the
+command exits 0, mirroring `deb-packaging-infra--compile-then-refresh'."
+  (let ((buf (deb-packaging-commands--run-command name args)))
+    (when-let ((proc (get-buffer-process buf)))
+      (deb-packaging-commands--wrap-sentinel
+       proc
+       (lambda (p _event)
+         (when (and (eq (process-status p) 'exit)
+                    (zerop (process-exit-status p)))
+           (deb-packaging-commands--refresh-buffer mode refresh-fn)))))))
 
 (defun deb-packaging-infra-delete-schroot (&optional name)
   "Delete a schroot (config and directory).
@@ -269,14 +280,17 @@ Use schroot at point, or prompt."
       (let ((msg (format "Will delete:\n  Config: %s\n  Directory: %s\n\nProceed?"
                          config-file directory)))
         (when (yes-or-no-p msg)
-          (deb-packaging-infra--ensure-sudo-timestamp)
-          (let ((cmd (format "sudo -n rm -rf %s && sudo -n rm %s"
-                             (shell-quote-argument directory)
-                             (shell-quote-argument config-file))))
-            (deb-packaging-infra--compile-then-refresh
-             cmd
-             'deb-packaging-infra-schroots-mode
-             #'deb-packaging-infra-refresh-schroots)))))))
+          ;; One sh -c so both sudo calls share the pty (and its cached
+          ;; credential); --run-command shell-quotes per-arg, so && only
+          ;; survives inside a single -c string.
+          (deb-packaging-infra--run-privileged
+           "schroot-delete"
+           (list "sh" "-c"
+                 (format "sudo rm -rf %s && sudo rm %s"
+                         (shell-quote-argument directory)
+                         (shell-quote-argument config-file)))
+           'deb-packaging-infra-schroots-mode
+           #'deb-packaging-infra-refresh-schroots))))))
 
 ;;; Schroots buffer
 
@@ -608,7 +622,9 @@ Each plist has keys: :name, :path, :size."
       (nreverse result))))
 
 (defun deb-packaging-infra-create-qemu ()
-  "Create a QEMU image for autopkgtest."
+  "Create a QEMU image for autopkgtest.
+The image dir is often root-owned; sudo (with its prompt in the comint
+buffer) is used only when it is not user-writable."
   (interactive)
   (let* ((distro (read-string
                   (format "Distro (default %s): "
@@ -616,14 +632,24 @@ Each plist has keys: :name, :path, :size."
                   nil nil deb-packaging-config-target-distro))
          (arch (completing-read "Arch (default amd64): "
                                 '("amd64" "arm64" "i386") nil t nil nil "amd64"))
-         (cmd (format "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s"
-                      distro arch deb-packaging-infra-qemu-dir)))
-    (when (yes-or-no-p (format "Run: %s? " cmd))
-      (deb-packaging-commands--compile cmd))))
+         (sudo-p (not (file-writable-p deb-packaging-infra-qemu-dir))))
+    (when (yes-or-no-p
+           (format "Run: %sautopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s? "
+                   (if sudo-p "sudo " "") distro arch
+                   deb-packaging-infra-qemu-dir))
+      (deb-packaging-infra--run-privileged
+       "qemu-create"
+       (let ((args (list "autopkgtest-buildvm-ubuntu-cloud"
+                         "-r" distro "-a" arch "-o"
+                         deb-packaging-infra-qemu-dir)))
+         (if sudo-p (cons "sudo" args) args))
+       'deb-packaging-infra-qemu-images-mode
+       #'deb-packaging-infra-refresh-qemu-images))))
 
 (defun deb-packaging-infra-delete-qemu (&optional name)
   "Delete a QEMU autopkgtest image.
-Use image at point, or prompt."
+Use image at point, or prompt.  Sudo (prompt answered in the comint
+buffer) only when the image is not user-writable."
   (interactive
    (list (or (plist-get (tabulated-list-get-id) :name)
              (completing-read
@@ -636,9 +662,11 @@ Use image at point, or prompt."
                        :key (lambda (i) (plist-get i :name)) :test #'equal))
          (path (plist-get img :path)))
     (when (yes-or-no-p (format "Delete %s?" path))
-      (deb-packaging-infra--ensure-sudo-timestamp)
-      (deb-packaging-infra--compile-then-refresh
-       (format "sudo -n rm %s" (shell-quote-argument path))
+      (deb-packaging-infra--run-privileged
+       "qemu-delete"
+       (if (file-writable-p path)
+           (list "rm" path)
+         (list "sudo" "rm" path))
        'deb-packaging-infra-qemu-images-mode
        #'deb-packaging-infra-refresh-qemu-images))))
 

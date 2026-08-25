@@ -480,11 +480,9 @@ SESSIONS a list of session name strings."
 
 (ert-deftest deb-packaging-test-display/infra-delete-schroot-at-point ()
   "With point on a chroot row, `d' deletes that chroot."
-  (let (compiles)
-    (cl-letf (((symbol-function 'compile)
-               (lambda (cmd &rest _) (push cmd compiles) nil))
-              ((symbol-function 'call-process)
-               (lambda (&rest _) 0))
+  (let (ran)
+    (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+               (lambda (_name args &rest _) (setq ran args) nil))
               ((symbol-function 'yes-or-no-p) #'always))
       (deb-packaging-test-display--with-schroots-buffer
           '((:name "noble-amd64" :description "Noble" :directory "/srv/noble"
@@ -493,7 +491,7 @@ SESSIONS a list of session name strings."
         (goto-char (point-min))
         (search-forward "noble-amd64")
         (deb-packaging-infra-delete-schroot)))
-    (should (string-match-p "rm -rf /srv/noble" (car compiles)))))
+    (should (string-match-p "rm -rf /srv/noble" (nth 2 ran)))))
 
 (ert-deftest deb-packaging-test-display/infra-ppas-displays-list ()
   "The PPAs list displays via the list category."
