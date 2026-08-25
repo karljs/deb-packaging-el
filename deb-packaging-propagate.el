@@ -495,13 +495,83 @@ in view-mode."
     (message "Exported %d bytes to %s" (length content) output-path)
     output-path))
 
+(defun deb-packaging-propagate--sentinel (what cont)
+  "Return a process sentinel that runs CONT after WHAT exits zero.
+Magit's own sentinel runs first (bookkeeping, *magit-process* finish).
+A failed network step skips CONT and points at the process buffer."
+  (lambda (process event)
+    (when (memq (process-status process) '(exit signal))
+      (magit-process-sentinel process event)
+      (if (and (eq (process-status process) 'exit)
+               (zerop (process-exit-status process)))
+          (funcall cont)
+        (message "%s failed.  See *magit-process* buffer ($ in Magit)."
+                 what)))))
+
+(defun deb-packaging-propagate--finish-clone (pkg-dir pkg-name clone-dir vcs-url)
+  "Branch and remote setup for CLONE-DIR, then hand off to Magit.
+Runs from a process sentinel once the clone/fetch finished; the prompts
+here (base branch, work branch, fork creation) are safe at that point."
+  (catch 'abort
+    ;; Store source-dir so apply can find it later.
+    (let ((default-directory clone-dir))
+      (magit-call-git "config" "deb-packaging.source-dir" pkg-dir))
+    (let* ((branches (deb-packaging-propagate--remote-branches clone-dir))
+           (default-br (or (deb-packaging-propagate--default-branch clone-dir)
+                           "main"))
+           (base (if branches
+                     (magit-completing-read "Base branch: " branches nil t
+                                            nil nil default-br)
+                   default-br))
+           (branch-default (format "wip/propagate-%s" (or pkg-name "fix")))
+           (branch (read-string (format "Branch name (default %s): "
+                                        branch-default)
+                                nil nil branch-default)))
+      (let ((default-directory clone-dir))
+        (magit-call-git "checkout" base))
+      ;; Recreate work branch fresh, but never silently: it may hold
+      ;; unpushed commits from a previous session.
+      (let ((default-directory clone-dir))
+        (when (deb-packaging-propagate--git-quiet clone-dir "rev-parse" "--verify" branch)
+          (unless (yes-or-no-p
+                   (format "Delete existing work branch %s (unapplied commits will be lost)? "
+                           branch))
+            (message "Aborted")
+            (throw 'abort nil))
+          (magit-call-git "branch" "-D" branch))
+        (unless (zerop (magit-call-git "checkout" "-b" branch))
+          (user-error "Failed to create branch %s" branch))))
+    (let ((personal-url (deb-packaging-propagate--salsa-personal-url pkg-name)))
+      (when personal-url
+        (let ((default-directory clone-dir))
+          (when (deb-packaging-propagate--git-quiet clone-dir "config" "remote.personal.url")
+            (magit-call-git "remote" "remove" "personal"))
+          (if (zerop (magit-call-git "remote" "add" "personal" personal-url))
+              (if (deb-packaging-propagate--fork-exists-p personal-url)
+                  (message "Personal fork ready at %s" personal-url)
+                (let ((fork-url (deb-packaging-propagate--fork-url vcs-url)))
+                  (if (and fork-url
+                           (y-or-n-p
+                            (format "Personal fork not found.  Open %s to create it? "
+                                    fork-url)))
+                      (browse-url fork-url)
+                    (message "Personal fork not found.  Fork at: %s"
+                             (or fork-url "salsa.debian.org")))))
+            (message "Could not add personal remote (non-fatal)")))))
+    (magit-status-setup-buffer clone-dir)
+    (when (derived-mode-p 'magit-status-mode)
+      (deb-packaging-propagate-clone-mode +1))
+    (message "Clone ready at %s.  Press C-c a to apply a fix item."
+             clone-dir)))
+
 ;;;###autoload
 (defun deb-packaging-propagate-clone ()
   "Prepare a Debian salsa clone.
-Confirms the Vcs-Git URL, clones (or reuses) into the propagate cache,
-prompts for base and work branch, sets up the `personal' remote if
-configured, and hands off to `magit-status'. Press `C-c a' afterwards to
-apply items."
+Confirms the Vcs-Git URL, then clones (or fetches and resets an
+existing clone) into the propagate cache asynchronously, so Emacs
+stays usable during the network round trip.  Branch setup, the
+`personal' remote, and the `magit-status' handoff run when the
+network step finishes.  Press `C-c a' afterwards to apply items."
   (interactive)
   (catch 'abort
     (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
@@ -515,80 +585,46 @@ apply items."
       (let ((parent (file-name-directory clone-dir)))
         (unless (file-directory-p parent)
           (make-directory parent t)))
-      (if (deb-packaging-propagate--clone-exists-p clone-dir)        (progn
+      (if (deb-packaging-propagate--clone-exists-p clone-dir)
+          (progn
             (unless (yes-or-no-p
                      (format "Clone exists at %s.  Fetch and reset to origin (discards local work)? "
                              clone-dir))
               (message "Aborted")
-               (throw 'abort nil))
-           (message "Fetching origin...")
-           (let ((default-directory clone-dir))
-             (unless (zerop (magit-call-git "fetch" "origin"))
-               (user-error "git fetch failed.  See *magit-process* buffer ($ in Magit).")))
-           (let ((default-branch (or (deb-packaging-propagate--default-branch clone-dir)
-                                     "main")))
-             (let ((default-directory clone-dir))
-               (unless (zerop (magit-call-git "checkout" default-branch))
-                 (user-error "git checkout failed.  See *magit-process* buffer ($ in Magit)."))
-               (unless (zerop (magit-call-git "reset" "--hard"
-                                              (format "origin/%s" default-branch)))
-                 (user-error "git reset failed.  See *magit-process* buffer ($ in Magit).")))))
+              (throw 'abort nil))
+            (message "Fetching origin...")
+            (let ((default-directory clone-dir))
+              (magit-run-git-async "fetch" "origin"))
+            (process-put magit-this-process 'inhibit-refresh t)
+            (set-process-sentinel
+             magit-this-process
+             (deb-packaging-propagate--sentinel
+              "git fetch"
+              (lambda ()
+                (let ((default-branch
+                       (or (deb-packaging-propagate--default-branch clone-dir)
+                           "main")))
+                  (let ((default-directory clone-dir))
+                    (unless (zerop (magit-call-git "checkout" default-branch))
+                      (user-error "git checkout failed.  See *magit-process* buffer ($ in Magit)."))
+                    (unless (zerop (magit-call-git "reset" "--hard"
+                                                   (format "origin/%s" default-branch)))
+                      (user-error "git reset failed.  See *magit-process* buffer ($ in Magit)."))))
+                (deb-packaging-propagate--finish-clone
+                 pkg-dir pkg-name clone-dir vcs-url)))))
         (message "Cloning %s..." vcs-url)
         (let ((default-directory (file-name-directory clone-dir)))
-          (unless (zerop (magit-call-git "clone" vcs-url
-                                         (file-name-nondirectory
-                                          (directory-file-name clone-dir))))
-            (user-error "git clone failed.  See *magit-process* buffer ($ in Magit)."))))
-      ;; Store source-dir so apply can find it later.
-      (let ((default-directory clone-dir))
-        (magit-call-git "config" "deb-packaging.source-dir" pkg-dir))
-      (let* ((branches (deb-packaging-propagate--remote-branches clone-dir))
-             (default-br (or (deb-packaging-propagate--default-branch clone-dir)
-                             "main"))
-             (base (if branches
-                       (magit-completing-read "Base branch: " branches nil t
-                                              nil nil default-br)
-                     default-br))
-             (branch-default (format "wip/propagate-%s" (or pkg-name "fix")))
-             (branch (read-string (format "Branch name (default %s): "
-                                          branch-default)
-                                  nil nil branch-default)))
-        (let ((default-directory clone-dir))
-          (magit-call-git "checkout" base))
-        ;; Recreate work branch fresh, but never silently: it may hold
-        ;; unpushed commits from a previous session.
-        (let ((default-directory clone-dir))
-          (when (deb-packaging-propagate--git-quiet clone-dir "rev-parse" "--verify" branch)
-            (unless (yes-or-no-p
-                     (format "Delete existing work branch %s (unapplied commits will be lost)? "
-                             branch))
-              (message "Aborted")
-              (throw 'abort nil))
-            (magit-call-git "branch" "-D" branch))
-          (unless (zerop (magit-call-git "checkout" "-b" branch))
-            (user-error "Failed to create branch %s" branch))))
-      (let ((personal-url (deb-packaging-propagate--salsa-personal-url pkg-name)))
-        (when personal-url
-          (let ((default-directory clone-dir))
-            (when (deb-packaging-propagate--git-quiet clone-dir "config" "remote.personal.url")
-              (magit-call-git "remote" "remove" "personal"))
-            (if (zerop (magit-call-git "remote" "add" "personal" personal-url))
-                (if (deb-packaging-propagate--fork-exists-p personal-url)
-                    (message "Personal fork ready at %s" personal-url)
-                  (let ((fork-url (deb-packaging-propagate--fork-url vcs-url)))
-                    (if (and fork-url
-                             (y-or-n-p
-                              (format "Personal fork not found.  Open %s to create it? "
-                                      fork-url)))
-                        (browse-url fork-url)
-                      (message "Personal fork not found.  Fork at: %s"
-                               (or fork-url "salsa.debian.org")))))
-              (message "Could not add personal remote (non-fatal)")))))
-      (magit-status-setup-buffer clone-dir)
-      (when (derived-mode-p 'magit-status-mode)
-        (deb-packaging-propagate-clone-mode +1))
-      (message "Clone ready at %s.  Press C-c a to apply a fix item."
-               clone-dir))))
+          (magit-run-git-async "clone" vcs-url
+                               (file-name-nondirectory
+                                (directory-file-name clone-dir))))
+        (process-put magit-this-process 'inhibit-refresh t)
+        (set-process-sentinel
+         magit-this-process
+         (deb-packaging-propagate--sentinel
+          "git clone"
+          (lambda ()
+            (deb-packaging-propagate--finish-clone
+             pkg-dir pkg-name clone-dir vcs-url))))))))
 
 ;;;###autoload
 (defun deb-packaging-propagate-apply ()

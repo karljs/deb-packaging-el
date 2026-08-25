@@ -258,17 +258,30 @@ Author: A U Thor <author@example.com>
 
 ;;; Clone session flow (mocked)
 
+(defun deb-packaging-test-propagate--wait-for-exit (proc)
+  "Wait for PROC to exit and let its sentinel run."
+  (while (memq (process-status proc) '(run stop open listen))
+    (accept-process-output nil 0.05))
+  (accept-process-output nil 0.1))
+
 (defmacro deb-packaging-test-propagate--with-clone-mocks (answers &rest body)
   "Run BODY with `deb-packaging-propagate-clone' dependencies mocked.
-ANSWERS is a list of `yes-or-no-p' answers consumed in order.  Within
-BODY, `git-calls' records `magit-call-git' argument lists, `prompts'
+ANSWERS is a list of `yes-or-no-p' answers consumed in order.  The
+network step (`magit-run-git-async') is mocked to a real `true'
+process; the post-network continuation runs from its sentinel, so BODY
+must wait on `async-proc' before asserting continuation effects.
+Within BODY, `git-calls' records `magit-call-git' argument lists,
+`async-calls' records `magit-run-git-async' argument lists, `prompts'
 records confirmation prompts, `messages' records echo-area messages,
-and `status-opened' counts `magit-status-setup-buffer' calls."
+`status-opened' counts `magit-status-setup-buffer' calls, and
+`async-proc' holds the mock network process (nil when none started)."
   (declare (indent 1) (debug (form body)))
   `(let ((git-calls nil)
+         (async-calls nil)
          (prompts nil)
          (messages nil)
          (status-opened 0)
+         (async-proc nil)
          (remaining ,answers))
      (cl-letf (((symbol-function 'deb-packaging-propagate--clone-dir)
                 (lambda (name) (expand-file-name (concat name "-clone")
@@ -288,6 +301,16 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
                 (lambda (&rest _) "ignored"))
                ((symbol-function 'yes-or-no-p)
                 (lambda (prompt) (push prompt prompts) (pop remaining)))
+               ((symbol-function 'magit-run-git-async)
+                (lambda (&rest args)
+                  (push args async-calls)
+                  ;; Spawn from a real directory: the command binds
+                  ;; default-directory to the (mocked, nonexistent)
+                  ;; clone dir around the call.
+                  (let ((default-directory temporary-file-directory))
+                    (setq async-proc (start-process "deb-prop-test" nil "true")
+                          magit-this-process async-proc))))
+               ((symbol-function 'magit-process-sentinel) #'ignore)
                ((symbol-function 'magit-call-git)
                 (lambda (&rest args) (push args git-calls) 0))
                ((symbol-function 'magit-status-setup-buffer)
@@ -295,7 +318,7 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
                ((symbol-function 'message)
                 (lambda (fmt &rest args)
                   (push (apply #'format fmt args) messages))))
-       ,@body)))
+        ,@body)))
 
 (ert-deftest deb-packaging-test-propagate/clone-confirms-before-deleting-work-branch ()
   "Re-running clone asks before force-deleting the existing work branch."
@@ -303,6 +326,7 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
       (list :name "foo" :version "1.2-3")
     (deb-packaging-test-propagate--with-clone-mocks (list t t)
       (deb-packaging-propagate-clone)
+      (deb-packaging-test-propagate--wait-for-exit async-proc)
       (should (cl-some (lambda (p) (string-match-p "Delete existing work branch" p))
                        prompts))
       (should (cl-some (lambda (c) (equal c '("branch" "-D" "ignored")))
@@ -315,6 +339,7 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
       (list :name "foo" :version "1.2-3")
     (deb-packaging-test-propagate--with-clone-mocks (list t nil)
       (deb-packaging-propagate-clone)
+      (deb-packaging-test-propagate--wait-for-exit async-proc)
       (should-not (cl-some (lambda (c) (equal (car c) "branch")) git-calls))
       (should (= status-opened 0))
       (should (cl-some (lambda (m) (string-match-p "Aborted" m)) messages)))))
@@ -326,6 +351,7 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
     (deb-packaging-test-propagate--with-clone-mocks (list nil)
       (deb-packaging-propagate-clone)
       (should (null git-calls))
+      (should (null async-calls))
       (should (= status-opened 0))
       (should (cl-some (lambda (m) (string-match-p "Aborted" m)) messages)))))
 
@@ -348,7 +374,7 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
 (ert-deftest deb-packaging-test-propagate/clone-prompts-pass-real-defaults ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3" :vcs-git "https://salsa/foo.git")
-    (let (rs-calls cr-calls)
+    (let (rs-calls cr-calls (async-proc nil) (async-calls nil))
       (cl-letf (((symbol-function 'deb-packaging-propagate--clone-dir)
                  (lambda (name)
                    (expand-file-name (concat name "-clone")
@@ -367,20 +393,30 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
                  (lambda (&rest args) (push args rs-calls) (nth 3 args)))
                 ((symbol-function 'magit-completing-read)
                  (lambda (&rest args) (push args cr-calls) "main"))
+                ((symbol-function 'magit-run-git-async)
+                 (lambda (&rest args)
+                   (push args async-calls)
+                   (setq async-proc (start-process "deb-prop-test" nil "true")
+                         magit-this-process async-proc)))
+                ((symbol-function 'magit-process-sentinel) #'ignore)
                 ((symbol-function 'magit-call-git) (lambda (&rest _) 0))
                 ((symbol-function 'magit-status-setup-buffer)
                  (lambda (&rest _) (current-buffer)))
                 ((symbol-function 'message) #'ignore))
-        (deb-packaging-propagate-clone))
-      (let ((url-call (cadr rs-calls))
-            (branch-call (car rs-calls))
-            (base-call (car cr-calls)))
-        (should (null (nth 1 url-call)))
-        (should (equal (nth 3 url-call) "https://salsa/foo.git"))
-        (should (null (nth 1 branch-call)))
-        (should (equal (nth 3 branch-call) "wip/propagate-foo"))
-        (should (null (nth 4 base-call)))
-        (should (equal (nth 6 base-call) "main"))))))
+        (deb-packaging-propagate-clone)
+        ;; Fresh-clone path: one async network call with URL and target.
+        (should (equal (car async-calls)
+                       (list "clone" "https://salsa/foo.git" "foo-clone")))
+        (deb-packaging-test-propagate--wait-for-exit async-proc)
+        (let ((url-call (cadr rs-calls))
+              (branch-call (car rs-calls))
+              (base-call (car cr-calls)))
+          (should (null (nth 1 url-call)))
+          (should (equal (nth 3 url-call) "https://salsa/foo.git"))
+          (should (null (nth 1 branch-call)))
+          (should (equal (nth 3 branch-call) "wip/propagate-foo"))
+          (should (null (nth 4 base-call)))
+          (should (equal (nth 6 base-call) "main")))))))
 
 (ert-deftest deb-packaging-test-propagate/patch-choices-clean-names-with-applied-flag ()
   (deb-packaging-test--with-package-tree
@@ -459,14 +495,47 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
 ;;; Clone robustness
 
 (ert-deftest deb-packaging-test-propagate/clone-checkout-failure-errors ()
-  "A failed checkout in the reset path must not silently continue."
+  "A failed checkout in the reset path must not silently continue.
+The continuation runs from the sentinel, so the sentinel itself is
+invoked manually here to observe the `user-error'."
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3")
     (deb-packaging-test-propagate--with-clone-mocks (list t)
-      (cl-letf (((symbol-function 'magit-call-git)
+      (let (sentinel)
+        (cl-letf (((symbol-function 'magit-call-git)
+                   (lambda (&rest args)
+                     (if (equal (car args) "checkout") 1 0)))
+                  ((symbol-function 'set-process-sentinel)
+                   (lambda (_proc s) (setq sentinel s))))
+          (deb-packaging-propagate-clone)
+          (should async-proc)
+          (deb-packaging-test-propagate--wait-for-exit async-proc)
+          (should sentinel)
+          (should-error (funcall sentinel async-proc "finished\n")
+                        :type 'user-error)
+          ;; Nothing past the failed checkout: no branch creation, no
+          ;; source-dir config, no status handoff.
+          (should-not (cl-some (lambda (c) (equal c '("checkout" "-b" "ignored")))
+                               git-calls))
+          (should-not (cl-some (lambda (c) (equal (car c) "config")) git-calls))
+          (should (= status-opened 0)))))))
+
+(ert-deftest deb-packaging-test-propagate/clone-network-failure-skips-setup ()
+  "A failed network step skips the continuation and messages."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (deb-packaging-test-propagate--with-clone-mocks (list t)
+      (cl-letf (((symbol-function 'magit-run-git-async)
                  (lambda (&rest args)
-                   (if (equal (car args) "checkout") 1 0))))
-        (should-error (deb-packaging-propagate-clone) :type 'user-error)))))
+                   (push args async-calls)
+                   (let ((default-directory temporary-file-directory))
+                     (setq async-proc (start-process "deb-prop-test" nil "false")
+                           magit-this-process async-proc)))))
+        (deb-packaging-propagate-clone)
+        (deb-packaging-test-propagate--wait-for-exit async-proc)
+        (should (null git-calls))
+        (should (= status-opened 0))
+        (should (cl-some (lambda (m) (string-match-p "failed" m)) messages))))))
 
 (ert-deftest deb-packaging-test-propagate/clone-offers-to-browse-fork-page ()
   (deb-packaging-test--with-package-tree
@@ -483,6 +552,7 @@ and `status-opened' counts `magit-status-setup-buffer' calls."
                    (lambda (url &rest _) (setq browsed url)))
                   ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
           (deb-packaging-propagate-clone)
+          (deb-packaging-test-propagate--wait-for-exit async-proc)
           (should (equal browsed
                          "https://salsa.debian.org/debian/foo/-/forks/new")))))))
 
