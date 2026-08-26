@@ -250,7 +250,22 @@ context, which must not block."
   "Left-justify TEXT to WIDTH columns."
   (format (format "%%-%ds" width) text))
 
+(defun deb-packaging-status--visitable-file-p (path)
+  "Return non-nil when PATH is usefully visited read-only.
+Text artifacts (.dsc, .changes, .buildinfo) qualify; binary packages
+would render as garbage and need dpkg-deb inspection instead."
+  (not (string-match-p "\\.\\(u?deb\\|ddeb\\)\\'" path)))
+
 (defun deb-packaging-status--insert-file-line (path)
+  "Insert an indented PATH line with size and modification time.
+Visit-worthy files are wrapped in a `deb-packaging-file' section
+carrying PATH, so RET can open them."
+  (if (not (deb-packaging-status--visitable-file-p path))
+      (deb-packaging-status--insert-file-line-1 path)
+    (magit-insert-section (deb-packaging-file path)
+      (deb-packaging-status--insert-file-line-1 path))))
+
+(defun deb-packaging-status--insert-file-line-1 (path)
   "Insert an indented PATH line with size and modification time."
   (let* ((base (file-name-nondirectory path))
          (attrs (condition-case nil (file-attributes path) (error nil)))
@@ -802,24 +817,30 @@ filesystem each time."
 ;;; Actions
 
 (defun deb-packaging-status-visit ()
-  "Open the transient for the section at point.
-Walks up the section tree to the nearest registered type."
+  "Visit the artifact file at point, or open the section's transient.
+RET on a text artifact line (e.g. the .changes before upload) opens the
+file read-only.  Elsewhere it opens the transient of the nearest
+registered phase section."
   (interactive)
   (let ((section (magit-current-section))
         (prefix nil))
-    (while (and section (not prefix))
+    (while (and section
+                (not (or prefix
+                         (eq (oref section type) 'deb-packaging-file))))
       (setq prefix (alist-get (oref section type)
                                deb-packaging-status--section-actions))
       (setq section (oref section parent)))
-    (if prefix
-        (call-interactively prefix)
-      (user-error "No action for the section at point"))))
+    (cond ((and section (eq (oref section type) 'deb-packaging-file))
+           (find-file-read-only (oref section value)))
+          (prefix (call-interactively prefix))
+          (t (user-error "No action for the section at point")))))
 
 ;;; Major mode
 
 (defvar-keymap deb-packaging-status-mode-map
   :doc "Keymap for `deb-packaging-status-mode'.
-RET opens the section's transient. Mnemonic verbs open tool transients.
+RET visits the artifact file at point, else opens the section's
+transient. Mnemonic verbs open tool transients.
 Navigation and folding come from `magit-section-mode'."
   :parent magit-section-mode-map
   "RET" #'deb-packaging-status-visit

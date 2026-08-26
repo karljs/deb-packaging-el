@@ -438,5 +438,71 @@ artifacts so Binary is the next actionable phase and renders expanded."
         (when (buffer-live-p displayed) (kill-buffer displayed))
         (delete-directory tmp t)))))
 
+(ert-deftest deb-packaging-test-status/visitable-file-p-excludes-binary-packages ()
+  (should (deb-packaging-status--visitable-file-p "foo_1.2-3.dsc"))
+  (should (deb-packaging-status--visitable-file-p "foo_1.2-3_source.changes"))
+  (should (deb-packaging-status--visitable-file-p "foo_1.2-3_source.buildinfo"))
+  (should-not (deb-packaging-status--visitable-file-p "foo_1.2-3_amd64.deb"))
+  (should-not (deb-packaging-status--visitable-file-p "foo_1.2-3_amd64.udeb"))
+  (should-not (deb-packaging-status--visitable-file-p "foo-dbgsym_1.2-3_amd64.ddeb")))
+
+(ert-deftest deb-packaging-test-status/ret-visits-artifact-file ()
+  "RET on a text artifact line opens the file read-only instead of the
+phase transient.  Source-build failed so the section renders expanded."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble"
+            :artifacts '(("foo_1.2-3.dsc" . "")
+                         ("foo_1.2-3_source.changes" . "")))
+    (let ((displayed nil) (visited nil))
+      (deb-packaging-test--with-mocked-process
+          '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+        (cl-letf (((symbol-function 'read-directory-name)
+                   (lambda (&rest _) (error "must not prompt")))
+                  ((symbol-function 'deb-packaging-display-buffer)
+                   (lambda (buf _category) (setq displayed buf))))
+          (deb-packaging-commands--record-run 'source-build 'failure nil)
+          (deb-packaging-status)))
+      (unwind-protect
+          (with-current-buffer displayed
+            (let ((file-section nil))
+              (cl-labels ((walk (s)
+                            (when (and s (not file-section))
+                              (when (eq (oref s type) 'deb-packaging-file)
+                                (setq file-section s))
+                              (dolist (c (oref s children)) (walk c)))))
+                (walk magit-root-section))
+              (should file-section)
+              (goto-char (oref file-section start))
+              (cl-letf (((symbol-function 'find-file-read-only)
+                         (lambda (path) (setq visited path))))
+                (deb-packaging-status-visit))
+              (should (equal visited
+                             (expand-file-name "foo_1.2-3.dsc"
+                                               pkg-parent-dir)))))
+        (kill-buffer displayed)))))
+
+(ert-deftest deb-packaging-test-status/ret-on-phase-heading-opens-transient ()
+  "RET outside a file line keeps opening the phase's transient."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble")
+    (let ((displayed nil) (called nil))
+      (deb-packaging-test--with-mocked-process
+          '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+        (cl-letf (((symbol-function 'read-directory-name)
+                   (lambda (&rest _) (error "must not prompt")))
+                  ((symbol-function 'deb-packaging-display-buffer)
+                   (lambda (buf _category) (setq displayed buf))))
+          (deb-packaging-status)))
+      (unwind-protect
+          (with-current-buffer displayed
+            (goto-char (point-min))
+            (search-forward "Source build")
+            (cl-letf (((symbol-function 'call-interactively)
+                       (lambda (cmd &rest _) (setq called cmd))))
+              (deb-packaging-status-visit))
+            (should (eq called
+                        'deb-packaging-commands-source-build-transient)))
+        (kill-buffer displayed)))))
+
 (provide 'deb-packaging-test-status)
 ;;; deb-packaging-test-status.el ends here
