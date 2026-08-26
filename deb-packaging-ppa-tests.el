@@ -179,6 +179,15 @@ so keying only on the PPA would clobber reports across packages."
 (defconst deb-packaging-ppa-tests--status-icons
   '((pass . "✅") (fail . "❌") (bad . "⛔")))
 
+(defun deb-packaging-ppa-tests--subtest-face (state)
+  "Return the status face for a subtest STATE string.
+PASS green, SKIP dim (not run, not passed), FLAKY yellow, failures red."
+  (pcase state
+    ("PASS" 'deb-packaging-status-done)
+    ("SKIP" 'shadow)
+    ("FLAKY" 'deb-packaging-status-running)
+    (_ 'deb-packaging-status-failed)))
+
 (defun deb-packaging-ppa-tests--insert-note (text)
   "Insert an indented, dimmed note TEXT."
   (insert (format "    %s\n" (propertize text 'font-lock-face 'shadow))))
@@ -206,7 +215,9 @@ so keying only on the PPA would clobber reports across packages."
                                  (plist-get r :arch)
                                  (plist-get r :timestamp))
                          'font-lock-face
-                         (if (eq status 'pass) 'success 'error))))
+                         (if (eq status 'pass)
+                             'deb-packaging-status-done
+                           'deb-packaging-status-failed))))
               (magit-insert-section-body
                 (dolist (st (plist-get r :subtests))
                   (insert (format "      %-36s %s\n"
@@ -214,9 +225,8 @@ so keying only on the PPA would clobber reports across packages."
                                   (propertize
                                    (cdr st)
                                    'font-lock-face
-                                   (if (member (cdr st) '("PASS" "SKIP"))
-                                       'success
-                                     'error)))))
+                                   (deb-packaging-ppa-tests--subtest-face
+                                    (cdr st))))))
                 (when-let ((url (plist-get r :log-url)))
                   (insert "      "
                           (propertize "Log: " 'font-lock-face 'shadow)

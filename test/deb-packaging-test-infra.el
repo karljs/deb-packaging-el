@@ -183,13 +183,14 @@ Return the report buffer once its sentinel has fired."
 
 ;;; Mode-map conventions
 
-(ert-deftest deb-packaging-test-infra/lxd-map-s-sorts-t-starts ()
+(ert-deftest deb-packaging-test-infra/lxd-map-s-sorts-s-starts-k-stops ()
   (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "S")
               #'tabulated-list-sort))
-  (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "t")
-              #'deb-packaging-infra-start-lxd-entry))
   (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "s")
-              #'deb-packaging-infra-stop-lxd-entry)))
+              #'deb-packaging-infra-start-lxd-entry))
+  (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "k")
+              #'deb-packaging-infra-stop-lxd-entry))
+  (should (null (lookup-key deb-packaging-infra-lxd-mode-map "t"))))
 
 (ert-deftest deb-packaging-test-infra/schroots-map-question-opens-dispatch ()
   (should (eq (lookup-key deb-packaging-infra-schroots-mode-map "?")

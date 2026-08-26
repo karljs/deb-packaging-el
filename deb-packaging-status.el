@@ -274,7 +274,7 @@ carrying PATH, so RET can open them."
                  ""))
          (mtime (if attrs
                     (format-time-string "%b %e %H:%M"
-                                        (file-attribute-status-change-time attrs))
+                                        (file-attribute-modification-time attrs))
                   "")))
     (insert (format "    %-45s %8s  %s\n"
                     (propertize base 'font-lock-face
@@ -288,14 +288,20 @@ carrying PATH, so RET can open them."
 
 (defun deb-packaging-status--insert-state-row (pairs)
   "Insert a state row from PAIRS, a list of (label . value) cells.
-Renders each as \"Label: value\"."
+Renders each as \"Label: value\".  A value that already carries its own
+font-lock-face (e.g. the ✓/✗ image cells) keeps it; only plain values
+get the default face."
   (when pairs
     (let ((parts (mapcar
                   (lambda (pair)
-                    (concat
-                     (propertize (car pair) 'font-lock-face 'shadow)
-                     ": "
-                     (propertize (cdr pair) 'font-lock-face 'default)))
+                    (let ((value (cdr pair)))
+                      (concat
+                       (propertize (car pair) 'font-lock-face 'shadow)
+                       ": "
+                       (if (text-property-not-all
+                            0 (length value) 'font-lock-face nil value)
+                           value
+                         (propertize value 'font-lock-face 'default)))))
                   pairs)))
       (insert "    "
               (mapconcat #'identity parts
@@ -524,9 +530,9 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                                 (propertize (concat "✓ " image)
                                             'font-lock-face
                                             'deb-packaging-status-done)
-                              (propertize (concat "✗ " image)
-                                          'font-lock-face
-                                          'deb-packaging-status-running)))))))
+                               (propertize (concat "✗ " image)
+                                           'font-lock-face
+                                           'deb-packaging-status-failed)))))))
             (when (and image (not exists))
               (when-let ((hint (deb-packaging-commands--test-image-build-hint
                                  runner (deb-packaging-config--effective-distro))))

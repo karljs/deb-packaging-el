@@ -527,8 +527,8 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
   :doc "Keymap for the LXD list buffer."
   :parent tabulated-list-mode-map
   "d" #'deb-packaging-infra-delete-lxd-entry
-  "s" #'deb-packaging-infra-stop-lxd-entry
-  "t" #'deb-packaging-infra-start-lxd-entry
+  "k" #'deb-packaging-infra-stop-lxd-entry
+  "s" #'deb-packaging-infra-start-lxd-entry
   "x" #'deb-packaging-infra-shell-lxd-entry
   "c" #'deb-packaging-infra-create-lxd
   "g" #'deb-packaging-infra-refresh-lxd

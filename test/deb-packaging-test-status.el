@@ -504,5 +504,56 @@ phase transient.  Source-build failed so the section renders expanded."
                         'deb-packaging-commands-source-build-transient)))
         (kill-buffer displayed)))))
 
+(ert-deftest deb-packaging-test-status/missing-test-image-uses-failed-face ()
+  "A missing test image is a failed prerequisite, not running."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble"
+            :artifacts
+            '(("foo_1.2-3.dsc" . "")
+              ("foo_1.2-3_source.changes" . "")
+              ("foo_1.2-3_amd64.changes"
+               . "Format: 1.8\n\nFiles:\n d41d8cd98f00b204e9800998ecf8427e 1234 admin optional foo_1.2-3_amd64.deb\n")
+              ("foo_1.2-3_amd64.deb" . "")))
+    (let ((displayed nil))
+      (deb-packaging-test--with-mocked-process
+          '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . 1))
+        (cl-letf (((symbol-function 'read-directory-name)
+                   (lambda (&rest _) (error "must not prompt")))
+                  ((symbol-function 'deb-packaging-display-buffer)
+                   (lambda (buf _category) (setq displayed buf))))
+          (deb-packaging-status)))
+      (unwind-protect
+          (with-current-buffer displayed
+            (goto-char (point-min))
+            (search-forward "✗ autopkgtest/ubuntu/noble/amd64")
+            ;; Point sits just past the match; the last matched char
+            ;; carries the face.
+            (should (eq (get-text-property (1- (point)) 'font-lock-face)
+                        'deb-packaging-status-failed)))
+        (kill-buffer displayed)))))
+
+(ert-deftest deb-packaging-test-status/file-line-shows-mtime-not-ctime ()
+  "Artifact lines show the modification time; a later metadata-only
+change (chmod) must not alter the displayed stamp."
+  (let* ((tmp (make-temp-file "deb-mtime-" t))
+         (file (expand-file-name "foo_1.2-3.dsc" tmp)))
+    (unwind-protect
+        (progn
+          (write-region "content\n" nil file)
+          (set-file-times file (encode-time 0 0 12 1 1 2021))
+          (let ((stamp (with-temp-buffer
+                         (deb-packaging-status--insert-file-line-1 file)
+                         (buffer-substring-no-properties (point-min)
+                                                         (point-max)))))
+            (should (string-match-p "Jan  1 12:00" stamp)))
+          ;; Metadata change only: ctime moves, mtime must not.
+          (set-file-modes file #o700)
+          (let ((stamp (with-temp-buffer
+                         (deb-packaging-status--insert-file-line-1 file)
+                         (buffer-substring-no-properties (point-min)
+                                                         (point-max)))))
+            (should (string-match-p "Jan  1 12:00" stamp))))
+      (delete-directory tmp t))))
+
 (provide 'deb-packaging-test-status)
 ;;; deb-packaging-test-status.el ends here

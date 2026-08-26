@@ -27,9 +27,11 @@
    "  - llvm-toolchain-19: noble/llvm-toolchain-19/1:19.1.7-21ubuntu1~24.04.1 [amd64]\n"
    "    + ❌ llvm-toolchain-19 on noble for amd64   @ 09.02.26 23:21:05\n"
    "      • Log: https://autopkgtest.ubuntu.com/results/autopkgtest-noble-karljs-sru-llvm-19-noble/noble/amd64/l/llvm-toolchain-19/20260209_232105_b52c9@/log.gz\n"
-   "      • Status: FAIL\n"
-   "      • command1                  FAIL   🟥\n"
-   "      • cmake-llvm-test           PASS   🟩\n"
+    "      • Status: FAIL\n"
+    "      • command1                  FAIL   🟥\n"
+    "      • cmake-llvm-test           PASS   🟩\n"
+    "      • flaky-test                FLAKY  🟨\n"
+    "      • skipped-test              SKIP   ⏭️\n"
    "  - llvm-toolchain-19: noble/llvm-toolchain-19/1:19.1.7-21ubuntu1~24.04.1 [armhf]\n"
    "    + ✅ llvm-toolchain-19 on noble for armhf   @ 09.02.26 23:21:00\n"
    "      • Log: https://autopkgtest.ubuntu.com/results/autopkgtest-noble-karljs-sru-llvm-19-noble/noble/armhf/l/llvm-toolchain-19/20260209_232100_73c7d@/log.gz\n"
@@ -90,7 +92,8 @@
       (should (equal (plist-get fail :timestamp) "09.02.26 23:21:05"))
       (should (string-match-p "log.gz" (plist-get fail :log-url)))
       (should (equal (plist-get fail :subtests)
-                     '(("command1" . "FAIL") ("cmake-llvm-test" . "PASS")))))
+                     '(("command1" . "FAIL") ("cmake-llvm-test" . "PASS")
+                       ("flaky-test" . "FLAKY") ("skipped-test" . "SKIP")))))
     (let ((pass (nth 1 results)))
       (should (eq (plist-get pass :status) 'pass))
       (should (null (plist-get pass :subtests))))
@@ -135,7 +138,7 @@
 (ert-deftest deb-packaging-test-ppa-tests/render-smoke ()
   "The rendered report contains the key lines and text properties."
   (let ((parsed (deb-packaging-ppa-tests--parse
-                 deb-packaging-test-ppa-tests--fixture)))
+                  deb-packaging-test-ppa-tests--fixture)))
     (with-temp-buffer
       (deb-packaging-ppa-tests-mode)
       (deb-packaging-ppa-tests--render parsed "ppa:me/x")
@@ -151,6 +154,42 @@
       (should (deb-packaging-test-ppa-tests--has-prop-value-p
                'deb-packaging-ppa-tests-desc
                "llvm-toolchain-19 on noble/amd64")))))
+
+(ert-deftest deb-packaging-test-ppa-tests/subtest-faces-distinct ()
+  "PASS green, SKIP dim, FLAKY yellow, FAIL red; the report uses the
+package's named status faces, not raw success/error."
+  (should (eq (deb-packaging-ppa-tests--subtest-face "PASS")
+              'deb-packaging-status-done))
+  (should (eq (deb-packaging-ppa-tests--subtest-face "SKIP") 'shadow))
+  (should (eq (deb-packaging-ppa-tests--subtest-face "FLAKY")
+              'deb-packaging-status-running))
+  (should (eq (deb-packaging-ppa-tests--subtest-face "FAIL")
+              'deb-packaging-status-failed))
+  (should (eq (deb-packaging-ppa-tests--subtest-face "BAD")
+              'deb-packaging-status-failed))
+  ;; The rendered lines actually carry the faces.
+  (with-temp-buffer
+    (deb-packaging-ppa-tests-mode)
+    (deb-packaging-ppa-tests--render
+     (deb-packaging-ppa-tests--parse deb-packaging-test-ppa-tests--fixture)
+     "ppa:me/x")
+    (dolist (cell '(("command1" "FAIL" deb-packaging-status-failed)
+                    ("cmake-llvm-test" "PASS" deb-packaging-status-done)
+                    ("flaky-test" "FLAKY" deb-packaging-status-running)
+                    ("skipped-test" "SKIP" shadow)))
+      (goto-char (point-min))
+      ;; Find the subtest's line, then its state word; point ends just
+      ;; past the state, so the face check targets the last matched
+      ;; char (the face covers the state string only).
+      (search-forward (concat (car cell) " "))
+      (search-forward (cadr cell))
+      (should (eq (get-text-property (1- (point)) 'font-lock-face)
+                  (nth 2 cell))))
+    ;; Result headings use the named faces too.
+    (goto-char (point-min))
+    (search-forward "llvm-toolchain-19 on noble for armhf")
+    (should (eq (get-text-property (point) 'font-lock-face)
+                'deb-packaging-status-done))))
 
 (ert-deftest deb-packaging-test-ppa-tests/open-log-from-result-heading ()
   (let (opened)
