@@ -55,7 +55,7 @@ The target distro comes from the changelog; other transients inherit it."
    ("u" "Patch queue (gbp pq)..." deb-packaging-pq-transient)
    ("P" "Propagate..."       deb-packaging-propagate-transient)]
   ["Publish"
-   ("p" "PPA upload..."   deb-packaging-upload-transient)]
+   ("U" "PPA upload..."   deb-packaging-upload-transient)]
   ["Cleanup"
    ("c" "Clean artifacts..." deb-packaging-commands-clean-transient)
    ("K" "Kill build-output buffers" deb-packaging-commands-kill-output-buffers)

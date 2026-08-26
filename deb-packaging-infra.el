@@ -1098,7 +1098,7 @@ processes (refresh cancels them) only clean up."
    ("v" "QEMU images (autopkgtest)..."  deb-packaging-infra-qemu-images)
    ("p" "PPAs (Launchpad)..."           deb-packaging-infra-ppas)]
   ["Navigation"
-   ("q" "Back" transient-quit-one)])
+   ("q" "Quit" transient-quit-one)])
 
 (provide 'deb-packaging-infra)
 ;;; deb-packaging-infra.el ends here

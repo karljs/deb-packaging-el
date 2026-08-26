@@ -96,7 +96,8 @@ lint-transient pattern)."
    ("-i"  "Diff ignore pattern"    "-i")]
   ["Run"
    ("s" "Build source" deb-packaging-commands-source-build)
-   ("e" "Export orig (git ubuntu)" deb-packaging-commands-export-orig)])
+   ("e" "Export orig (git ubuntu)" deb-packaging-commands-export-orig)
+   ("q" "Quit" transient-quit-one)])
 
 ;;; 2. Binary build (sbuild)
 
@@ -257,7 +258,8 @@ The distro comes from the changelog."
      :multi-value repeat
      :description "Local .deb to install in chroot")]
   ["Build"
-   ("b" "Build binary" deb-packaging-commands-sbuild)])
+   ("b" "Build binary" deb-packaging-commands-sbuild)
+   ("q" "Quit" transient-quit-one)])
 
 ;;; 3. Lint (lintian + ubuntu-lint)
 
@@ -299,7 +301,8 @@ Each action reads only its own flags."
    ("l" "Lintian source"        deb-packaging-commands-lintian-source)
    ("L" "Lintian binary (all)"  deb-packaging-commands-lintian-binary)
    ("o" "Lintian one binary..." deb-packaging-commands-lintian-binary-one)
-   ("u" "Ubuntu-lint"           deb-packaging-commands-ubuntu-lint)])
+   ("u" "Ubuntu-lint"           deb-packaging-commands-ubuntu-lint)
+   ("q" "Quit"                  transient-quit-one)])
 
 ;;; 4. Autopkgtest
 
@@ -339,9 +342,10 @@ distro comes from the changelog."
      :prompt "PPA (e.g. ppa:user/name): "
      :reader deb-packaging-transients--read-ppa
      :always-read t)]
-   ["Run"
-    ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)
-    ("p" "PPA test report" deb-packaging-ppa-tests-show)])
+  ["Run"
+   ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)
+   ("p" "PPA test report" deb-packaging-ppa-tests-show)
+   ("q" "Quit" transient-quit-one)])
 
 ;;; 5. Upload / PPA
 
@@ -368,7 +372,8 @@ distro comes from the changelog."
     :always-read t
     :allow-empty nil)]
   ["Upload"
-   ("p" "Upload with dput" deb-packaging-commands-dput-upload)])
+   ("p" "Upload with dput" deb-packaging-commands-dput-upload)
+   ("q" "Quit" transient-quit-one)])
 
 ;;; 6. Clean artifacts
 
@@ -381,7 +386,8 @@ distro comes from the changelog."
    ("-a" "Current-version artifacts" "--artifacts")
    ("-S" "Stale artifacts (other versions)" "--stale")]
   ["Run"
-   ("c" "Clean" deb-packaging-commands-clean)])
+   ("c" "Clean" deb-packaging-commands-clean)
+   ("q" "Quit" transient-quit-one)])
 
 ;;; 7. Reset source tree
 
@@ -395,7 +401,8 @@ distro comes from the changelog."
    ("-p" "Remove .pc/ directory" "--pc")
    ("-f" "Remove debian/files"   "--files")]
   ["Run"
-    ("r" "Reset" deb-packaging-commands-reset)])
+    ("r" "Reset" deb-packaging-commands-reset)
+    ("q" "Quit" transient-quit-one)])
 
 ;;; 8. Dev shell (LXD)
 
@@ -413,7 +420,7 @@ distro comes from the changelog."
   ["Manage"
    ("k" "Destroy dev container" deb-packaging-dev-destroy)]
   ["Navigation"
-   ("q" "Back" transient-quit-one)])
+   ("q" "Quit" transient-quit-one)])
 
 (provide 'deb-packaging-transients)
 ;;; deb-packaging-transients.el ends here
