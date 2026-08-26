@@ -756,39 +756,79 @@ Return PPA address strings in order."
 Cons of (PPAS . FETCHED-AT-FLOAT-TIME), or nil.")
 
 (defvar deb-packaging-infra--ppa-cache-ttl 300
-  "Seconds before the PPA cache is stale and refetched synchronously.")
+  "Seconds before the PPA cache is stale and refreshed in the background.")
+
+(defvar deb-packaging-infra--ppa-warm-proc nil
+  "In-flight background `ppa list' refresh, or nil.")
+
+(defvar deb-packaging-infra--ppa-tool-missing-warned nil
+  "Non-nil once the missing-`ppa'-tool warning has been shown.")
 
 (defun deb-packaging-infra--invalidate-ppa-cache ()
   "Clear the PPA cache.  Call after creating or deleting a PPA."
   (setq deb-packaging-infra--ppa-cache nil))
 
-(defun deb-packaging-infra--fetch-ppas-sync ()
-  "Fetch and cache PPA names for the user and configured teams synchronously.
-Personal PPAs first, then team-config PPAs.  Blocks on `ppa list'; team
-config failures are warned and skipped."
-  (let ((result (deb-packaging-infra--parse-ppa-lines
-                 (shell-command-to-string "ppa list 2>/dev/null"))))
-    (dolist (cfg (deb-packaging-infra--team-config-files))
-      (condition-case err
-          (let ((output (shell-command-to-string
-                         (format "ppa list -C %s 2>/dev/null"
-                                 (shell-quote-argument cfg)))))
-            (dolist (line (deb-packaging-infra--parse-ppa-lines output))
-              (cl-pushnew line result :test #'string=)))
-        (error (message "ppa team config %s failed: %s" cfg err))))
-    (setq result (nreverse result))
-    (setq deb-packaging-infra--ppa-cache (cons result (float-time)))
-    result))
-
-(defun deb-packaging-infra--list-ppas ()
-  "Return PPA names for the user and configured teams.
-Cached for `deb-packaging-infra--ppa-cache-ttl' seconds; blocks on the
-first call and after the TTL expires."
-  (if (and deb-packaging-infra--ppa-cache
+(defun deb-packaging-infra--warm-ppa-cache-async ()
+  "Refresh the PPA cache in the background; never blocks the caller.
+No-op while the cache is fresh or a refresh is already in flight, so it
+is safe to call speculatively (e.g. when opening the status buffer).
+No-op in batch Emacs: background network fetches do not belong in
+batch runs.  A missing `ppa' binary is reported once and caches an
+empty list; fetch failures just yield whatever the tool managed to
+print."
+  (unless noninteractive
+    (cond
+     ((not (executable-find "ppa"))
+      (unless deb-packaging-infra--ppa-tool-missing-warned
+        (setq deb-packaging-infra--ppa-tool-missing-warned t)
+        (message "ppa tool not installed; PPA completion unavailable"))
+      ;; Timestamp it so the warning and the empty list hold for the TTL.
+      (setq deb-packaging-infra--ppa-cache (cons nil (float-time))))
+     ((and deb-packaging-infra--ppa-cache
            (< (- (float-time) (cdr deb-packaging-infra--ppa-cache))
               deb-packaging-infra--ppa-cache-ttl))
-      (car deb-packaging-infra--ppa-cache)
-    (deb-packaging-infra--fetch-ppas-sync)))
+      nil)                                ; fresh
+     ((process-live-p deb-packaging-infra--ppa-warm-proc)
+      nil)                                ; already warming
+     (t
+      (let* ((cfgs (deb-packaging-infra--team-config-files))
+             (script (mapconcat
+                      #'identity
+                      (cons "ppa list 2>/dev/null"
+                            (mapcar (lambda (cfg)
+                                      (format "ppa list -C %s 2>/dev/null"
+                                              (shell-quote-argument cfg)))
+                                    cfgs))
+                      "; "))
+             (temp-buf (generate-new-buffer " *ppa-warm*")))
+        (setq deb-packaging-infra--ppa-warm-proc
+              (make-process
+               :name "ppa-warm"
+               :buffer temp-buf
+               :command (list "sh" "-c" script)
+               :noquery t
+               :sentinel
+               (lambda (proc _event)
+                 (when (memq (process-status proc) '(exit signal))
+                   (unwind-protect
+                       (when (eq (process-status proc) 'exit)
+                         (setq deb-packaging-infra--ppa-cache
+                               (cons (deb-packaging-infra--parse-ppa-lines
+                                      (with-current-buffer temp-buf
+                                        (buffer-string)))
+                                     (float-time))))
+                     (kill-buffer temp-buf)))))))))))
+
+(defun deb-packaging-infra--list-ppas ()
+  "Return PPA names for the user and configured teams, without blocking.
+A fresh cache is returned as-is; a stale or cold one returns whatever is
+cached (possibly nil) while a background refresh warms the next prompt.
+Free-text input at the callers works regardless of candidates."
+  (unless (and deb-packaging-infra--ppa-cache
+               (< (- (float-time) (cdr deb-packaging-infra--ppa-cache))
+                  deb-packaging-infra--ppa-cache-ttl))
+    (deb-packaging-infra--warm-ppa-cache-async))
+  (car deb-packaging-infra--ppa-cache))
 
 (defun deb-packaging-infra--ppa-owner (ppa)
   "Return the owner part of PPA string PPA."
@@ -802,16 +842,17 @@ first call and after the TTL expires."
 
 (defun deb-packaging-infra--read-ppa (prompt)
   "Read a PPA name with PROMPT, or use the row at point.
-Inside the PPAs list buffer, candidates are the buffer's own rows, so
-reading never blocks on a synchronous `ppa list' call.  Elsewhere the
-cached list is used."
+Inside the PPAs list buffer, candidates are the buffer's own rows.
+Elsewhere the cached list is used; with no candidates (cold cache, the
+background refresh still running, or `ppa' not installed) the prompt
+falls back to free text rather than erroring."
   (or (tabulated-list-get-id)
       (let ((ppas (if (derived-mode-p 'deb-packaging-infra-ppas-mode)
                       (mapcar #'car tabulated-list-entries)
                     (deb-packaging-infra--list-ppas))))
-        (unless ppas
-          (user-error "No PPAs listed yet; press g and try again"))
-        (completing-read prompt ppas nil nil))))
+        (if ppas
+            (completing-read prompt ppas nil nil)
+          (read-string prompt)))))
 
 (defun deb-packaging-infra-create-ppa ()
   "Create a Launchpad PPA via `ppa create'."

@@ -374,15 +374,134 @@ The sentinel fires during the wait, while the mode buffer is alive."
         (should (equal (deb-packaging-infra--read-ppa "PPA: ") "ppa:me/one"))
         (should (equal seen-collection '("ppa:me/one" "ppa:me/two")))))))
 
-(ert-deftest deb-packaging-test-infra/read-ppa-empty-rows-errors ()
-  "No rows and no id at point is an upfront error, not a network call."
+(ert-deftest deb-packaging-test-infra/read-ppa-empty-rows-free-text ()
+  "No rows, no id at point, and no cached candidates: the prompt falls
+back to free text instead of erroring (the background warm may still be
+in flight)."
   (with-temp-buffer
     (deb-packaging-infra-ppas-mode)
     (setq tabulated-list-entries nil)
-    (cl-letf (((symbol-function 'deb-packaging-infra--list-ppas)
-               (lambda () (error "must not call ppa list"))))
-      (should-error (deb-packaging-infra--read-ppa "PPA: ")
-                    :type 'user-error))))
+    (let ((deb-packaging-infra--ppa-cache nil))
+      (cl-letf (((symbol-function 'deb-packaging-infra--list-ppas)
+                 (lambda () nil))
+                ((symbol-function 'read-string)
+                 (lambda (prompt &rest _) (cons 'read prompt)))
+                ((symbol-function 'completing-read)
+                 (lambda (&rest _) (error "must not complete"))))
+        (should (equal (deb-packaging-infra--read-ppa "PPA: ")
+                       '(read . "PPA: ")))))))
+
+;;; PPA candidate cache: non-blocking list, background warm
+
+(ert-deftest deb-packaging-test-infra/list-ppas-fresh-cache-no-warm ()
+  (let ((deb-packaging-infra--ppa-cache (cons '("ppa:me/x") (float-time)))
+        (deb-packaging-infra--ppa-warm-proc nil))
+    (cl-letf (((symbol-function 'deb-packaging-infra--warm-ppa-cache-async)
+               (lambda () (error "must not warm"))))
+      (should (equal (deb-packaging-infra--list-ppas) '("ppa:me/x"))))))
+
+(ert-deftest deb-packaging-test-infra/list-ppas-stale-returns-stale-and-warms ()
+  "A stale cache returns the old list immediately (no blocking fetch)
+while the background refresh warms the next prompt."
+  (let ((deb-packaging-infra--ppa-cache
+         (cons '("ppa:me/old") (- (float-time) 1000)))
+        (deb-packaging-infra--ppa-warm-proc nil)
+        (warmed 0))
+    (cl-letf (((symbol-function 'deb-packaging-infra--warm-ppa-cache-async)
+               (lambda () (cl-incf warmed))))
+      (should (equal (deb-packaging-infra--list-ppas) '("ppa:me/old")))
+      (should (= warmed 1)))))
+
+(ert-deftest deb-packaging-test-infra/list-ppas-cold-returns-nil-and-warms ()
+  (let ((deb-packaging-infra--ppa-cache nil)
+        (deb-packaging-infra--ppa-warm-proc nil)
+        (warmed 0))
+    (cl-letf (((symbol-function 'deb-packaging-infra--warm-ppa-cache-async)
+               (lambda () (cl-incf warmed))))
+      (should (null (deb-packaging-infra--list-ppas)))
+      (should (= warmed 1)))))
+
+(ert-deftest deb-packaging-test-infra/list-ppas-never-spawns-in-batch ()
+  "Batch Emacs must not kick background network fetches, so tests stay
+hermetic even with a cold cache and the real warm in place."
+  (let ((deb-packaging-infra--ppa-cache nil)
+        (deb-packaging-infra--ppa-warm-proc nil)
+        (deb-packaging-infra--ppa-tool-missing-warned nil))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest _) (error "must not spawn")))
+              ((symbol-function 'message) #'ignore))
+      (should (null (deb-packaging-infra--list-ppas))))))
+
+(ert-deftest deb-packaging-test-infra/warm-ppa-cache-missing-tool-warns-once ()
+  (let ((deb-packaging-infra--ppa-cache nil)
+        (deb-packaging-infra--ppa-warm-proc nil)
+        (deb-packaging-infra--ppa-tool-missing-warned nil)
+        (messages nil))
+    (cl-letf (((symbol-function 'executable-find) (lambda (_) nil))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (push (apply #'format fmt args) messages))))
+      (let ((noninteractive nil))
+        (deb-packaging-infra--warm-ppa-cache-async)
+        (deb-packaging-infra--warm-ppa-cache-async))
+      ;; Warned exactly once across two calls.
+      (should (equal (cl-count-if
+                      (lambda (m) (string-match-p "ppa tool not installed" m))
+                      messages)
+                     1))
+      ;; Empty list cached for the TTL: the second call above was a
+      ;; no-op against the timestamped empty cache.
+      (should (null (car deb-packaging-infra--ppa-cache)))
+      (should (cdr deb-packaging-infra--ppa-cache)))))
+
+(defun deb-packaging-test-infra--warm-with-echo (output)
+  "Run the real async warm with the fetch command replaced by an echo.
+OUTPUT is the string the mock `ppa list' prints.  Returns the process."
+  (let ((real-make-process (symbol-function 'make-process))
+        (proc nil))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest props)
+                 (setq proc
+                       (apply real-make-process
+                              (plist-put props :command
+                                         (list "sh" "-c"
+                                               (format "echo %s"
+                                                       (shell-quote-argument
+                                                        output)))))))))
+      (let ((noninteractive nil))
+        (deb-packaging-infra--warm-ppa-cache-async)))
+    proc))
+(ert-deftest deb-packaging-test-infra/warm-ppa-cache-updates-cache ()
+  (let ((deb-packaging-infra--ppa-cache nil)
+        (deb-packaging-infra--ppa-warm-proc nil)
+        (deb-packaging-infra--ppa-tool-missing-warned t))
+    (cl-letf (((symbol-function 'executable-find) (lambda (_) t))
+              ((symbol-function 'deb-packaging-infra--team-config-files)
+               (lambda () nil)))
+      (let ((proc (deb-packaging-test-infra--warm-with-echo
+                   "Some header\n  ppa:me/one\n  ppa:me/two")))
+        (unwind-protect
+            (progn
+              (deb-packaging-test-run--wait proc)
+              (should (equal (car deb-packaging-infra--ppa-cache)
+                             '("ppa:me/one" "ppa:me/two")))
+              (should (cdr deb-packaging-infra--ppa-cache)))
+          (when (process-live-p proc) (delete-process proc)))))))
+
+(ert-deftest deb-packaging-test-infra/warm-ppa-cache-skips-when-in-flight ()
+  "A refresh already running means no second spawn."
+  (let ((deb-packaging-infra--ppa-cache nil)
+        (deb-packaging-infra--ppa-warm-proc
+         (make-process :name "warm-inflight" :command '("sleep" "30")
+                       :noquery t))
+        (deb-packaging-infra--ppa-tool-missing-warned t))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (_) t))
+                  ((symbol-function 'make-process)
+                   (lambda (&rest _) (error "must not spawn"))))
+          (let ((noninteractive nil))
+            (deb-packaging-infra--warm-ppa-cache-async)))
+      (delete-process deb-packaging-infra--ppa-warm-proc))))
 
 ;;; Single-update confirmation
 

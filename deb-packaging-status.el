@@ -878,6 +878,10 @@ Outside a package tree, prompt for one first (like `magit-status')."
                       (deb-packaging-detect--read-package-dir)))
          (name (deb-packaging-detect--package-name pkg-dir))
          (buf (get-buffer-create (deb-packaging-status--buffer-name name))))
+    ;; Pre-warm the PPA candidate cache in the background so the first
+    ;; upload/test PPA prompt usually has completion.  No-op when fresh.
+    (when (fboundp 'deb-packaging-infra--warm-ppa-cache-async)
+      (deb-packaging-infra--warm-ppa-cache-async))
     (with-current-buffer buf
       (when pkg-dir
         (setq default-directory pkg-dir))
