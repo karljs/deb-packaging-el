@@ -429,6 +429,41 @@ Return nil if PPA is not a recognisable ppa: address."
       (format "deb [trusted=yes] http://ppa.launchpadcontent.net/%s/%s/ubuntu/ %s main"
               owner name distro))))
 
+(defun deb-packaging-commands--ppa-series-published-p (ppa distro)
+  "Return whether PPA publishes a DISTRO series.
+t means the Release file exists (HTTP 200); nil means definitively not
+(403 for an empty/deleted PPA, 404 for an unpublished series);
+\\='unknown means the probe could not answer (curl absent, timeout, 5xx)
+and callers should fail open."
+  (let ((owner (deb-packaging-infra--ppa-owner ppa))
+        (name (deb-packaging-infra--ppa-name ppa)))
+    (if (not (and owner name))
+        'unknown
+      (let ((code (deb-packaging-commands--probe-http-code
+                   (format "http://ppa.launchpadcontent.net/%s/%s/ubuntu/dists/%s/Release"
+                           owner name distro))))
+        (pcase code
+          ("200" t)
+          ((or "403" "404") nil)
+          (_ 'unknown))))))
+
+(defun deb-packaging-commands--probe-http-code (url)
+  "Return the HTTP status code string for a HEAD request to URL, or nil.
+Nil when curl is missing, times out, or errors; the caller decides how
+to treat an unanswerable probe."
+  (let ((code (with-output-to-string
+                (with-current-buffer standard-output
+                  ;; 10s cap: a hanging probe must not stall dispatch.
+                  (condition-case nil
+                      (call-process "curl" nil t nil
+                                    "-s" "-o" "/dev/null" "-w" "%{http_code}"
+                                    "--head" "--max-time" "10" url)
+                    (file-missing nil))))))
+    (let ((trimmed (string-trim code)))
+      (if (string-match-p "\\`[0-9][0-9][0-9]\\'" trimmed)
+          trimmed
+        nil))))
+
 (defun deb-packaging-commands--expand-extra-repo (value distro)
   "Expand VALUE into an extra-repository string for DISTRO.
 A `deb-packaging-commands-sbuild-variants' key expands its template; a
@@ -469,6 +504,25 @@ The --dist chroot selection always comes from the changelog."
              (passthrough (cl-remove-if
                            (lambda (a) (string-prefix-p "--extra-repository=" a))
                            args)))
+        ;; Pre-flight ppa: extra-repos: a PPA with no series for this
+        ;; distro kills apt-get update minutes into the build; fail at
+        ;; dispatch with the reason instead.  Only a definitive
+        ;; negative (nil) blocks; an unanswerable probe ('unknown)
+        ;; fails open.
+        (let ((dead nil))
+          (dolist (a repo-args)
+            (let ((entry (string-remove-prefix "--extra-repository=" a)))
+              (when (string-prefix-p "ppa:" entry)
+                (when (null (deb-packaging-commands--ppa-series-published-p
+                             entry distro))
+                  (push entry dead)))))
+          (when dead
+            (user-error
+             "PPA%s not published for %s (403 = empty/deleted PPA, 404 = series never published):
+  %s
+Remove %s from the binary-build -e menu, or publish the series."
+             (if (cdr dead) "s" "") distro (string-join (nreverse dead) "\n  ")
+             (if (cdr dead) "them" "it"))))
         (when (nth 0 info)
           (deb-packaging-repos-save
            (nth 0 info) distro

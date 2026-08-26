@@ -286,10 +286,12 @@ and re-emit without doubling the argument."
                 ((symbol-function 'deb-packaging-repos-save)
                  (lambda (pkg distro entries)
                    (setq captured-save (list pkg distro entries)))))
-        (deb-packaging-commands-sbuild
-         '("--extra-repository=ppa:me/x"
-           "--extra-repository=proposed"
-           "--extra-repository=deb http://example.com/ubuntu noble main")))
+        (deb-packaging-test--with-mocked-process
+            '(("curl" . "200"))
+          (deb-packaging-commands-sbuild
+           (deb-packaging-test-commands--sbuild-args
+            '("ppa:me/x" "proposed"
+              "deb http://example.com/ubuntu noble main")))))
       (should (member "--dist=noble" captured-args))
       (should (member "--extra-repository=deb [trusted=yes] http://ppa.launchpadcontent.net/me/x/ubuntu/ noble main"
                       captured-args))
@@ -711,6 +713,109 @@ Matches on the printed form: the layout mixes lists and vectors, which
     (should (string-match-p
              "\\<deb-packaging-transients--sbuild-shell\\>"
              (prin1-to-string layout)))))
+
+;;; PPA extra-repo pre-flight
+
+(defun deb-packaging-test-commands--sbuild-args (repos)
+  "Build a transient ARGS list with the given extra REPOS entries."
+  (mapcar (lambda (r) (concat "--extra-repository=" r)) repos))
+
+(defmacro deb-packaging-test-commands--with-sbuild-tree (&rest body)
+  "Run BODY inside a package tree with a .dsc, run-command mocked.
+Binds `captured-args' to whatever sbuild would run."
+  (declare (indent 0) (debug (body)))
+  `(deb-packaging-test--with-package-tree
+       '(:name "mypkg" :version "1.0-1" :distro "noble"
+               :artifacts (("mypkg_1.0-1.dsc" . "")))
+     (let ((captured-args nil))
+       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                  (lambda (_name args &optional _dir _key _buffer-dir)
+                    (setq captured-args args)))
+                 ((symbol-function 'deb-packaging-repos-save) #'ignore))
+         ,@body))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-errors-on-unpublished-ppa ()
+  "A ppa: entry with no series for the distro errors at dispatch,
+before sbuild runs."
+  (deb-packaging-test-commands--with-sbuild-tree
+    (deb-packaging-test--with-mocked-process
+        '(("curl" . "403"))
+      (should-error (deb-packaging-commands-sbuild
+                     (deb-packaging-test-commands--sbuild-args
+                      '("ppa:karljs/empty")))
+                    :type 'user-error)
+      (should (null captured-args)))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-errors-on-missing-series ()
+  (deb-packaging-test-commands--with-sbuild-tree
+    (deb-packaging-test--with-mocked-process
+        '(("curl" . "404"))
+      (should-error (deb-packaging-commands-sbuild
+                     (deb-packaging-test-commands--sbuild-args
+                      '("ppa:karljs/only-noble")))
+                    :type 'user-error)
+      (should (null captured-args)))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-proceeds-when-published ()
+  (deb-packaging-test-commands--with-sbuild-tree
+    (deb-packaging-test--with-mocked-process
+        '(("curl" . "200"))
+      (deb-packaging-commands-sbuild
+       (deb-packaging-test-commands--sbuild-args '("ppa:karljs/good")))
+      (should (cl-some (lambda (a) (string-prefix-p
+                                    "--extra-repository=deb [trusted=yes]"
+                                    a))
+                       captured-args)))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-probe-fails-open ()
+  "An unanswerable probe (timeout, missing curl, 5xx) must not block
+the build."
+  (deb-packaging-test-commands--with-sbuild-tree
+    (deb-packaging-test--with-mocked-process
+        '(("curl" . "000"))
+      (deb-packaging-commands-sbuild
+       (deb-packaging-test-commands--sbuild-args '("ppa:karljs/flaky")))
+      (should captured-args))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-non-ppa-entries-unprobed ()
+  "Variant names and raw deb lines skip the probe entirely."
+  (deb-packaging-test-commands--with-sbuild-tree
+    (deb-packaging-test--with-mocked-process
+        '(("curl" . (error . "must not probe")))
+      (deb-packaging-commands-sbuild
+       (deb-packaging-test-commands--sbuild-args
+        '("proposed" "deb http://example.com/ubuntu noble main")))
+      (should (cl-some (lambda (a) (string-prefix-p
+                                    "--extra-repository=deb http://example.com"
+                                    a))
+                       captured-args)))))
+
+(ert-deftest deb-packaging-test-commands/ppa-series-published-p-mapping ()
+  "200 -> t, 403/404 -> nil, anything else -> unknown."
+  (dolist (cell '(("200" . t) ("403" . nil) ("404" . nil)
+                  ("500" . unknown) ("000" . unknown)))
+    (cl-letf (((symbol-function 'deb-packaging-commands--probe-http-code)
+               (lambda (_url) (car cell))))
+      (should (eq (deb-packaging-commands--ppa-series-published-p
+                   "ppa:owner/name" "noble")
+                  (cdr cell)))))
+  ;; Not a ppa: address: unanswerable, fail open.
+  (should (eq (deb-packaging-commands--ppa-series-published-p
+               "not-a-ppa" "noble")
+              'unknown)))
+
+(ert-deftest deb-packaging-test-commands/probe-http-code-parses-curl ()
+  (deb-packaging-test--with-mocked-process
+      '(("curl" . "200"))
+    (should (string= (deb-packaging-commands--probe-http-code
+                      "http://example.com/Release")
+                     "200"))))
+
+(ert-deftest deb-packaging-test-commands/probe-http-code-nil-on-garbage ()
+  (deb-packaging-test--with-mocked-process
+      '(("curl" . "curl: (7) couldn't connect"))
+    (should (null (deb-packaging-commands--probe-http-code
+                   "http://example.com/Release")))))
 
 (provide 'deb-packaging-test-commands)
 ;;; deb-packaging-test-commands.el ends here
