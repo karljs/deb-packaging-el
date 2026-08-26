@@ -38,25 +38,11 @@
   (format "Debian Packaging\nTarget distro: %s"
           (deb-packaging-config--effective-distro)))
 
-;;;###autoload
-(defun deb-packaging-set-distro (distro)
-  "Set the global target distro to DISTRO.
-Propagated to all per-tool transients and the status buffer."
-  (interactive
-   (list (completing-read
-          "Target distro: "
-          (deb-packaging-config--distro-choices)
-          nil t (deb-packaging-config--effective-distro))))
-  (deb-packaging-config--set-distro distro)
-  (message "Target distro set to %s" distro))
-
 (transient-define-prefix deb-packaging-dispatch-transient ()
   "Debian packaging commands.
-Set the target distro with `d'; other transients inherit it."
+The target distro comes from the changelog; other transients inherit it."
   :environment #'deb-packaging-transients--env
   [:description deb-packaging--dispatch-header]
-  ["Config"
-   ("d" "Set target distro..." deb-packaging-set-distro)]
   ["Build"
    ("s" "Source build..."  deb-packaging-commands-source-build-transient)
    ("b" "Binary build..."  deb-packaging-binary-build-transient)]

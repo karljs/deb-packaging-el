@@ -215,7 +215,7 @@ yes-or-no-p declines so nothing runs."
          (rs (car res))
          (cr (cadr res)))
     (should (null (nth 1 rs)))
-    (should (equal (nth 3 rs) deb-packaging-config-target-distro))
+    (should (equal (nth 3 rs) (deb-packaging-config--effective-distro)))
     (should (null (nth 4 cr)))
     (should (equal (nth 6 cr) "amd64"))))
 
@@ -225,7 +225,7 @@ yes-or-no-p declines so nothing runs."
          (rs (car res))
          (cr (cadr res)))
     (should (null (nth 1 rs)))
-    (should (equal (nth 3 rs) deb-packaging-config-target-distro))
+    (should (equal (nth 3 rs) (deb-packaging-config--effective-distro)))
     (should (null (nth 4 cr)))
     (should (equal (nth 6 cr) "amd64"))))
 
@@ -235,7 +235,7 @@ yes-or-no-p declines so nothing runs."
          (rs (car res))
          (cr (cadr res)))
     (should (null (nth 1 rs)))
-    (should (equal (nth 3 rs) deb-packaging-config-target-distro))
+    (should (equal (nth 3 rs) (deb-packaging-config--effective-distro)))
     (should (null (nth 4 cr)))
     (should (equal (nth 6 cr) "amd64"))))
 

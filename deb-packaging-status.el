@@ -52,12 +52,8 @@ Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
 
 (defun deb-packaging-status--collect-context ()
   "Gather fresh package context from `default-directory'.
-Return a plist, or nil outside a Debian package tree. Seeds the target
-distro once without clobbering user choice."
-  (let ((ctx (deb-packaging-detect--scan-context)))
-    (when ctx
-      (deb-packaging-config--maybe-seed-distro (plist-get ctx :distro)))
-    ctx))
+Return a plist, or nil outside a Debian package tree."
+  (deb-packaging-detect--scan-context))
 
 ;;; Section -> action dispatch
 ;;
@@ -297,14 +293,13 @@ Renders each as \"Label: value\"."
   "Insert the package title, path, and stale indicator from CTX."
   (let ((name (plist-get ctx :name))
         (version (plist-get ctx :version))
-        (distro (plist-get ctx :distro))
         (pkg-dir (plist-get ctx :pkg-dir))
         (stale (plist-get ctx :stale)))
     (insert (propertize name 'font-lock-face 'deb-packaging-status-title)
             " "
             (propertize version 'font-lock-face 'deb-packaging-status-version)
             "  "
-            (propertize (or distro deb-packaging-config-target-distro)
+            (propertize (deb-packaging-config--effective-distro)
                         'font-lock-face 'deb-packaging-status-distro)
             "\n")
     (insert (propertize (abbreviate-file-name pkg-dir)

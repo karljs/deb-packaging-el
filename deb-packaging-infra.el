@@ -157,8 +157,8 @@ mk-sbuild self-sudos; the comint buffer's pty carries its prompt."
   (interactive)
   (let* ((distro (read-string
                   (format "Distro (default %s): "
-                          deb-packaging-config-target-distro)
-                  nil nil deb-packaging-config-target-distro))
+                          (deb-packaging-config--effective-distro))
+                  nil nil (deb-packaging-config--effective-distro)))
          (arch (completing-read "Arch (default amd64): "
                                 '("amd64" "i386" "arm64" "armhf")
                                 nil t nil nil "amd64")))
@@ -423,8 +423,8 @@ Each plist has :name, :type, :status, and type-specific keys."
   (interactive)
   (let* ((distro (read-string
                   (format "Distro (default %s): "
-                          deb-packaging-config-target-distro)
-                  nil nil deb-packaging-config-target-distro))
+                          (deb-packaging-config--effective-distro))
+                  nil nil (deb-packaging-config--effective-distro)))
          (arch (completing-read "Arch (default amd64): "
                                 '("amd64" "arm64") nil t nil nil "amd64"))
          (cmd (format "autopkgtest-build-lxd ubuntu-daily:%s/%s" distro arch)))
@@ -628,8 +628,8 @@ buffer) is used only when it is not user-writable."
   (interactive)
   (let* ((distro (read-string
                   (format "Distro (default %s): "
-                          deb-packaging-config-target-distro)
-                  nil nil deb-packaging-config-target-distro))
+                          (deb-packaging-config--effective-distro))
+                  nil nil (deb-packaging-config--effective-distro)))
          (arch (completing-read "Arch (default amd64): "
                                 '("amd64" "arm64" "i386") nil t nil nil "amd64"))
          (sudo-p (not (file-writable-p deb-packaging-infra-qemu-dir))))
@@ -1045,7 +1045,7 @@ processes (refresh cancels them) only clean up."
 
 (defun deb-packaging-infra--header ()
   "Header for infrastructure transient."
-  (format "Infrastructure Management\nDistro: %s" deb-packaging-config-target-distro))
+  (format "Infrastructure Management\nDistro: %s" (deb-packaging-config--effective-distro)))
 
 (transient-define-prefix deb-packaging-infra-dispatch ()
   "Manage build and test infrastructure."

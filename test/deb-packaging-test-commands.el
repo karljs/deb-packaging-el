@@ -287,10 +287,10 @@ and re-emit without doubling the argument."
                  (lambda (pkg distro entries)
                    (setq captured-save (list pkg distro entries)))))
         (deb-packaging-commands-sbuild
-         '("--dist=noble"
-           "--extra-repository=ppa:me/x"
+         '("--extra-repository=ppa:me/x"
            "--extra-repository=proposed"
            "--extra-repository=deb http://example.com/ubuntu noble main")))
+      (should (member "--dist=noble" captured-args))
       (should (member "--extra-repository=deb [trusted=yes] http://ppa.launchpadcontent.net/me/x/ubuntu/ noble main"
                       captured-args))
       (should (member "--extra-repository=deb http://archive.ubuntu.com/ubuntu/ noble-proposed main"
@@ -309,10 +309,10 @@ and re-emit without doubling the argument."
     (let (captured-save)
       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
                  (lambda (_name _args &optional _dir _key _buffer-dir)))
-                ((symbol-function 'deb-packaging-repos-save)
-                 (lambda (pkg distro entries)
-                   (setq captured-save (list pkg distro entries)))))
-        (deb-packaging-commands-sbuild '("--dist=noble")))
+                 ((symbol-function 'deb-packaging-repos-save)
+                  (lambda (pkg distro entries)
+                    (setq captured-save (list pkg distro entries)))))
+        (deb-packaging-commands-sbuild nil))
       (should (equal captured-save '("mypkg" "noble" nil))))))
 
 (ert-deftest deb-packaging-test-commands/sbuild-purge-flags-pass-through ()
@@ -326,7 +326,8 @@ and re-emit without doubling the argument."
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-repos-save) #'ignore))
         (deb-packaging-commands-sbuild
-         '("--dist=noble" "--purge-session=always" "--purge-build=never")))
+         '("--purge-session=always" "--purge-build=never")))
+      (should (member "--dist=noble" captured-args))
       (should (member "--purge-session=always" captured-args))
       (should (member "--purge-build=never" captured-args)))))
 
@@ -340,8 +341,8 @@ and re-emit without doubling the argument."
                  (lambda (_name _args &optional dir _key buffer-dir)
                    (setq captured-dir dir
                          captured-buffer-dir buffer-dir)))
-                ((symbol-function 'deb-packaging-repos-save) #'ignore))
-        (deb-packaging-commands-sbuild '("--dist=noble")))
+                 ((symbol-function 'deb-packaging-repos-save) #'ignore))
+        (deb-packaging-commands-sbuild nil))
       (should (equal captured-dir pkg-parent-dir))
       (should (equal captured-buffer-dir pkg-dir)))))
 
@@ -353,17 +354,14 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-repos-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
-                                      process-environment))
-           (deb-packaging-config-target-distro "noble")
-           (deb-packaging-config--distro-user-set t))
+                                      process-environment)))
       (unwind-protect
           (progn
             (deb-packaging-repos-save "mypkg" "noble"
                                       '("ppa:me/x" "proposed"))
             (let ((default (deb-packaging-transients--binary-default-value)))
               (should (member "--extra-repository=ppa:me/x" default))
-              (should (member "--extra-repository=proposed" default))
-              (should (member "--dist=noble" default))))
+              (should (member "--extra-repository=proposed" default))))
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/binary-default-value-no-saved-repos ()
@@ -372,12 +370,9 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-repos-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
-                                      process-environment))
-           (deb-packaging-config-target-distro "noble")
-           (deb-packaging-config--distro-user-set t))
+                                      process-environment)))
       (unwind-protect
           (let ((default (deb-packaging-transients--binary-default-value)))
-            (should (member "--dist=noble" default))
             (should (equal (cl-remove-if-not
                             (lambda (a)
                               (string-prefix-p "--extra-repository=" a))
@@ -391,14 +386,11 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-repos-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
-                                      process-environment))
-           (deb-packaging-config-target-distro "noble")
-           (deb-packaging-config--distro-user-set t))
+                                      process-environment)))
       (unwind-protect
           (progn
             (deb-packaging-repos-save "mypkg" "noble" nil)
             (let ((default (deb-packaging-transients--binary-default-value)))
-              (should (member "--dist=noble" default))
               (should-not (cl-some (lambda (a)
                                      (string-prefix-p "--extra-repository=" a))
                                    default))))
@@ -498,15 +490,12 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-ppa-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
-                                      process-environment))
-           (deb-packaging-config-target-distro "noble")
-           (deb-packaging-config--distro-user-set t))
+                                      process-environment)))
       (unwind-protect
           (progn
             (deb-packaging-ppa-save "mypkg" "noble" "ppa:me/x")
             (let ((default (deb-packaging-transients--upload-default-value)))
-              (should (member "--ppa=ppa:me/x" default))
-              (should (member "--dist=noble" default))))
+              (should (member "--ppa=ppa:me/x" default))))
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/upload-default-value-no-saved-ppa ()
@@ -515,12 +504,9 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-ppa-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
-                                      process-environment))
-           (deb-packaging-config-target-distro "noble")
-           (deb-packaging-config--distro-user-set t))
+                                      process-environment)))
       (unwind-protect
           (let ((default (deb-packaging-transients--upload-default-value)))
-            (should (member "--dist=noble" default))
             (should-not (cl-some (lambda (a) (string-prefix-p "--ppa=" a))
                                  default)))
         (delete-directory tmp t)))))
@@ -531,16 +517,13 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-ppa-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
-                                      process-environment))
-           (deb-packaging-config-target-distro "noble")
-           (deb-packaging-config--distro-user-set t))
+                                      process-environment)))
       (unwind-protect
           (progn
             (deb-packaging-ppa-save "mypkg" "noble" "ppa:me/x")
             (let ((default (deb-packaging-transients--test-default-value)))
               (should (member "--ppa=ppa:me/x" default))
-              (should (member "--runner=lxd" default))
-              (should (member "--dist=noble" default))))
+              (should (member "--runner=lxd" default))))
         (delete-directory tmp t)))))
 
 ;;; dput PPA save + auto-prompt
@@ -557,7 +540,7 @@ and re-emit without doubling the argument."
                 ((symbol-function 'deb-packaging-ppa-save)
                  (lambda (pkg distro ppa)
                    (setq captured-save (list pkg distro ppa)))))
-        (deb-packaging-commands-dput-upload '("--ppa=ppa:me/x" "--dist=noble")))
+        (deb-packaging-commands-dput-upload '("--ppa=ppa:me/x")))
       (should (equal (car captured-args) "dput"))
       (should (equal (cadr captured-args) "ppa:me/x"))
       (should (string-suffix-p "_source.changes" (caddr captured-args)))
@@ -576,10 +559,10 @@ and re-emit without doubling the argument."
                  (lambda () '("ppa:me/x")))
                 ((symbol-function 'completing-read)
                  (lambda (&rest _) "ppa:me/y"))
-                ((symbol-function 'deb-packaging-ppa-save)
-                 (lambda (pkg distro ppa)
-                   (setq captured-save (list pkg distro ppa)))))
-        (deb-packaging-commands-dput-upload '("--dist=noble")))
+                 ((symbol-function 'deb-packaging-ppa-save)
+                  (lambda (pkg distro ppa)
+                    (setq captured-save (list pkg distro ppa)))))
+        (deb-packaging-commands-dput-upload nil))
       (should (equal (cadr captured-args) "ppa:me/y"))
       (should (equal captured-save '("mypkg" "noble" "ppa:me/y"))))))
 
@@ -592,7 +575,7 @@ and re-emit without doubling the argument."
                (lambda () nil))
               ((symbol-function 'completing-read)
                (lambda (&rest _) "")))
-      (should-error (deb-packaging-commands-dput-upload '("--dist=noble"))
+      (should-error (deb-packaging-commands-dput-upload nil)
                     :type 'user-error))))
 
 ;;; autopkgtest --ppa= filtering
@@ -615,7 +598,7 @@ and re-emit without doubling the argument."
                  (lambda (_name args &optional _dir _key)
                    (setq captured-args args))))
         (deb-packaging-commands-autopkgtest
-         '("--apt-upgrade" "--runner=lxd" "--dist=noble" "--ppa=ppa:me/x")))
+         '("--apt-upgrade" "--runner=lxd" "--ppa=ppa:me/x")))
       (should-not (cl-some (lambda (a) (string-prefix-p "--ppa=" a))
                            captured-args))
       (should (member "--apt-upgrade" captured-args)))))

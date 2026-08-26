@@ -411,7 +411,8 @@ is returned unchanged."
       value)))
 
 (defun deb-packaging-commands-sbuild (&optional args)
-  "Run sbuild with ARGS from the binary-build transient."
+  "Run sbuild with ARGS from the binary-build transient.
+The --dist chroot selection always comes from the changelog."
   (interactive (list (transient-args 'deb-packaging-binary-build-transient)))
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
@@ -424,8 +425,7 @@ is returned unchanged."
            (dsc-file (alist-get 'dsc artifacts)))
       (unless dsc-file
         (user-error "No .dsc file found; run a source build first"))
-      (let* ((distro (or (transient-arg-value "--dist=" args)
-                         (deb-packaging-config--effective-distro)))
+      (let* ((distro (deb-packaging-config--effective-distro))
              (repo-args (cl-remove-if-not
                          (lambda (a) (string-prefix-p "--extra-repository=" a))
                          args))
@@ -439,11 +439,6 @@ is returned unchanged."
              (passthrough (cl-remove-if
                            (lambda (a) (string-prefix-p "--extra-repository=" a))
                            args)))
-        ;; Default --dist= back if the user cleared it.
-        (unless (transient-arg-value "--dist=" passthrough)
-          (setq passthrough (cons (format "--dist=%s" distro) passthrough)))
-        ;; Keep the global distro in sync for the status buffer.
-        (deb-packaging-config--set-distro distro)
         (when (nth 0 info)
           (deb-packaging-repos-save
            (nth 0 info) distro
@@ -452,6 +447,7 @@ is returned unchanged."
         (deb-packaging-commands--run-command
          "sbuild"
          (append (list "sbuild")
+                 (list (format "--dist=%s" distro))
                  passthrough
                  extra-repo-arg
                  (list dsc-file))
@@ -509,7 +505,8 @@ Return nil if RUNNER has no registered hint."
     (format template distro)))
 
 (defun deb-packaging-commands-autopkgtest (&optional args)
-  "Run autopkgtest with ARGS from the test transient."
+  "Run autopkgtest with ARGS from the test transient.
+The test image's distro comes from the changelog."
   (interactive (list (transient-args 'deb-packaging-test-transient)))
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
@@ -524,17 +521,15 @@ Return nil if RUNNER has no registered hint."
         (user-error "No .deb files found; run a binary build first"))
       (let* ((runner (or (transient-arg-value "--runner=" args)
                          "lxd"))
-              (distro (or (transient-arg-value "--dist=" args)
-                          (deb-packaging-config--effective-distro)))
+             (distro (deb-packaging-config--effective-distro))
              (image-info (deb-packaging-commands--test-image-info runner distro))
              (image (plist-get image-info :image))
              (image-exists (plist-get image-info :exists))
-              (passthrough (cl-remove-if
-                            (lambda (a)
-                              (or (string-prefix-p "--runner=" a)
-                                  (string-prefix-p "--dist=" a)
-                                  (string-prefix-p "--ppa=" a)))
-                            args)))
+             (passthrough (cl-remove-if
+                           (lambda (a)
+                             (or (string-prefix-p "--runner=" a)
+                                 (string-prefix-p "--ppa=" a)))
+                           args)))
         (when (and image (not image-exists))
           (user-error "%s image '%s' not found.\nBuild it with:\n  %s"
                       (capitalize runner)
@@ -570,11 +565,10 @@ Signals `user-error' on empty input."
 (defun deb-packaging-commands-dput-upload (&optional args)
   "Upload source .changes to a PPA with dput.
 ARGS comes from `deb-packaging-upload-transient'.  Prompts when no PPA is
-set; the used PPA is saved per package+distro."
+set; the used PPA is saved per package+distro (changelog distro)."
   (interactive (list (transient-args 'deb-packaging-upload-transient)))
   (let* ((ppa (deb-packaging-commands--resolve-ppa args))
-         (distro (or (transient-arg-value "--dist=" args)
-                     (deb-packaging-config--effective-distro))))
+         (distro (deb-packaging-config--effective-distro)))
     (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
            (info (deb-packaging-detect--package-info pkg-dir))
            (name (nth 0 info))
@@ -587,7 +581,6 @@ set; the used PPA is saved per package+distro."
       (unless changes
         (user-error "No source .changes file found; run a source build first"))
       (let ((cmd-args (list "dput" ppa changes)))
-        (deb-packaging-config--set-distro distro)
         (when name
           (deb-packaging-ppa-save name distro ppa))
         (deb-packaging-commands--run-command "dput" cmd-args

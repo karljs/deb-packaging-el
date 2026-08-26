@@ -11,7 +11,8 @@
 
 ;; Per-tool transients that forward their flags to the runners in
 ;; deb-packaging-commands.el.  Flags persist per-prefix via transient.
-;; Distro options seed from `deb-packaging-config-target-distro'.
+;; The distro always comes from the changelog (see
+;; `deb-packaging-config--effective-distro').
 
 ;;; Code:
 
@@ -100,18 +101,19 @@ lint-transient pattern)."
 ;;; 2. Binary build (sbuild)
 
 (defun deb-packaging-transients--binary-default-value ()
-  "Dynamic default for the binary-build transient, seeding distro from changelog.
-Also restores the saved extra-repository set for the current package and
-distro; with no saved set, defaults to the distro's -proposed pocket."
+  "Dynamic default for the binary-build transient.
+Restores the saved extra-repository set for the current package and
+distro (both from the changelog); with no saved set, defaults to the
+distro's -proposed pocket."
   (let* ((distro (deb-packaging-config--effective-distro))
          (pkg-name (deb-packaging-detect--package-name))
          (repos (if pkg-name
                     (deb-packaging-repos-load pkg-name distro)
                   'unset))
          (repos (if (eq repos 'unset) (list "proposed") repos)))
-    (append (list (format "--dist=%s" distro) "-A")
-            (mapcar (lambda (r) (concat "--extra-repository=" r))
-                    repos))))
+    (cons "-A"
+          (mapcar (lambda (r) (concat "--extra-repository=" r))
+                  repos))))
 
 (defun deb-packaging-transients--seed-from-prefix (obj arg-prefix)
   "Seed OBJ's value from flat ARG-PREFIX args in the prefix value.
@@ -222,16 +224,11 @@ Returns absolute paths, or nil when empty."
 
 ;;;###autoload(autoload 'deb-packaging-binary-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-binary-build-transient ()
-  "Build a Debian binary package with sbuild."
+  "Build a Debian binary package with sbuild.
+The distro comes from the changelog."
   :value #'deb-packaging-transients--binary-default-value
   :environment #'deb-packaging-transients--env
   ["Arguments"
-   ("-d" "Distribution"
-    "--dist="
-    :class transient-option
-    :choices deb-packaging-config--distro-choices
-    :always-read t
-    :allow-empty nil)
    ("-A" "Build arch-all packages"  "-A")
    ("-v" "Verbose"                  "-v")
    ("-u" "apt upgrade"              "--apt-upgrade")
@@ -312,49 +309,41 @@ Each action reads only its own flags."
 (defun deb-packaging-transients--test-default-value ()
   "Dynamic default for the test transient."
   (append (deb-packaging-transients--saved-ppa-arg)
-          (list "--apt-upgrade"
-                "--runner=lxd"
-                (format "--dist=%s" (deb-packaging-config--effective-distro)))))
+          (list "--apt-upgrade" "--runner=lxd")))
 
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()
   "Run autopkgtest locally, or view PPA test results.
 Local flags apply only to \"Run autopkgtest\"; the PPA group applies only
-to \"PPA test report\" (the lint-transient pattern)."
+to \"PPA test report\" (the lint-transient pattern).  The test image's
+distro comes from the changelog."
   :value #'deb-packaging-transients--test-default-value
   :environment #'deb-packaging-transients--env
   ["Local autopkgtest"
    ("-u"  "Upgrade packages before test"  "--apt-upgrade")
    ("-f"  "Drop to shell on failure"      "--shell-fail")
-    ("-r"  "Test runner"
-     "--runner="
+     ("-r"  "Test runner"
+      "--runner="
+      :class transient-option
+      :choices deb-packaging-commands--runner-choices
+      :always-read t
+      :allow-empty nil)]
+   ["PPA tests"
+    ("-p" "PPA"
+     "--ppa="
      :class transient-option
-     :choices deb-packaging-commands--runner-choices
-     :always-read t
-     :allow-empty nil)
-   ("-d"  "Distribution (image)"
-    "--dist="
-    :class transient-option
-    :choices deb-packaging-config--distro-choices
-    :always-read t
-    :allow-empty nil)]
-  ["PPA tests"
-   ("-p" "PPA"
-    "--ppa="
-    :class transient-option
-    :prompt "PPA (e.g. ppa:user/name): "
-    :reader deb-packaging-transients--read-ppa
-    :always-read t)]
-  ["Run"
-   ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)
-   ("p" "PPA test report" deb-packaging-ppa-tests-show)])
+     :prompt "PPA (e.g. ppa:user/name): "
+     :reader deb-packaging-transients--read-ppa
+     :always-read t)]
+   ["Run"
+    ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)
+    ("p" "PPA test report" deb-packaging-ppa-tests-show)])
 
 ;;; 5. Upload / PPA
 
 (defun deb-packaging-transients--upload-default-value ()
   "Dynamic default for the upload transient."
-  (append (deb-packaging-transients--saved-ppa-arg)
-          (list (format "--dist=%s" (deb-packaging-config--effective-distro)))))
+  (deb-packaging-transients--saved-ppa-arg))
 
 (defun deb-packaging-transients--read-ppa (prompt initial-input _history)
   "Read a PPA name, completing against the user's known PPAs."
@@ -372,13 +361,6 @@ to \"PPA test report\" (the lint-transient pattern)."
     :class transient-option
     :prompt "PPA (e.g. ppa:user/name): "
     :reader deb-packaging-transients--read-ppa
-    :always-read t
-    :allow-empty nil)]
-  ["Options"
-   ("-d"  "Distribution"
-    "--dist="
-    :class transient-option
-    :choices deb-packaging-config--distro-choices
     :always-read t
     :allow-empty nil)]
   ["Upload"

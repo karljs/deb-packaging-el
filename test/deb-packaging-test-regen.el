@@ -88,9 +88,7 @@
         '(:name "mypkg" :version "1.0-1" :distro "noble")
       (deb-packaging-test--write-file
        (expand-file-name "debian/control.in" pkg-dir) "")
-      (let ((deb-packaging-config-target-distro "noble")
-            (deb-packaging-config--distro-user-set t)
-            (captured nil))
+      (let ((captured nil))
         (cl-letf (((symbol-function 'read-shell-command)
                    #'deb-packaging-test-regen--mock-read)
                   ((symbol-function 'deb-packaging-commands--run-command)
@@ -111,9 +109,7 @@
     (deb-packaging-test--with-package-tree
         '(:name "mypkg" :version "1.0-1" :distro "noble")
       (deb-packaging-regen-save "mypkg" "noble" "OTHER=1 ./debian/regen.sh")
-      (let ((deb-packaging-config-target-distro "noble")
-            (deb-packaging-config--distro-user-set t)
-            (captured nil)
+      (let ((captured nil)
             (seen-default nil))
         (cl-letf (((symbol-function 'read-shell-command)
                    (lambda (_prompt &optional default _hist)
@@ -132,9 +128,7 @@
   (deb-packaging-test-regen--with-cache
     (deb-packaging-test--with-package-tree
         '(:name "mypkg" :version "1.0-1" :distro "noble")
-      (let ((deb-packaging-config-target-distro "noble")
-            (deb-packaging-config--distro-user-set t)
-            (ran nil))
+      (let ((ran nil))
         (cl-letf (((symbol-function 'read-shell-command)
                    (lambda (&rest _) ""))
                   ((symbol-function 'deb-packaging-commands--run-command)
