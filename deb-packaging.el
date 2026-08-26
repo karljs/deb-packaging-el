@@ -58,6 +58,7 @@ The target distro comes from the changelog; other transients inherit it."
    ("p" "PPA upload..."   deb-packaging-upload-transient)]
   ["Cleanup"
    ("c" "Clean artifacts..." deb-packaging-commands-clean-transient)
+   ("K" "Kill build-output buffers" deb-packaging-commands-kill-output-buffers)
    ("r" "Reset source tree..." deb-packaging-commands-reset-transient)]
    ["Other"
     ("i" "Infrastructure..."  deb-packaging-infra-dispatch)

@@ -230,6 +230,36 @@ compilation buffer (nil under mocks)."
           (setq deb-packaging-display-category 'output)))
       buf)))
 
+(defun deb-packaging-commands-kill-output-buffers ()
+  "Kill all build-output buffers in bulk, after one confirmation.
+Targets every live buffer carrying the package's \\='output display
+category (comint run buffers and compilation buffers alike); shell
+buffers are left alone.  Timestamped output buffers are kept around
+deliberately so builds can be compared; this clears them on demand.
+Any processes still writing into the buffers are stopped."
+  (interactive)
+  (let ((bufs (seq-filter
+               (lambda (buf)
+                 (eq (buffer-local-value
+                      'deb-packaging-display-category buf)
+                     'output))
+               (buffer-list))))
+    (if (null bufs)
+        (message "No build-output buffers")
+      (when (y-or-n-p (format "Kill %d build-output buffer%s? "
+                              (length bufs)
+                              (if (= (length bufs) 1) "" "s")))
+        (dolist (buf bufs)
+          ;; The count prompt is the confirmation; stop live processes
+          ;; without a second per-buffer query.
+          (when-let ((proc (get-buffer-process buf)))
+            (set-process-query-on-exit-flag proc nil)
+            (delete-process proc))
+          (kill-buffer buf))
+        (message "Killed %d build-output buffer%s"
+                 (length bufs)
+                 (if (= (length bufs) 1) "" "s"))))))
+
 ;;; dpkg-buildpackage
 
 (defun deb-packaging-commands-source-build (&optional args)

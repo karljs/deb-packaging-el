@@ -304,6 +304,71 @@ runs in DIR, so package detection works from the buffer."
                "session:alpha\nchroot:noble-amd64\nsource:noble-amd64\nsession:beta")))
     (should (equal (deb-packaging-infra--list-sessions) '("alpha" "beta")))))
 
+;;; Bulk output-buffer cleanup
+
+(ert-deftest deb-packaging-test-display/kill-output-buffers-selective ()
+  "Kills only 'output buffers; shell and unmarked buffers survive."
+  (let ((out1 (get-buffer-create "*dp-test-out1*"))
+        (out2 (get-buffer-create "*dp-test-out2*"))
+        (sh (get-buffer-create "*dp-test-sh*"))
+        (plain (get-buffer-create "*dp-test-plain*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer out1
+            (setq deb-packaging-display-category 'output))
+          (with-current-buffer out2
+            (setq deb-packaging-display-category 'output))
+          (with-current-buffer sh
+            (setq deb-packaging-display-category 'shell))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+            (deb-packaging-commands-kill-output-buffers))
+          (should-not (buffer-live-p out1))
+          (should-not (buffer-live-p out2))
+          (should (buffer-live-p sh))
+          (should (buffer-live-p plain)))
+      (dolist (b (list out1 out2 sh plain))
+        (when (buffer-live-p b) (kill-buffer b))))))
+
+(ert-deftest deb-packaging-test-display/kill-output-buffers-declined-kills-nothing ()
+  (let ((out (get-buffer-create "*dp-test-out-declined*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer out
+            (setq deb-packaging-display-category 'output))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil)))
+            (deb-packaging-commands-kill-output-buffers))
+          (should (buffer-live-p out)))
+      (when (buffer-live-p out) (kill-buffer out)))))
+
+(ert-deftest deb-packaging-test-display/kill-output-buffers-none-messages ()
+  (let ((messages nil))
+    ;; Guard against output buffers leaked by earlier tests.
+    (dolist (buf (buffer-list))
+      (when (eq (buffer-local-value 'deb-packaging-display-category buf)
+                'output)
+        (kill-buffer buf)))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (push (apply #'format fmt args) messages))))
+      (deb-packaging-commands-kill-output-buffers))
+    (should (cl-some (lambda (m) (string-match-p "No build-output buffers" m))
+                     messages))))
+
+(ert-deftest deb-packaging-test-display/kill-output-buffers-stops-process ()
+  "A live process writing into an output buffer is stopped without a
+second per-buffer query."
+  (let ((buf (generate-new-buffer "*dp-test-out-proc*")))
+    (unwind-protect
+        (let ((proc (make-process :name "dp-test-sleep" :buffer buf
+                                  :command '("sleep" "30") :noquery t)))
+          (with-current-buffer buf
+            (setq deb-packaging-display-category 'output))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+            (deb-packaging-commands-kill-output-buffers))
+          (should-not (buffer-live-p buf))
+          (should-not (process-live-p proc)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 ;;; Schroots buffer: two magit-section sections
 
 (defmacro deb-packaging-test-display--with-schroots-buffer (chroots sessions &rest body)

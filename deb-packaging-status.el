@@ -850,6 +850,7 @@ Navigation and folding come from `magit-section-mode'."
   "t"   #'deb-packaging-test-transient
   "U"   #'deb-packaging-upload-transient
   "c"   #'deb-packaging-commands-clean-transient
+  "K"   #'deb-packaging-commands-kill-output-buffers
   "r"   #'deb-packaging-commands-reset-transient
   "e"   #'deb-packaging-dev-transient
   "u"   #'deb-packaging-pq-transient
