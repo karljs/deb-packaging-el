@@ -372,6 +372,7 @@ last-run time, DETAIL is an optional dimmed fragment."
          (distro (deb-packaging-config--effective-distro))
          (schroot (when (and distro arch)
                     (deb-packaging-detect--schroot-exists-p distro arch)))
+         (repos (deb-packaging-transients--effective-repos))
          (done (and bin-changes debs))
          (state (deb-packaging-status--phase-state 'sbuild done dsc))
          (detail (when debs
@@ -390,6 +391,10 @@ last-run time, DETAIL is an optional dimmed fragment."
                                       'font-lock-face 'deb-packaging-status-done)
                         (propertize "none" 'font-lock-face 'shadow)))
                 (when arch (cons "Arch" arch))
+                (cons "Extra repos"
+                      (if repos
+                          (mapconcat #'identity repos ", ")
+                        (propertize "none" 'font-lock-face 'shadow)))
                 (cons "Dsc"
                       (if dsc
                           (propertize "✓ ready" 'font-lock-face

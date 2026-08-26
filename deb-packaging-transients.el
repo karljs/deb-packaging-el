@@ -100,20 +100,24 @@ lint-transient pattern)."
 
 ;;; 2. Binary build (sbuild)
 
-(defun deb-packaging-transients--binary-default-value ()
-  "Dynamic default for the binary-build transient.
-Restores the saved extra-repository set for the current package and
-distro (both from the changelog); with no saved set, defaults to the
-distro's -proposed pocket."
+(defun deb-packaging-transients--effective-repos ()
+  "Return the extra-repo entries a binary build would use now.
+The saved set for the current package and changelog distro; with no
+saved set, the distro's -proposed pocket.  A deliberately cleared set
+stays empty.  Shared by the binary-build transient default and the
+status buffer's Extra repos row."
   (let* ((distro (deb-packaging-config--effective-distro))
          (pkg-name (deb-packaging-detect--package-name))
          (repos (if pkg-name
                     (deb-packaging-repos-load pkg-name distro)
-                  'unset))
-         (repos (if (eq repos 'unset) (list "proposed") repos)))
-    (cons "-A"
-          (mapcar (lambda (r) (concat "--extra-repository=" r))
-                  repos))))
+                  'unset)))
+    (if (eq repos 'unset) (list "proposed") repos)))
+
+(defun deb-packaging-transients--binary-default-value ()
+  "Dynamic default for the binary-build transient."
+  (cons "-A"
+        (mapcar (lambda (r) (concat "--extra-repository=" r))
+                (deb-packaging-transients--effective-repos))))
 
 (defun deb-packaging-transients--seed-from-prefix (obj arg-prefix)
   "Seed OBJ's value from flat ARG-PREFIX args in the prefix value.

@@ -398,5 +398,45 @@ PPA being unset must not gate the phase."
                              "foo")))
         (kill-buffer displayed)))))
 
+(ert-deftest deb-packaging-test-status/render-shows-extra-repos-row ()
+  "The Binary section shows what a build would use: the saved set, or
+the -proposed default when nothing was saved.  The tree has source
+artifacts so Binary is the next actionable phase and renders expanded."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble"
+            :artifacts '(("foo_1.2-3.dsc" . "")
+                         ("foo_1.2-3_source.changes" . "")))
+    (let* ((tmp (make-temp-file "deb-repos-render-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (displayed nil))
+      (unwind-protect
+          (progn
+            (deb-packaging-test--with-mocked-process
+                '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+              (cl-letf (((symbol-function 'read-directory-name)
+                         (lambda (&rest _) (error "must not prompt")))
+                        ((symbol-function 'deb-packaging-display-buffer)
+                         (lambda (buf _category) (setq displayed buf))))
+                (deb-packaging-status)))
+            (with-current-buffer displayed
+              (goto-char (point-min))
+              (should (search-forward "Extra repos: proposed" nil t)))
+            ;; Saved entries replace the default in the row.
+            (deb-packaging-repos-save "foo" "noble" '("ppa:me/x"))
+            (deb-packaging-test--with-mocked-process
+                '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+              (cl-letf (((symbol-function 'read-directory-name)
+                         (lambda (&rest _) (error "must not prompt")))
+                        ((symbol-function 'deb-packaging-display-buffer)
+                         (lambda (buf _category) (setq displayed buf))))
+                (deb-packaging-status)))
+            (with-current-buffer displayed
+              (goto-char (point-min))
+              (should (search-forward "Extra repos: ppa:me/x" nil t))
+              (should-not (search-forward "Extra repos: none" nil t))))
+        (when (buffer-live-p displayed) (kill-buffer displayed))
+        (delete-directory tmp t)))))
+
 (provide 'deb-packaging-test-status)
 ;;; deb-packaging-test-status.el ends here

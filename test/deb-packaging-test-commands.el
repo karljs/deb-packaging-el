@@ -396,6 +396,46 @@ and re-emit without doubling the argument."
                                    default))))
         (delete-directory tmp t)))))
 
+;;; deb-packaging-transients--effective-repos
+
+(ert-deftest deb-packaging-test-commands/effective-repos-defaults-to-proposed ()
+  "No saved set: the -proposed pocket is the default and must be
+visible in the status row."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-repos-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment)))
+      (unwind-protect
+          (should (equal (deb-packaging-transients--effective-repos)
+                         '("proposed")))
+        (delete-directory tmp t)))))
+
+(ert-deftest deb-packaging-test-commands/effective-repos-returns-saved ()
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-repos-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment)))
+      (unwind-protect
+          (progn
+            (deb-packaging-repos-save "mypkg" "noble" '("ppa:me/x"))
+            (should (equal (deb-packaging-transients--effective-repos)
+                           '("ppa:me/x"))))
+        (delete-directory tmp t)))))
+
+(ert-deftest deb-packaging-test-commands/effective-repos-cleared-stays-empty ()
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-repos-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment)))
+      (unwind-protect
+          (progn
+            (deb-packaging-repos-save "mypkg" "noble" nil)
+            (should (null (deb-packaging-transients--effective-repos))))
+        (delete-directory tmp t)))))
+
 ;;; deb-packaging-commands--ppa-repo-line
 
 (ert-deftest deb-packaging-test-commands/ppa-repo-line-valid ()
