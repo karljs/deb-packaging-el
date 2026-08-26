@@ -17,6 +17,11 @@ A separate propagate workflow exports quilt patches or git commits as
 git-am-friendly patches and prepares a salsa.debian.org clone (with an
 optional personal fork remote) to apply them.
 
+Backports go the other way: `deb-packaging-backport-patch` pulls an
+upstream commit or pull request (GitHub/GitLab URL, or a local file)
+into debian/patches/ as a DEP-3-compliant quilt patch and updates the
+series file.
+
 Built on `transient` and `magit-section`. Requires Emacs 28.1+.
 
 ## License
