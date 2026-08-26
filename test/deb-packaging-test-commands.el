@@ -23,9 +23,7 @@
   (should (equal (deb-packaging-commands--filter-args
                   '("-i" "-I" "--foo")
                   deb-packaging-commands--lintian-arg-prefixes)
-                 '("-i" "-I"))))
-
-(ert-deftest deb-packaging-test-commands/filter-keeps-prefix-flag-with-value ()
+                 '("-i" "-I"))))(ert-deftest deb-packaging-test-commands/filter-keeps-prefix-flag-with-value ()
   (should (equal (deb-packaging-commands--filter-args
                   '("--color=auto" "--tag-display-limit=5" "--foo")
                   deb-packaging-commands--lintian-arg-prefixes)
@@ -667,6 +665,29 @@ and re-emit without doubling the argument."
 (ert-deftest deb-packaging-test-commands/compile-wrapper-tolerates-nil-buffer ()
   (cl-letf (((symbol-function 'compile) (lambda (&rest _) nil)))
     (should (null (deb-packaging-commands--compile "make foo")))))
+
+;;; sbuild shell-on-failure flag: single source of truth
+
+(ert-deftest deb-packaging-test-commands/sbuild-shell-flag-matches-suffix ()
+  "The defconst the status buffer matches against must equal the
+argument of the transient's -F suffix.  They were once two literals
+that could drift apart silently."
+  (let ((proto (get 'deb-packaging-transients--sbuild-shell
+                    'transient--suffix)))
+    (should proto)
+    (should (equal (slot-value proto 'argument)
+                   deb-packaging-transients-sbuild-shell-flag))))
+
+(ert-deftest deb-packaging-test-commands/binary-transient-contains-shell-suffix ()
+  "The binary-build transient layout must reference the -F suffix
+command; otherwise the flag exists but is unreachable.
+Matches on the printed form: the layout mixes lists and vectors, which
+`flatten-tree' will not descend into."
+  (let ((layout (get 'deb-packaging-binary-build-transient 'transient--layout)))
+    (should layout)
+    (should (string-match-p
+             "\\<deb-packaging-transients--sbuild-shell\\>"
+             (prin1-to-string layout)))))
 
 (provide 'deb-packaging-test-commands)
 ;;; deb-packaging-test-commands.el ends here

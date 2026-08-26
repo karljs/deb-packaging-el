@@ -31,10 +31,14 @@
 (defvar deb-packaging-config-extra-ppas)
 (declare-function deb-packaging-repos-load "deb-packaging-repos")
 
-;; Shared with the status buffer so it can detect this flag without
-;; duplicating the literal.
+;; Single source of truth for the shell-on-failure flag: the transient
+;; suffix (below) and the status buffer both read this constant.
 (defconst deb-packaging-transients-sbuild-shell-flag
   "--build-failed-commands=%SBUILD_SHELL")
+
+(transient-define-infix deb-packaging-transients--sbuild-shell ()
+  "Drop into a chroot shell when the sbuild build fails."
+  :argument deb-packaging-transients-sbuild-shell-flag)
 
 (defconst deb-packaging-transients-display-action
   '(deb-packaging-display--transient-window (inhibit-same-window . t))
@@ -239,8 +243,8 @@ Returns absolute paths, or nil when empty."
      "--purge-build="
      :class transient-option
      :choices ("always" "successful" "never"))
-    ("-F" "Shell on build failure"
-     "--build-failed-commands=%SBUILD_SHELL")
+     ("-F" "Shell on build failure"
+      deb-packaging-transients--sbuild-shell)
     ("-e" "Extra repository"
      "--extra-repository="
      :class deb-packaging-transients--extra-repo-argument
