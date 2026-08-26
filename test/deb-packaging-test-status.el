@@ -144,24 +144,42 @@
     (should-not (deb-packaging-status--next-actionable-key ctx))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-source-blocked-missing-orig ()
-  ;; Non-native with no orig tarball: source is blocked, so the walk
-  ;; skips to dput, which is always ready.
+  ;; Non-native with no orig tarball: source is blocked, and with no
+  ;; artifacts at all dput is blocked too (nothing to upload), so no
+  ;; phase is actionable.
   (let ((deb-packaging-commands--run-history nil)
         (ctx (append (deb-packaging-test-status--ctx
                       '((dsc . nil) (source-changes . nil)
                         (binary-changes . nil) (debs . nil)))
                      (list :version "1.2-3" :orig-tarball nil))))
-    (should (eq (deb-packaging-status--next-actionable-key ctx) 'dput))))
+    (should-not (deb-packaging-status--next-actionable-key ctx))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-running-not-ready ()
-  ;; source-build is running so it is not `ready'.  dput is always ready,
-  ;; so it becomes the first ready phase in the walk.
+  ;; source-build is running and nothing else is ready: dput stays
+  ;; blocked until a source .changes exists.
   (let ((deb-packaging-commands--run-history nil)
         (ctx (deb-packaging-test-status--ctx
               '((dsc . nil) (source-changes . nil)
                 (binary-changes . nil) (debs . nil)))))
     (deb-packaging-commands--record-run 'source-build 'running nil)
-    (should (eq (deb-packaging-status--next-actionable-key ctx) 'dput))))
+    (should-not (deb-packaging-status--next-actionable-key ctx))))
+
+(ert-deftest deb-packaging-test-status/upload-ready-only-with-source-changes ()
+  "dput is blocked without a source .changes and ready with one; the
+PPA being unset must not gate the phase."
+  (let ((deb-packaging-commands--run-history nil)
+        (ctx (deb-packaging-test-status--ctx
+              '((dsc . "foo_1.2-3.dsc")
+                (source-changes . "foo_1.2-3_source.changes")
+                (binary-changes . nil) (debs . nil)))))
+    (should (eq (alist-get 'dput (deb-packaging-status--phase-states ctx))
+                'ready)))
+  (let ((deb-packaging-commands--run-history nil)
+        (ctx (deb-packaging-test-status--ctx
+              '((dsc . nil) (source-changes . nil)
+                (binary-changes . nil) (debs . nil)))))
+    (should (eq (alist-get 'dput (deb-packaging-status--phase-states ctx))
+                'blocked))))
 
 ;;; Lint rollup state
 

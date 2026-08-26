@@ -529,7 +529,9 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                "--ppa="
                (ignore-errors
                  (transient-args 'deb-packaging-upload-transient))))
-         (state (deb-packaging-status--phase-state 'dput nil t)))
+         ;; Ready only when a source .changes exists to dput; the PPA is
+         ;; chosen inside the transient and must not gate the phase.
+         (state (deb-packaging-status--phase-state 'dput nil changes)))
     (magit-insert-section (deb-packaging-upload nil hide)
       (magit-insert-heading
         (deb-packaging-status--phase-heading state "Upload" 'dput))
@@ -691,9 +693,9 @@ Collapsed when HIDE."
                  'sbuild (and bin-changes debs) dsc))
           (cons 'autopkgtest
                 (deb-packaging-status--phase-state 'autopkgtest nil debs))
-          ;; Upload is always ready; PPA is set inside its transient.
+          ;; Upload is ready once a source .changes exists.
           (cons 'dput
-                (deb-packaging-status--phase-state 'dput nil t)))))
+                (deb-packaging-status--phase-state 'dput nil src-changes)))))
 
 (defun deb-packaging-status--next-actionable-key (ctx)
   "Return the run-history key of the first ready phase in CTX, or nil.
