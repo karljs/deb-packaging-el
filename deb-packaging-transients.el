@@ -103,19 +103,23 @@ lint-transient pattern)."
 
 (defun deb-packaging-transients--effective-repos ()
   "Return the extra-repo entries a binary build would use now.
-The saved set for the current package and changelog distro; with no
-saved set, the distro's -proposed pocket.  A deliberately cleared set
-stays empty.  Shared by the binary-build transient default and the
-status buffer's Extra repos row."
+The saved set for the current package and changelog distro, or nil when
+nothing was saved.  No implicit default: the build chroot's own
+sources.list already provides the distro's pockets (Ubuntu chroots
+include -proposed via mk-sbuild), and a default `proposed' entry would
+duplicate it (\"configured multiple times\") and break Debian builds
+(sid-proposed does not exist on archive.ubuntu.com).  Chroots without
+proposed can add the `proposed' candidate in the -e menu."
   (let* ((distro (deb-packaging-config--effective-distro))
-         (pkg-name (deb-packaging-detect--package-name))
-         (repos (if pkg-name
-                    (deb-packaging-repos-load pkg-name distro)
-                  'unset)))
-    (if (eq repos 'unset) (list "proposed") repos)))
+         (pkg-name (deb-packaging-detect--package-name)))
+    (when pkg-name
+      (deb-packaging-repos-load pkg-name distro))))
 
 (defun deb-packaging-transients--binary-default-value ()
-  "Dynamic default for the binary-build transient."
+  "Dynamic default for the binary-build transient.
+Restores the saved extra-repository set for the current package and
+changelog distro; nothing extra when no set was saved (the chroot's own
+sources.list provides the distro's pockets)."
   (cons "-A"
         (mapcar (lambda (r) (concat "--extra-repository=" r))
                 (deb-packaging-transients--effective-repos))))

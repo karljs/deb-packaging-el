@@ -367,7 +367,8 @@ and re-emit without doubling the argument."
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/binary-default-value-no-saved-repos ()
-  "With no saved repos, the default value enables the -proposed pocket."
+  "With no saved repos, the default value adds no --extra-repository
+args: the chroot's own sources.list provides the distro's pockets."
   (deb-packaging-test--with-package-tree
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-repos-test-" t))
@@ -375,11 +376,7 @@ and re-emit without doubling the argument."
                                       process-environment)))
       (unwind-protect
           (let ((default (deb-packaging-transients--binary-default-value)))
-            (should (equal (cl-remove-if-not
-                            (lambda (a)
-                              (string-prefix-p "--extra-repository=" a))
-                            default)
-                           '("--extra-repository=proposed"))))
+            (should (equal default '("-A"))))
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/binary-default-value-cleared-repos-stick ()
@@ -400,17 +397,17 @@ and re-emit without doubling the argument."
 
 ;;; deb-packaging-transients--effective-repos
 
-(ert-deftest deb-packaging-test-commands/effective-repos-defaults-to-proposed ()
-  "No saved set: the -proposed pocket is the default and must be
-visible in the status row."
+(ert-deftest deb-packaging-test-commands/effective-repos-no-default ()
+  "No saved set means no extra repos: the build chroot's own
+sources.list already provides the distro's pockets, and a `proposed'
+default would duplicate them (or break Debian builds)."
   (deb-packaging-test--with-package-tree
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-repos-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
                                       process-environment)))
       (unwind-protect
-          (should (equal (deb-packaging-transients--effective-repos)
-                         '("proposed")))
+          (should (null (deb-packaging-transients--effective-repos)))
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/effective-repos-returns-saved ()

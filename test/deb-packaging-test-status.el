@@ -400,8 +400,9 @@ PPA being unset must not gate the phase."
 
 (ert-deftest deb-packaging-test-status/render-shows-extra-repos-row ()
   "The Binary section shows what a build would use: the saved set, or
-the -proposed default when nothing was saved.  The tree has source
-artifacts so Binary is the next actionable phase and renders expanded."
+`none' when nothing was saved (the chroot's own sources.list provides
+the distro's pockets).  The tree has source artifacts so Binary is the
+next actionable phase and renders expanded."
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3" :distro "noble"
             :artifacts '(("foo_1.2-3.dsc" . "")
@@ -421,7 +422,7 @@ artifacts so Binary is the next actionable phase and renders expanded."
                 (deb-packaging-status)))
             (with-current-buffer displayed
               (goto-char (point-min))
-              (should (search-forward "Extra repos: proposed" nil t)))
+              (should (search-forward "Extra repos: none" nil t)))
             ;; Saved entries replace the default in the row.
             (deb-packaging-repos-save "foo" "noble" '("ppa:me/x"))
             (deb-packaging-test--with-mocked-process

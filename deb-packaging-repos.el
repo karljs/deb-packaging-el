@@ -27,16 +27,15 @@
                      (deb-packaging-detect--cache-dir))))
 
 (defun deb-packaging-repos-load (package distro)
-  "Return saved extra-repo entries for PACKAGE and DISTRO.
+  "Return saved extra-repo entries for PACKAGE and DISTRO, or nil.
 Entries are pre-expansion values (variant names, ppa: addresses, raw deb
-lines).  Returns the symbol `unset' if the file is missing, so callers can
-tell \"never configured\" apart from a deliberately cleared (empty) set."
+lines).  Nil for both \"never configured\" and \"cleared\": the
+distinction only mattered for the old proposed default, which is gone."
   (let ((file (deb-packaging-repos--file package distro)))
-    (if (file-readable-p file)
-        (with-temp-buffer
-          (insert-file-contents file)
-          (split-string (buffer-string) "\n" t))
-      'unset)))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (split-string (buffer-string) "\n" t)))))
 
 (defun deb-packaging-repos-save (package distro entries)
   "Write ENTRIES (a list of strings) for PACKAGE and DISTRO to the cache.
