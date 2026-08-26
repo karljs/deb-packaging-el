@@ -37,23 +37,28 @@ can open a connection before it ever fails."
 A directory qualifies when it or an ancestor contains debian/changelog;
 the package root is returned, not necessarily the directory picked.
 Remote picks are rejected with the host-only message from
-`deb-packaging-detect--find-package-dir'.  PROMPT defaults to
+`deb-packaging-detect--find-package-dir'.  The rejection reason is
+folded into the next prompt: an echo-area message would be overwritten
+by the prompt immediately and never seen.  PROMPT defaults to
 \"Package directory: \"; C-g aborts as usual."
   (let ((prompt (or prompt "Package directory: "))
-        (pkg-dir nil))
+        (pkg-dir nil)
+        (reason nil))
     (while (not pkg-dir)
-      (let* ((dir (read-directory-name prompt nil nil t))
+      (let* ((dir (read-directory-name
+                   (if reason (format "%s[%s] " prompt reason) prompt)
+                   nil nil t))
              (rejection nil)
              (found (condition-case err
                         (deb-packaging-detect--find-package-dir dir t)
                       (user-error (setq rejection (cadr err)) nil))))
         (if found
             (setq pkg-dir found)
-          ;; Show the specific rejection (e.g. host-only) when there is
-          ;; one; the generic line would only clobber it.
-          (message "%s" (or rejection
-                            (format "No debian/changelog in %s or any parent directory"
-                                    dir))))))
+          ;; Keep the specific rejection (e.g. host-only); the generic
+          ;; line would only clobber it.
+          (setq reason (or rejection
+                           (format "No debian/changelog in %s or any parent"
+                                   dir))))))
     pkg-dir))
 
 ;;; Shared helpers

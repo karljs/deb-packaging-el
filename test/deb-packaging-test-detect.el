@@ -103,29 +103,50 @@
               (should (null answers))))
         (delete-directory empty t)))))
 
-(ert-deftest deb-packaging-test-detect/read-package-dir-rejects-tramp-with-message ()
+(ert-deftest deb-packaging-test-detect/read-package-dir-rejects-tramp-in-prompt ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3")
     (let ((orig (symbol-function 'locate-dominating-file))
           (answers (list "/ssh:host:/tmp/pkg/" pkg-dir))
-          (messages nil))
+          (prompts nil))
       (cl-letf (((symbol-function 'locate-dominating-file)
                  (lambda (dir name)
                    (if (file-remote-p dir)
                        "/ssh:host:/tmp/pkg/"
                      (funcall orig dir name))))
                 ((symbol-function 'read-directory-name)
-                 (lambda (&rest _) (pop answers)))
-                ((symbol-function 'message)
-                 (lambda (fmt &rest args)
-                   (push (apply #'format fmt args) messages))))
+                 (lambda (prompt &rest _)
+                   (push prompt prompts)
+                   (pop answers))))
         (should (file-equal-p (deb-packaging-detect--read-package-dir)
                               pkg-dir))
         (should (null answers))
-        (should (cl-some (lambda (m) (string-match-p "host" m)) messages))
+        ;; First prompt is bare; the second carries the host-only reason.
+        (should (equal (nth 1 prompts) "Package directory: "))
+        (should (string-match-p "host" (nth 0 prompts)))
         ;; The specific reason must not be clobbered by the generic one.
-        (should-not (cl-some (lambda (m) (string-match-p "debian/changelog" m))
-                             messages))))))
+        (should-not (string-match-p "debian/changelog" (nth 0 prompts)))))))
+
+(ert-deftest deb-packaging-test-detect/read-package-dir-generic-reason-in-prompt ()
+  "A non-package pick surfaces the no-changelog reason in the re-prompt."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((empty (make-temp-file "deb-pkg-test-" t))
+          (answers nil)
+          (prompts nil))
+      (unwind-protect
+          (progn
+            (setq answers (list empty pkg-dir))
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (prompt &rest _)
+                         (push prompt prompts)
+                         (pop answers))))
+              (should (file-equal-p (deb-packaging-detect--read-package-dir)
+                                    pkg-dir))
+              (should (equal (nth 1 prompts) "Package directory: "))
+              (should (string-match-p "No debian/changelog" (nth 0 prompts)))
+              (should (string-search empty (nth 0 prompts)))))
+        (delete-directory empty t)))))
 
 ;;; Control field extraction
 
