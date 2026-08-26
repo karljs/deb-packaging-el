@@ -494,6 +494,18 @@ records confirmation prompts, `messages' records echo-area messages,
 
 ;;; Clone robustness
 
+(ert-deftest deb-packaging-test-propagate/clone-outside-package-errors ()
+  "Outside a package tree the clone must error before any prompt; the
+clone dir would otherwise be .../debian/nil and the stored source-dir
+the literal string \"nil\"."
+  (let ((default-directory (file-name-as-directory
+                            (make-temp-file "deb-prop-test-" t))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) (error "must not prompt"))))
+          (should-error (deb-packaging-propagate-clone) :type 'user-error))
+      (delete-directory default-directory t))))
+
 (ert-deftest deb-packaging-test-propagate/clone-checkout-failure-errors ()
   "A failed checkout in the reset path must not silently continue.
 The continuation runs from the sentinel, so the sentinel itself is

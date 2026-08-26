@@ -575,56 +575,60 @@ network step finishes.  Press `C-c a' afterwards to apply items."
   (interactive)
   (catch 'abort
     (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
-           (pkg-name (deb-packaging-detect--package-name pkg-dir))
-           (detected-url (or (deb-packaging-detect--vcs-git pkg-dir) ""))
-           (vcs-url (read-string (format "Clone URL (default %s): " detected-url)
-                                 nil nil detected-url))
-           (clone-dir (deb-packaging-propagate--clone-dir pkg-name)))
-      (when (string-empty-p vcs-url)
-        (user-error "No clone URL provided"))
-      (let ((parent (file-name-directory clone-dir)))
-        (unless (file-directory-p parent)
-          (make-directory parent t)))
-      (if (deb-packaging-propagate--clone-exists-p clone-dir)
-          (progn
-            (unless (yes-or-no-p
-                     (format "Clone exists at %s.  Fetch and reset to origin (discards local work)? "
-                             clone-dir))
-              (message "Aborted")
-              (throw 'abort nil))
-            (message "Fetching origin...")
-            (let ((default-directory clone-dir))
-              (magit-run-git-async "fetch" "origin"))
-            (process-put magit-this-process 'inhibit-refresh t)
-            (set-process-sentinel
-             magit-this-process
-             (deb-packaging-propagate--sentinel
-              "git fetch"
-              (lambda ()
-                (let ((default-branch
-                       (or (deb-packaging-propagate--default-branch clone-dir)
-                           "main")))
-                  (let ((default-directory clone-dir))
-                    (unless (zerop (magit-call-git "checkout" default-branch))
-                      (user-error "git checkout failed.  See *magit-process* buffer ($ in Magit)."))
-                    (unless (zerop (magit-call-git "reset" "--hard"
-                                                   (format "origin/%s" default-branch)))
-                      (user-error "git reset failed.  See *magit-process* buffer ($ in Magit)."))))
-                (deb-packaging-propagate--finish-clone
-                 pkg-dir pkg-name clone-dir vcs-url)))))
-        (message "Cloning %s..." vcs-url)
-        (let ((default-directory (file-name-directory clone-dir)))
-          (magit-run-git-async "clone" vcs-url
-                               (file-name-nondirectory
-                                (directory-file-name clone-dir))))
-        (process-put magit-this-process 'inhibit-refresh t)
-        (set-process-sentinel
-         magit-this-process
-         (deb-packaging-propagate--sentinel
-          "git clone"
-          (lambda ()
-            (deb-packaging-propagate--finish-clone
-             pkg-dir pkg-name clone-dir vcs-url))))))))
+           (pkg-name (deb-packaging-detect--package-name pkg-dir)))
+      ;; Without a name the clone dir would be .../debian/nil and the
+      ;; stored source-dir the literal string "nil".
+      (unless pkg-name
+        (user-error "Not in a Debian package directory"))
+      (let* ((detected-url (or (deb-packaging-detect--vcs-git pkg-dir) ""))
+             (vcs-url (read-string (format "Clone URL (default %s): " detected-url)
+                                   nil nil detected-url))
+             (clone-dir (deb-packaging-propagate--clone-dir pkg-name)))
+        (when (string-empty-p vcs-url)
+          (user-error "No clone URL provided"))
+        (let ((parent (file-name-directory clone-dir)))
+          (unless (file-directory-p parent)
+            (make-directory parent t)))
+        (if (deb-packaging-propagate--clone-exists-p clone-dir)
+            (progn
+              (unless (yes-or-no-p
+                       (format "Clone exists at %s.  Fetch and reset to origin (discards local work)? "
+                               clone-dir))
+                (message "Aborted")
+                (throw 'abort nil))
+              (message "Fetching origin...")
+              (let ((default-directory clone-dir))
+                (magit-run-git-async "fetch" "origin"))
+              (process-put magit-this-process 'inhibit-refresh t)
+              (set-process-sentinel
+               magit-this-process
+               (deb-packaging-propagate--sentinel
+                "git fetch"
+                (lambda ()
+                  (let ((default-branch
+                         (or (deb-packaging-propagate--default-branch clone-dir)
+                             "main")))
+                    (let ((default-directory clone-dir))
+                      (unless (zerop (magit-call-git "checkout" default-branch))
+                        (user-error "git checkout failed.  See *magit-process* buffer ($ in Magit)."))
+                      (unless (zerop (magit-call-git "reset" "--hard"
+                                                     (format "origin/%s" default-branch)))
+                        (user-error "git reset failed.  See *magit-process* buffer ($ in Magit)."))))
+                  (deb-packaging-propagate--finish-clone
+                   pkg-dir pkg-name clone-dir vcs-url)))))
+          (message "Cloning %s..." vcs-url)
+          (let ((default-directory (file-name-directory clone-dir)))
+            (magit-run-git-async "clone" vcs-url
+                                 (file-name-nondirectory
+                                  (directory-file-name clone-dir))))
+          (process-put magit-this-process 'inhibit-refresh t)
+          (set-process-sentinel
+           magit-this-process
+           (deb-packaging-propagate--sentinel
+            "git clone"
+            (lambda ()
+              (deb-packaging-propagate--finish-clone
+               pkg-dir pkg-name clone-dir vcs-url)))))))))
 
 ;;;###autoload
 (defun deb-packaging-propagate-apply ()
