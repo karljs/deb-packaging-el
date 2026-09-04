@@ -29,6 +29,7 @@
 (require 'deb-packaging-propagate)
 (require 'deb-packaging-backport)
 (require 'deb-packaging-pq)
+(require 'deb-packaging-update)
 (require 'deb-packaging-status)
 (require 'deb-packaging-clone)
 
@@ -54,6 +55,7 @@ The target distro comes from the changelog; other transients inherit it."
    ("e" "Dev shell..."       deb-packaging-dev-transient)
    ("g" "Regenerate templated files" deb-packaging-commands-regenerate)
    ("u" "Patch queue (gbp pq)..." deb-packaging-pq-transient)
+   ("n" "New upstream version..." deb-packaging-update-transient)
    ("B" "Backport upstream patch..." deb-packaging-backport-patch)
    ("P" "Propagate..."       deb-packaging-propagate-transient)]
   ["Publish"

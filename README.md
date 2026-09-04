@@ -22,6 +22,12 @@ upstream commit or pull request (GitHub/GitLab URL, or a local file)
 into debian/patches/ as a DEP-3-compliant quilt patch and updates the
 series file.
 
+New upstream versions: the update transient runs `uscan` against
+`debian/watch` and applies the new release either with
+`gbp import-orig --uscan` (git trees with a gbp layout) or `uupdate`
+(which unpacks a fresh `../pkg-VERSION` tree). The method is prompted
+for on each update, defaulting to what the tree looks like.
+
 Built on `transient` and `magit-section`. Requires Emacs 28.1+.
 
 ## License
