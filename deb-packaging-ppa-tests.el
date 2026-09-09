@@ -28,8 +28,9 @@
 (require 'deb-packaging-display)
 
 ;; Loaded after this file in the full package; only referenced by name
-;; in the mode map.
+;; in the mode map and transients.
 (declare-function deb-packaging-test-transient "deb-packaging-transients")
+(declare-function deb-packaging-transients--env "deb-packaging-transients")
 
 ;;; Parsing
 
@@ -162,19 +163,31 @@ so keying only on the PPA would clobber reports across packages."
   (format "*deb-ppa-tests: %s (%s %s)*" ppa (or name "?") (or distro "?")))
 
 (defvar-keymap deb-packaging-ppa-tests-mode-map
-  :doc "Keymap for `deb-packaging-ppa-tests-mode'."
+  :doc "Keymap for `deb-packaging-ppa-tests-mode'.
+RET opens the result's log, or triggers a basic test on a trigger row;
+? lists this buffer's commands."
   :parent magit-section-mode-map
   "t"   #'deb-packaging-ppa-tests-trigger-basic
   "T"   #'deb-packaging-ppa-tests-trigger-all-proposed
   "RET" #'deb-packaging-ppa-tests-open-log
   "g"   #'deb-packaging-ppa-tests-refresh
-  "?"   #'deb-packaging-test-transient
+  "?"   #'deb-packaging-ppa-tests-dispatch
   "q"   #'quit-window)
 
 (define-derived-mode deb-packaging-ppa-tests-mode magit-section-mode
   "Deb-PPA-Tests"
   "Major mode for the parsed PPA autopkgtest report."
   :interactive nil)
+
+(transient-define-prefix deb-packaging-ppa-tests-dispatch ()
+  "Act on the PPA autopkgtest report at point."
+  :environment #'deb-packaging-transients--env
+  ["Report"
+   ("t" "Trigger basic test"   deb-packaging-ppa-tests-trigger-basic)
+   ("T" "Trigger all-proposed" deb-packaging-ppa-tests-trigger-all-proposed)
+   ("g" "Refresh"              deb-packaging-ppa-tests-refresh)]
+  ["Navigation"
+   ("q" "Quit" transient-quit-one)])
 
 (defconst deb-packaging-ppa-tests--status-icons
   '((pass . "✅") (fail . "❌") (bad . "⛔")))
@@ -253,20 +266,27 @@ PASS green, SKIP dim (not run, not passed), FLAKY yellow, failures red."
                       (plist-get pub :status)))
             (magit-insert-section-body
               (dolist (entry (plist-get pub :arches))
-                (let ((arch (car entry))
-                      (start (point)))
-                  (insert (format "    %-8s %s   %s\n"
-                                  arch
-                                  (propertize "t: trigger basic"
-                                              'font-lock-face 'shadow)
-                                  (propertize "T: trigger all-proposed"
-                                              'font-lock-face 'shadow)))
+                (let* ((arch (car entry))
+                       (urls (cdr entry))
+                       (basic (plist-get urls :basic))
+                       (all-p (plist-get urls :all-proposed))
+                       (start (point)))
+                  (insert "    "
+                          (format "%-8s" arch)
+                          (if basic
+                              (propertize "t: trigger basic"
+                                          'font-lock-face 'shadow)
+                            "")
+                          (if (and basic all-p) "   " "")
+                          (if all-p
+                              (propertize "T: trigger all-proposed"
+                                          'font-lock-face 'shadow)
+                            "")
+                          "\n")
                   (add-text-properties
                    start (1- (point))
-                   (list 'deb-packaging-ppa-tests-basic-url
-                         (plist-get (cdr entry) :basic)
-                         'deb-packaging-ppa-tests-all-proposed-url
-                         (plist-get (cdr entry) :all-proposed)
+                   (list 'deb-packaging-ppa-tests-basic-url basic
+                         'deb-packaging-ppa-tests-all-proposed-url all-p
                          'deb-packaging-ppa-tests-desc
                          (format "%s on %s/%s"
                                  (plist-get pub :package)
@@ -344,14 +364,16 @@ WHAT (\"basic\"/\"all-proposed\") is used in prompts and messages."
 
 (defun deb-packaging-ppa-tests-open-log ()
   "Open the result's log URL in a browser.
-Works anywhere inside a result section, not just on the URL line."
+Works anywhere inside a result section, not just on the URL line.  On a
+trigger row there is no log; RET triggers the basic test instead."
   (interactive)
   (let ((url (or (get-text-property
                   (point) 'deb-packaging-ppa-tests-log-url)
                  (deb-packaging-ppa-tests--section-log-url))))
-    (if url
-        (browse-url url)
-      (user-error "No log URL here"))))
+    (cond (url (browse-url url))
+          ((get-text-property (point) 'deb-packaging-ppa-tests-basic-url)
+           (deb-packaging-ppa-tests-trigger-basic))
+          (t (user-error "No log URL here")))))
 
 ;;; Runner
 

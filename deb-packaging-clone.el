@@ -30,12 +30,11 @@
 
 (defun deb-packaging-clone--sentinel (target)
   "Return a process sentinel that opens the status buffer for TARGET.
-Failures are delegated to `magit-process-sentinel' with raising enabled;
-status opens only on exit status 0."
+Failures are reported by `magit-process-sentinel' in the echo area (with
+'$' pointing at *magit-process*); status opens only on exit status 0."
   (lambda (process event)
     (when (memq (process-status process) '(exit signal))
-      (let ((magit-process-raise-error t))
-        (magit-process-sentinel process event)))
+      (magit-process-sentinel process event))
     (when (and (eq (process-status process) 'exit)
                (zerop (process-exit-status process)))
       (deb-packaging-clone--open-status target))))

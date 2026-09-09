@@ -257,6 +257,27 @@ command exits 0, mirroring `deb-packaging-infra--compile-then-refresh'."
                     (zerop (process-exit-status p)))
            (deb-packaging-commands--refresh-buffer mode refresh-fn)))))))
 
+(defun deb-packaging-infra-visit-schroot ()
+  "Visit the chroot or session at point.
+Chroot row: dired its directory.  Session row: `schroot --info' in an
+output buffer.  RET elsewhere is refused rather than silently dead."
+  (interactive)
+  (let ((section (magit-current-section)))
+    (pcase (and section (oref section type))
+      ('deb-packaging-infra-chroot
+       (let* ((name (oref section value))
+              (sc (cl-find name (deb-packaging-infra--list-schroots)
+                           :key (lambda (s) (plist-get s :name))
+                           :test #'equal))
+              (directory (and sc (plist-get sc :directory))))
+         (if (and directory (file-directory-p directory))
+             (dired directory)
+           (message "No directory for chroot %s" name))))
+      ('deb-packaging-infra-session
+       (deb-packaging-commands--run-command
+        "schroot-info" (list "schroot" "--info" "-c" (oref section value))))
+      (_ (user-error "Nothing to visit on this line")))))
+
 (defun deb-packaging-infra-delete-schroot (&optional name)
   "Delete a schroot (config and directory).
 Use schroot at point, or prompt."
@@ -295,8 +316,11 @@ Use schroot at point, or prompt."
 ;;; Schroots buffer
 
 (defvar-keymap deb-packaging-infra-schroots-mode-map
-  :doc "Keymap for the schroots buffer."
+  :doc "Keymap for the schroots buffer.
+RET visits a chroot's directory or shows session info; ? lists this
+buffer's commands."
   :parent magit-section-mode-map
+  "RET" #'deb-packaging-infra-visit-schroot
   "u" #'deb-packaging-infra-update-schroots
   "U" #'deb-packaging-infra-update-all-schroots
   "e" #'deb-packaging-infra-end-sessions
@@ -304,7 +328,7 @@ Use schroot at point, or prompt."
   "d" #'deb-packaging-infra-delete-schroot
   "c" #'deb-packaging-infra-create-schroot
   "g" #'deb-packaging-infra-refresh-schroots
-  "?" #'deb-packaging-infra-dispatch
+  "?" #'deb-packaging-infra-schroots-dispatch
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-schroots-mode magit-section-mode "Infra-Schroots"
@@ -532,6 +556,7 @@ Runs `lxc exec NAME -- bash -l' in a comint buffer."
   "x" #'deb-packaging-infra-shell-lxd-entry
   "c" #'deb-packaging-infra-create-lxd
   "g" #'deb-packaging-infra-refresh-lxd
+  "?" #'deb-packaging-infra-lxd-dispatch
   "q" #'quit-window)
 
 (defvar deb-packaging-infra-lxd-row-map
@@ -672,12 +697,21 @@ buffer) only when the image is not user-writable."
 
 ;;; QEMU list buffer
 
+(defun deb-packaging-infra-visit-qemu-dir ()
+  "Open dired on the QEMU autopkgtest image directory."
+  (interactive)
+  (if (file-directory-p deb-packaging-infra-qemu-dir)
+      (dired deb-packaging-infra-qemu-dir)
+    (message "No image directory %s" deb-packaging-infra-qemu-dir)))
+
 (defvar-keymap deb-packaging-infra-qemu-images-mode-map
   :doc "Keymap for the QEMU images list buffer."
   :parent tabulated-list-mode-map
+  "RET" #'deb-packaging-infra-visit-qemu-dir
   "d" #'deb-packaging-infra-delete-qemu
   "c" #'deb-packaging-infra-create-qemu
   "g" #'deb-packaging-infra-refresh-qemu-images
+  "?" #'deb-packaging-infra-qemu-dispatch
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-qemu-images-mode tabulated-list-mode "Infra-QEMU"
@@ -948,14 +982,23 @@ the text and send RET to bogus locations."
 
 ;;; PPA list buffer
 
+(defun deb-packaging-infra-visit-ppa ()
+  "Show the PPA at point (`ppa show')."
+  (interactive)
+  (if-let ((ppa (tabulated-list-get-id)))
+      (deb-packaging-infra-show-ppa ppa)
+    (user-error "No PPA on this line")))
+
 (defvar-keymap deb-packaging-infra-ppas-mode-map
   :doc "Keymap for the PPAs list buffer."
   :parent tabulated-list-mode-map
+  "RET" #'deb-packaging-infra-visit-ppa
   "s" #'deb-packaging-infra-show-ppa
   "d" #'deb-packaging-infra-delete-ppa
   "e" #'deb-packaging-infra-set-ppa-config
   "c" #'deb-packaging-infra-create-ppa
   "g" #'deb-packaging-infra-refresh-ppas
+  "?" #'deb-packaging-infra-ppas-dispatch
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-ppas-mode tabulated-list-mode "Infra-PPAs"
@@ -1087,6 +1130,60 @@ processes (refresh cancels them) only clean up."
 (defun deb-packaging-infra--header ()
   "Header for infrastructure transient."
   (format "Infrastructure Management\nDistro: %s" (deb-packaging-config--effective-distro)))
+
+(transient-define-prefix deb-packaging-infra-schroots-dispatch ()
+  "Manage schroots and their sessions in the schroots buffer."
+  :environment #'deb-packaging-transients--env
+  ["Schroots"
+   ("u" "Update schroot(s)"      deb-packaging-infra-update-schroots)
+   ("U" "Update all schroots"    deb-packaging-infra-update-all-schroots)
+   ("d" "Delete schroot"         deb-packaging-infra-delete-schroot)
+   ("c" "Create schroot"         deb-packaging-infra-create-schroot)]
+  ["Sessions"
+   ("e" "End session(s)"         deb-packaging-infra-end-sessions)
+   ("E" "End all sessions"       deb-packaging-infra-end-all-sessions)]
+  ["Other lists"
+   ("l" "LXD (images + dev containers)..." deb-packaging-infra-lxd)
+   ("v" "QEMU images (autopkgtest)..."     deb-packaging-infra-qemu-images)
+   ("p" "PPAs (Launchpad)..."              deb-packaging-infra-ppas)]
+  ["Navigation"
+   ("g" "Refresh" deb-packaging-infra-refresh-schroots)
+   ("q" "Quit"    transient-quit-one)])
+
+(transient-define-prefix deb-packaging-infra-lxd-dispatch ()
+  "Manage LXD images and dev containers in the LXD buffer."
+  :environment #'deb-packaging-transients--env
+  ["LXD"
+   ("s" "Start container"          deb-packaging-infra-start-lxd-entry)
+   ("k" "Stop container"           deb-packaging-infra-stop-lxd-entry)
+   ("x" "Shell into container"     deb-packaging-infra-shell-lxd-entry)
+   ("d" "Delete image/container"   deb-packaging-infra-delete-lxd-entry)
+   ("c" "Create autopkgtest image" deb-packaging-infra-create-lxd)]
+  ["Navigation"
+   ("g" "Refresh" deb-packaging-infra-refresh-lxd)
+   ("q" "Quit"    transient-quit-one)])
+
+(transient-define-prefix deb-packaging-infra-qemu-dispatch ()
+  "Manage QEMU autopkgtest images in the QEMU buffer."
+  :environment #'deb-packaging-transients--env
+  ["QEMU images"
+   ("d" "Delete image" deb-packaging-infra-delete-qemu)
+   ("c" "Create image" deb-packaging-infra-create-qemu)]
+  ["Navigation"
+   ("g" "Refresh" deb-packaging-infra-refresh-qemu-images)
+   ("q" "Quit"    transient-quit-one)])
+
+(transient-define-prefix deb-packaging-infra-ppas-dispatch ()
+  "Manage Launchpad PPAs in the PPAs buffer."
+  :environment #'deb-packaging-transients--env
+  ["PPAs"
+   ("s" "Show PPA"      deb-packaging-infra-show-ppa)
+   ("e" "Configure PPA" deb-packaging-infra-set-ppa-config)
+   ("d" "Delete PPA"    deb-packaging-infra-delete-ppa)
+   ("c" "Create PPA"    deb-packaging-infra-create-ppa)]
+  ["Navigation"
+   ("g" "Refresh" deb-packaging-infra-refresh-ppas)
+   ("q" "Quit"    transient-quit-one)])
 
 (transient-define-prefix deb-packaging-infra-dispatch ()
   "Manage build and test infrastructure."

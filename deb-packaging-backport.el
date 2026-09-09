@@ -295,7 +295,12 @@ commits imports as one quilt patch per commit.  Each patch gets a
            (lambda ()
              (deb-packaging-commands--notify-status-refresh)
              (message "Backport complete: %d patch(es) verified, tree unpatched"
-                      (length written)))))))))
+                      (length written)))
+           (lambda ()
+             ;; The patches and series entries were written before
+             ;; verification; without this the next sbuild fails on them.
+             (message "Verification FAILED; remove from debian/patches/series: %s"
+                      (mapconcat #'file-name-nondirectory written ", ")))))))))
 
 (provide 'deb-packaging-backport)
 ;;; deb-packaging-backport.el ends here

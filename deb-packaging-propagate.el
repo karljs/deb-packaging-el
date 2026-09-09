@@ -253,7 +253,8 @@ provides the source-dir via git config."
           (if clone-dir
               (or (deb-packaging-propagate--config-get
                    clone-dir "deb-packaging.source-dir")
-                  (user-error "No source-dir stored in clone config"))
+                  (user-error
+                   "Not in a propagate clone; run 'Prepare Debian clone (salsa)' first"))
             (or (deb-packaging-detect--find-package-dir nil t)
                 (user-error "Not in a Debian package directory"))))
          (choice (completing-read "Fix source: "

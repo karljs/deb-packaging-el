@@ -194,7 +194,98 @@ Return the report buffer once its sentinel has fired."
 
 (ert-deftest deb-packaging-test-infra/schroots-map-question-opens-dispatch ()
   (should (eq (lookup-key deb-packaging-infra-schroots-mode-map "?")
-              #'deb-packaging-infra-dispatch)))
+              #'deb-packaging-infra-schroots-dispatch)))
+
+(ert-deftest deb-packaging-test-infra/list-maps-bind-question-to-own-dispatch ()
+  "Every infra list buffer's ? shows that buffer's own commands."
+  (should (eq (lookup-key deb-packaging-infra-lxd-mode-map "?")
+              #'deb-packaging-infra-lxd-dispatch))
+  (should (eq (lookup-key deb-packaging-infra-qemu-images-mode-map "?")
+              #'deb-packaging-infra-qemu-dispatch))
+  (should (eq (lookup-key deb-packaging-infra-ppas-mode-map "?")
+              #'deb-packaging-infra-ppas-dispatch)))
+
+(ert-deftest deb-packaging-test-infra/list-maps-bind-ret ()
+  (should (eq (lookup-key deb-packaging-infra-schroots-mode-map (kbd "RET"))
+              #'deb-packaging-infra-visit-schroot))
+  (should (eq (lookup-key deb-packaging-infra-qemu-images-mode-map (kbd "RET"))
+              #'deb-packaging-infra-visit-qemu-dir))
+  (should (eq (lookup-key deb-packaging-infra-ppas-mode-map (kbd "RET"))
+              #'deb-packaging-infra-visit-ppa)))
+
+(ert-deftest deb-packaging-test-infra/schroots-ret-direds-chroot-directory ()
+  (let (dired-arg)
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+               (lambda ()
+                 (list (list :name "noble-amd64-sbuild"
+                             :config-file "/etc/schroot/noble"
+                             :description "noble"
+                             :directory "/srv/chroots/noble"))))
+              ((symbol-function 'deb-packaging-infra--list-sessions)
+               (lambda () nil))
+              ((symbol-function 'file-directory-p) (lambda (&rest _) t))
+              ((symbol-function 'dired)
+               (lambda (dir &rest _) (setq dired-arg dir))))
+      (with-temp-buffer
+        (deb-packaging-infra-schroots-mode)
+        (deb-packaging-infra-refresh-schroots)
+        (goto-char (point-min))
+        (search-forward "noble-amd64-sbuild")
+        (deb-packaging-infra-visit-schroot)
+        (should (equal dired-arg "/srv/chroots/noble"))))))
+
+(ert-deftest deb-packaging-test-infra/schroots-ret-session-shows-info ()
+  (let (run-args)
+    (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+               (lambda () nil))
+              ((symbol-function 'deb-packaging-infra--list-sessions)
+               (lambda () (list "noble-amd64-sbuild-abc123")))
+              ((symbol-function 'deb-packaging-commands--run-command)
+               (lambda (_name args &rest _) (setq run-args args) nil)))
+      (with-temp-buffer
+        (deb-packaging-infra-schroots-mode)
+        (deb-packaging-infra-refresh-schroots)
+        (goto-char (point-min))
+        (search-forward "abc123")
+        (deb-packaging-infra-visit-schroot)
+        (should (equal run-args
+                       '("schroot" "--info" "-c"
+                         "noble-amd64-sbuild-abc123")))))))
+
+(ert-deftest deb-packaging-test-infra/schroots-ret-elsewhere-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+             (lambda () nil))
+            ((symbol-function 'deb-packaging-infra--list-sessions)
+               (lambda () nil)))
+    (with-temp-buffer
+      (deb-packaging-infra-schroots-mode)
+      (deb-packaging-infra-refresh-schroots)
+      (goto-char (point-min))
+      (should-error (deb-packaging-infra-visit-schroot) :type 'user-error))))
+
+(ert-deftest deb-packaging-test-infra/visit-qemu-dir-direds-image-dir ()
+  (let (dired-arg)
+    (cl-letf (((symbol-function 'file-directory-p) (lambda (&rest _) t))
+              ((symbol-function 'dired)
+               (lambda (dir &rest _) (setq dired-arg dir))))
+      (deb-packaging-infra-visit-qemu-dir)
+      (should (equal dired-arg deb-packaging-infra-qemu-dir)))))
+
+(ert-deftest deb-packaging-test-infra/visit-ppa-shows-ppa-at-point ()
+  (let (shown)
+    (with-temp-buffer
+      (deb-packaging-infra-ppas-mode)
+      (setq tabulated-list-entries
+            (list (deb-packaging-infra--make-ppa-entry "ppa:me/one")))
+      (tabulated-list-init-header)
+      (tabulated-list-print)
+      (goto-char (point-min))
+      (search-forward "one")
+      (beginning-of-line)
+      (cl-letf (((symbol-function 'deb-packaging-infra-show-ppa)
+                 (lambda (name &rest _) (setq shown name))))
+        (deb-packaging-infra-visit-ppa)
+        (should (equal shown "ppa:me/one"))))))
 
 ;;; Real defaults in create prompts
 

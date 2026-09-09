@@ -302,9 +302,45 @@ package's named status faces, not raw success/error."
 
 ;;; Mode-map conventions
 
-(ert-deftest deb-packaging-test-ppa-tests/map-question-opens-test-transient ()
+(ert-deftest deb-packaging-test-ppa-tests/map-question-opens-dispatch ()
   (should (eq (lookup-key deb-packaging-ppa-tests-mode-map "?")
-              #'deb-packaging-test-transient)))
+              #'deb-packaging-ppa-tests-dispatch)))
+
+(ert-deftest deb-packaging-test-ppa-tests/trigger-hints-only-when-url-present ()
+  "A row without an all-proposed URL must not advertise T."
+  (with-temp-buffer
+    (deb-packaging-ppa-tests-mode)
+    (deb-packaging-ppa-tests--render
+     (list :results nil
+           :triggers (list (list :series "noble" :package "foo"
+                                 :version "1.0" :status "published"
+                                 :arches (list (cons "amd64"
+                                                     (list :basic "https://e/b"
+                                                           :all-proposed nil)))))
+           :running nil :waiting nil)
+     "ppa:me/x")
+    (goto-char (point-min))
+    (should (search-forward "t: trigger basic" nil t))
+    (goto-char (point-min))
+    (should-not (search-forward "T: trigger all-proposed" nil t))))
+
+(ert-deftest deb-packaging-test-ppa-tests/open-log-falls-back-to-trigger ()
+  "RET on a trigger row has no log; it triggers the basic test instead."
+  (let ((triggered nil))
+    (with-temp-buffer
+      (insert (propertize "row" 'deb-packaging-ppa-tests-basic-url
+                          "https://example.com/basic"))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'deb-packaging-ppa-tests-trigger-basic)
+                 (lambda () (setq triggered t))))
+        (deb-packaging-ppa-tests-open-log))
+      (should triggered))))
+
+(ert-deftest deb-packaging-test-ppa-tests/open-log-errors-without-url-or-trigger ()
+  (with-temp-buffer
+    (insert "plain")
+    (goto-char (point-min))
+    (should-error (deb-packaging-ppa-tests-open-log) :type 'user-error)))
 
 ;;; Fetch races and PPA saving
 

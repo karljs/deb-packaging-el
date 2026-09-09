@@ -64,20 +64,43 @@ list (the historical bug) is caught here rather than at runtime."
 
 ;;; Language servers layer
 
+(ert-deftest deb-packaging-test-dev/every-profile-declares-a-server ()
+  (dolist (e deb-packaging-dev-language-profiles)
+    (should (stringp (plist-get (cddr e) :server)))))
+
+(ert-deftest deb-packaging-test-dev/profile-apts-accepts-legacy-string ()
+  "A space-separated :APT string splits into separate packages so it
+quotes correctly downstream (the shape that broke the c/c++ install)."
+  (should (equal (deb-packaging-dev--profile-apts
+                  (list (list 'legacy "Legacy" :apt "clangd bear"
+                              :server "clangd")))
+                 '("clangd" "bear"))))
+
 (ert-deftest deb-packaging-test-dev/langs-layer-with-apts ()
   (let ((s (deb-packaging-test-dev--join
             (deb-packaging-dev--script-langs-layer
-             "ctr" "LFP" '("clangd" "bear") nil))))
+             "ctr" "LFP" '("clangd" "bear") nil '("clangd")))))
     (should (string-match-p "Installing language servers" s))
+    ;; Shell-quoted, so the space escapes.
+    (should (string-match-p "apt-get\\\\ update" s))
     (should (string-match-p "clangd" s))
     (should (string-match-p "bear" s))
     (should (string-match-p "FP_LANGS=LFP" s))
-    (should (string-match-p "/root/.deb-dev-marker-langs" s))))
+    ;; The skip honors the self-heal force next to the global one.
+    (should (string-match-p "\\[ -z \"\\$FORCE\\$LANGS_FORCE\" \\]" s))
+    ;; Install is verified before the marker is written: a failed
+    ;; install must not be cached as provisioned.
+    (should (string-match-p "Language server install failed" s))
+    (should (string-match-p "exit 1" s))
+    (should (< (string-match "Language server install failed" s)
+               (string-match "echo\\\\ LFP" s)))))
 
 (ert-deftest deb-packaging-test-dev/langs-layer-no-apts ()
   (let ((s (deb-packaging-test-dev--join
-            (deb-packaging-dev--script-langs-layer "ctr" "LFP" nil nil))))
+            (deb-packaging-dev--script-langs-layer "ctr" "LFP" nil nil nil))))
     (should-not (string-match-p "Installing language servers" s))
+    ;; No servers to verify, so no verification block.
+    (should-not (string-match-p "Language server install failed" s))
     ;; Marker is still written even with nothing to install.
     (should (string-match-p "FP_LANGS=LFP" s))
     (should (string-match-p "/root/.deb-dev-marker-langs" s))))
@@ -85,11 +108,97 @@ list (the historical bug) is caught here rather than at runtime."
 (ert-deftest deb-packaging-test-dev/langs-layer-with-setups ()
   (let ((s (deb-packaging-test-dev--join
             (deb-packaging-dev--script-langs-layer
-             "ctr" "LFP" nil '("go install gopls" "npm install -g x")))))
+             "ctr" "LFP" nil '("go install gopls" "npm install -g x")
+             '("gopls")))))
     ;; Setup commands are shell-quoted, so their spaces escape.
     (should (string-match-p "go\\\\ install\\\\ gopls" s))
     (should (string-match-p "npm\\\\ install" s))
     (should (string-match-p "/root/.deb-dev-marker-langs" s))))
+
+;;; Missing-server probe (self-heal pre-flight)
+
+(ert-deftest deb-packaging-test-dev/missing-servers-parses-probe-output ()
+  (let (probe-args)
+    (cl-letf (((symbol-function 'deb-packaging-dev--container-exists-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'deb-packaging-detect--call-process-string)
+               (lambda (_program &rest args)
+                 (setq probe-args args)
+                 "clangd\n")))
+      (should (equal (deb-packaging-dev--missing-servers
+                      "ctr"
+                      (list (assq 'c/c++ deb-packaging-dev-language-profiles)))
+                     '("clangd")))
+      ;; The probe augments PATH (go installs outside the login PATH)
+      ;; and checks each server with command -v.
+      (let ((cmd (car (last probe-args))))
+        (should (string-match-p "/root/go/bin" cmd))
+        (should (string-match-p "command -v" cmd))))))
+
+(ert-deftest deb-packaging-test-dev/missing-servers-empty-probe-none-missing ()
+  (cl-letf (((symbol-function 'deb-packaging-dev--container-exists-p)
+             (lambda (&rest _) t))
+            ((symbol-function 'deb-packaging-detect--call-process-string)
+             (lambda (&rest _) "")))
+    (should (null (deb-packaging-dev--missing-servers
+                   "ctr"
+                   (list (assq 'c/c++ deb-packaging-dev-language-profiles)))))))
+
+(ert-deftest deb-packaging-test-dev/missing-servers-nil-when-no-container ()
+  (cl-letf (((symbol-function 'deb-packaging-dev--container-exists-p)
+             (lambda (&rest _) nil))
+            ((symbol-function 'deb-packaging-detect--call-process-string)
+             (lambda (&rest _) (error "must not probe"))))
+    (should (null (deb-packaging-dev--missing-servers
+                   "ctr"
+                   (list (assq 'c/c++ deb-packaging-dev-language-profiles)))))))
+
+(ert-deftest deb-packaging-test-dev/provision-script-langs-force ()
+  (let ((s (deb-packaging-dev--provision-script
+            "deb-dev-foo-noble" "noble" "/home/u/foo" "/root/work/foo" "foo"
+            "cfp" "lfp" "tfp" nil
+            (list (assq 'c/c++ deb-packaging-dev-language-profiles))
+            '("clangd"))))
+    ;; Newline anchors: LANGS_FORCE=1 must not match the FORCE=1 probe.
+    (should (string-match-p "\nLANGS_FORCE=1" s))
+    (should-not (string-match-p "\nFORCE=1" s))))
+
+(ert-deftest deb-packaging-test-dev/provision-script-quotes-profile-apts-correctly ()
+  "Regression: the c/c++ profile once had :apt \"clangd bear\" as one
+string, which the layer double-escaped into a single apt argument and
+failed with \"Unable to locate package clangd bear\" while still writing
+the layer marker."
+  (let ((s (deb-packaging-dev--provision-script
+            "deb-dev-foo-noble" "noble" "/home/u/foo" "/root/work/foo" "foo"
+            "cfp" "lfp" "tfp" nil
+            (list (assq 'c/c++ deb-packaging-dev-language-profiles)))))
+    ;; Single-escaped: apt receives clangd and bear as separate args.
+    (should (string-match-p "recommends\\\\ clangd\\\\ bear" s))))
+
+(ert-deftest deb-packaging-test-dev/dev-shell-forces-langs-when-server-missing ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3" :distro "noble")
+    (let ((script nil)
+          (messages nil))
+      (cl-letf (((symbol-function 'deb-packaging-dev--container-exists-p)
+                 (lambda (&rest _) t))
+                ((symbol-function 'deb-packaging-detect--call-process-string)
+                 (lambda (&rest _) ""))
+                ((symbol-function 'deb-packaging-dev--read-langs-cache)
+                 (lambda (&rest _) '(c/c++)))
+                ((symbol-function 'deb-packaging-dev--missing-servers)
+                 (lambda (_name _profiles) '("clangd")))
+                ((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (push (apply #'format fmt args) messages)))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &rest _) (setq script (nth 2 args)) nil)))
+        (deb-packaging-dev-shell)
+        (should script)
+        (should (string-match-p "LANGS_FORCE=1" script))
+        (should (cl-some
+                (lambda (m) (string-match-p "Re-installing missing language servers" m))
+                messages))))))
 
 ;;; Dev tools layer
 
@@ -192,6 +301,65 @@ the langs or tools layer had packages to install."
     (should-not (deb-packaging-dev--need-langs-prompt-p nil fp ""))
     (should (deb-packaging-dev--need-langs-prompt-p nil nil ""))
     (should (deb-packaging-dev--need-langs-prompt-p t fp fp))))
+
+;;; Eglot pre-check
+
+(ert-deftest deb-packaging-test-dev/cached-profiles-parses-container-name ()
+  "Hyphenated package names parse correctly: the distro is the last
+component, the rest is the package."
+  (cl-letf (((symbol-function 'deb-packaging-dev--read-langs-cache)
+             (lambda (pkg distro)
+               (should (equal pkg "linux-tools"))
+               (should (equal distro "noble"))
+               '(c/c++))))
+    (should (equal (deb-packaging-dev--cached-profiles-for
+                    "deb-dev-linux-tools-noble")
+                   (list (assq 'c/c++ deb-packaging-dev-language-profiles))))))
+
+(defmacro deb-packaging-test-dev--with-lxc-buffer (path &rest body)
+  "Run BODY in a temp buffer visiting PATH, then clean up."
+  (declare (indent 1) (debug (form body)))
+  `(let ((buf (generate-new-buffer " *deb-test-lxc*")))
+     (unwind-protect
+         (with-current-buffer buf
+           (setq buffer-file-name ,path)
+           (setq default-directory (file-name-directory ,path))
+           ,@body)
+       (kill-buffer buf))))
+
+(ert-deftest deb-packaging-test-dev/eglot-errors-when-all-servers-missing ()
+  (deb-packaging-test-dev--with-lxc-buffer
+      "/lxc:deb-dev-foo-noble:/root/work/foo/src/foo.c"
+    (cl-letf (((symbol-function 'deb-packaging-dev--read-langs-cache)
+               (lambda (&rest _) '(c/c++)))
+              ((symbol-function 'deb-packaging-dev--missing-servers)
+               (lambda (_container _profiles) '("clangd")))
+              ((symbol-function 'eglot-ensure)
+               (lambda () (error "must not eglot"))))
+      (should-error (deb-packaging-dev-eglot) :type 'user-error))))
+
+(ert-deftest deb-packaging-test-dev/eglot-continues-when-some-servers-missing ()
+  ;; Pre-load eglot: the `require' inside the command would otherwise
+  ;; clobber the eglot-ensure mock by defining the real function.
+  (require 'eglot)
+  (let ((ran nil)
+        (messages nil))
+    (deb-packaging-test-dev--with-lxc-buffer
+        "/lxc:deb-dev-foo-noble:/root/work/foo/src/foo.c"
+      (cl-letf (((symbol-function 'deb-packaging-dev--read-langs-cache)
+                 (lambda (&rest _) '(c/c++ python)))
+                ((symbol-function 'deb-packaging-dev--missing-servers)
+                 (lambda (_container _profiles) '("clangd")))
+                ((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (push (apply #'format fmt args) messages)))
+                ((symbol-function 'eglot-ensure)
+                 (lambda () (setq ran t))))
+        (deb-packaging-dev-eglot)
+        (should ran)
+        (should (cl-some
+                (lambda (m) (string-match-p "Missing language servers" m))
+                messages))))))
 
 ;;; Project dispatch
 

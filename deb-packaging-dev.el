@@ -41,15 +41,18 @@
   "Base mount path inside the container. Package name is appended.")
 
 (defvar deb-packaging-dev-language-profiles
-  '((c/c++  "C/C++"  :apt "clangd bear")
-    (python "Python" :apt "python3-pylsp")
-    (rust   "Rust"   :apt "rust-analyzer")
-    (go     "Go"     :setup "apt-get install -y --no-install-recommends golang-go && go install golang.org/x/tools/gopls@latest")
-    (bash   "Bash"   :setup "apt-get install -y --no-install-recommends npm && npm install -g bash-language-server")
-    (js-ts  "JS/TS"  :setup "apt-get install -y --no-install-recommends npm && npm install -g typescript typescript-language-server"))
+  '((c/c++  "C/C++"  :apt ("clangd" "bear") :server "clangd")
+    (python "Python" :apt ("python3-pylsp") :server "pylsp")
+    (rust   "Rust"   :apt ("rust-analyzer") :server "rust-analyzer")
+    (go     "Go"     :setup "apt-get install -y --no-install-recommends golang-go && go install golang.org/x/tools/gopls@latest" :server "gopls")
+    (bash   "Bash"   :setup "apt-get install -y --no-install-recommends npm && npm install -g bash-language-server" :server "bash-language-server")
+    (js-ts  "JS/TS"  :setup "apt-get install -y --no-install-recommends npm && npm install -g typescript typescript-language-server" :server "typescript-language-server"))
   "Language server profiles.
-Each entry: (KEY LABEL :apt \"pkg ...\" :setup \"cmd\").
-Add entries to extend language support.")
+Each entry: (KEY LABEL :apt (\"pkg\" ...) :setup \"cmd\" :server \"bin\").
+:APT is a list of package names (a legacy space-separated string also
+works).  :SERVER is the binary the LSP client needs; the langs layer
+verifies it after install and writes no marker on failure.  Add entries
+to extend language support.")
 
 (defvar deb-packaging-dev-extra-packages '("git" "gdb" "strace")
   "Extra apt packages for dev containers. Not build-deps, not language servers.
@@ -153,6 +156,41 @@ recurs on every dev-shell.")
      pkg distro (or keys (list deb-packaging-dev--no-langs-key)))
     entries))
 
+(defun deb-packaging-dev--profile-servers (profiles)
+  "Return the :server binaries of language PROFILES."
+  (delq nil (mapcar (lambda (e) (plist-get (cddr e) :server)) profiles)))
+
+(defun deb-packaging-dev--profile-apts (profiles)
+  "Return apt package names of language PROFILES, one word per element.
+A :APT value may be a list (preferred) or a legacy space-separated
+string; strings are split so they quote correctly downstream."
+  (delq nil
+        (mapcan (lambda (e)
+                  (let ((v (plist-get (cddr e) :apt)))
+                    (cond ((null v) nil)
+                          ((listp v) (copy-sequence v))
+                          (t (split-string v "[ \t]+" t)))))
+                profiles)))
+
+(defun deb-packaging-dev--server-probe-command (servers)
+  "Return a shell command printing the SERVERS binaries missing from PATH.
+PATH gains /root/go/bin: `go install' lands there and `lxc exec' runs a
+non-login shell whose PATH does not include it."
+  (format "export PATH=\"$PATH:/root/go/bin\"; for b in %s; do command -v \"$b\" >/dev/null 2>&1 || echo \"$b\"; done"
+          (mapconcat #'shell-quote-argument servers " ")))
+
+(defun deb-packaging-dev--missing-servers (name profiles)
+  "Return server binaries of PROFILES missing in container NAME.
+Nil when none are missing, no servers apply, or the probe cannot run
+(container absent or stopped); callers treat nil as no information."
+  (let ((servers (deb-packaging-dev--profile-servers profiles)))
+    (when (and servers (deb-packaging-dev--container-exists-p name))
+      (let ((probe (deb-packaging-detect--call-process-string
+                    "lxc" "exec" name "--" "sh" "-c"
+                    (deb-packaging-dev--server-probe-command servers))))
+        (when probe
+          (split-string probe "\n" t))))))
+
 (defun deb-packaging-dev--control-fingerprint (pkg-dir)
   "SHA256 of debian/control in PKG-DIR."
   (let ((control-file (expand-file-name "debian/control" pkg-dir)))
@@ -244,24 +282,33 @@ CONTROL-FP is the debian/control fingerprint used as the layer marker."
    "fi"))
 
 (defun deb-packaging-dev--script-langs-layer (qname langs-fp
-                                                    profile-apts profile-setups)
+                                                    profile-apts profile-setups
+                                                    servers)
   "Return script lines for the language-servers layer.
 LANGS-FP is the profiles fingerprint used as the layer marker.
-PROFILE-APTS are apt package strings; PROFILE-SETUPS are shell commands."
+PROFILE-APTS is a list of single-word apt package names; PROFILE-SETUPS
+are shell commands.  SERVERS are the LSP binaries the selection must
+provide; any still missing after install fails the layer without
+writing its marker, so a failed install is retried on the next
+dev-shell instead of cached."
   (append
    (list
     (format "FP_LANGS=%s" (shell-quote-argument langs-fp))
     "MARKER_LANGS=/root/.deb-dev-marker-langs"
-    "if [ -z \"$FORCE\" ] && [ -f \"$MARKER_LANGS\" ] && [ \"$(cat \"$MARKER_LANGS\")\" = \"$FP_LANGS\" ]; then"
+    "if [ -z \"$FORCE$LANGS_FORCE\" ] && [ -f \"$MARKER_LANGS\" ] && [ \"$(cat \"$MARKER_LANGS\")\" = \"$FP_LANGS\" ]; then"
     "  echo 'Language servers up to date, skipping'"
-    "else")
+    "else"
+    (format "  lxc exec %s -- sh -c %s"
+            qname
+            (shell-quote-argument
+             "export DEBIAN_FRONTEND=noninteractive; apt-get update || true")))
    (when profile-apts
      (list
       "  echo 'Installing language servers...'"
       (format "  lxc exec %s -- sh -c %s || true"
               qname
               (shell-quote-argument
-               (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s || echo '  (some unavailable on this release)'"
+               (format "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends %s"
                        (mapconcat #'shell-quote-argument profile-apts " "))))))
    (mapcar
     (lambda (cmd)
@@ -270,6 +317,13 @@ PROFILE-APTS are apt package strings; PROFILE-SETUPS are shell commands."
               (shell-quote-argument
                (format "export DEBIAN_FRONTEND=noninteractive; %s" cmd))))
     profile-setups)
+   (when servers
+     (list
+      (format "  missing=$(lxc exec %s -- sh -c %s)"
+              qname
+              (shell-quote-argument
+               (deb-packaging-dev--server-probe-command servers)))
+      "  [ -z \"$missing\" ] || { echo \"Language server install failed, missing:$missing\" >&2; exit 1; }"))
    (list
     (format "  lxc exec %s -- sh -c %s"
             qname
@@ -305,10 +359,12 @@ EXTRA-APT is a space-joined, shell-quoted package string."
 
 (defun deb-packaging-dev--provision-script (name distro pkg-dir mount pkg
                                                  control-fp langs-fp tools-fp
-                                                 force profiles)
+                                                 force profiles
+                                                 &optional langs-force)
   "Build the provision script for container NAME.
 Three layers, each with its own marker: build-deps (CONTROL-FP),
-languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all."
+languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all layers;
+LANGS-FORCE re-runs only the language layer (missing-server self-heal)."
   (let ((qname (shell-quote-argument name))
         (qpkg-dir (shell-quote-argument pkg-dir))
         (qmount (shell-quote-argument mount))
@@ -316,22 +372,22 @@ languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all."
         (uid (number-to-string (user-uid)))
         (extra-apt (mapconcat #'shell-quote-argument
                               deb-packaging-dev-extra-packages " "))
-        (profile-apts (delq nil
-                            (mapcar (lambda (e) (plist-get (cddr e) :apt))
-                                    profiles)))
+        (profile-apts (deb-packaging-dev--profile-apts profiles))
         (profile-setups (delq nil
                               (mapcar (lambda (e) (plist-get (cddr e) :setup))
                                       profiles)))
+        (profile-servers (deb-packaging-dev--profile-servers profiles))
         (device (format "work-%s" pkg)))
     (string-join
      (append
       (deb-packaging-dev--script-container-setup
        qname image uid qpkg-dir qmount device)
-      (list (format "FORCE=%s" (if force "1" "")))
+      (list (format "FORCE=%s" (if force "1" ""))
+            (format "LANGS_FORCE=%s" (if langs-force "1" "")))
       (deb-packaging-dev--script-core-helpers qname)
       (deb-packaging-dev--script-build-deps-layer qname mount control-fp)
       (deb-packaging-dev--script-langs-layer
-       qname langs-fp profile-apts profile-setups)
+       qname langs-fp profile-apts profile-setups profile-servers)
       (deb-packaging-dev--script-tools-layer qname tools-fp extra-apt)
       (list (format "echo READY: /lxc:%s:%s" name mount)))
      "\n")))
@@ -339,28 +395,57 @@ languages (LANGS-FP), tools (TOOLS-FP). FORCE re-runs all."
 (defun deb-packaging-dev--open-on-success (proc tramp-path)
   "Show dired at TRAMP-PATH when PROC exits 0, without moving focus.
 Provisioning can take minutes; the sentinel must not yank the user out
-of whatever buffer they moved to in the meantime."
+of whatever buffer they moved to in the meantime.  Refreshes the LXD
+list so a newly provisioned container appears without a manual `g'
+(dev-destroy already refreshes)."
   (deb-packaging-commands--wrap-sentinel
    proc
    (lambda (p _event)
      (when (and (eq (process-status p) 'exit)
                 (zerop (process-exit-status p)))
        (display-buffer (dired-noselect tramp-path))
+       (deb-packaging-commands--refresh-buffer
+        'deb-packaging-infra-lxd-mode #'deb-packaging-infra-refresh-lxd)
        (message "Dev shell ready at %s" tramp-path)))))
 
 ;;; Eglot
 
+(defun deb-packaging-dev--cached-profiles-for (container)
+  "Return cached profile entries for container named deb-dev-PKG-DISTRO.
+Package names may contain hyphens; the distro is the final component."
+  (when (string-prefix-p "deb-dev-" container)
+    (let* ((parts (split-string (string-remove-prefix "deb-dev-" container) "-"))
+           (pkg (mapconcat #'identity (butlast parts) "-"))
+           (distro (car (last parts))))
+      (delq nil
+            (mapcar (lambda (k) (assq k deb-packaging-dev-language-profiles))
+                    (deb-packaging-dev--read-langs-cache pkg distro))))))
+
 (defun deb-packaging-dev-eglot ()
   "Start eglot for the current buffer.
-Must be visiting a file under /lxc:. Call manually or wire into your own
-`prog-mode-hook'."
+Must be visiting a file under /lxc:. When the dev container's cached
+language selection has no server binaries installed, says how to fix
+that instead of letting eglot report an opaque executable-lookup
+failure. Call manually or wire into your own `prog-mode-hook'."
   (interactive)
   (unless (and buffer-file-name
-              (string-prefix-p "/lxc:" buffer-file-name))
+               (string-prefix-p "/lxc:" buffer-file-name))
     (user-error "Not visiting a file under /lxc:"))
   (deb-packaging-dev--ensure-tramp-method)
-  (require 'eglot)
-  (eglot-ensure))
+  (let* ((container (tramp-file-name-host
+                     (tramp-dissect-file-name buffer-file-name)))
+         (profiles (deb-packaging-dev--cached-profiles-for container))
+         (servers (deb-packaging-dev--profile-servers profiles))
+         (missing (deb-packaging-dev--missing-servers container profiles)))
+    (if (and servers missing (= (length missing) (length servers)))
+        (user-error
+         "No language server (%s) in container %s; re-run dev-shell (C-u forces re-provision)"
+         (mapconcat #'identity missing ", ") container)
+      (when missing
+        (message "Missing language servers in %s: %s"
+                 container (mapconcat #'identity missing ", ")))
+      (require 'eglot)
+      (eglot-ensure))))
 
 ;;; Compile database
 
@@ -493,6 +578,9 @@ Each plist: :name, :status, :source."
   "Bring up the dev container for the current package.
 Creates or reuses, bind-mounts, provisions, opens dired.
 Prompts for languages only when the langs layer needs provisioning.
+Re-installs missing language servers without a prompt when the
+pre-flight finds them absent (e.g. an install that failed silently
+under the old marker).
 C-u forces re-provision of all layers."
   (interactive "P")
   (deb-packaging-dev--ensure-tramp-method)
@@ -526,12 +614,16 @@ C-u forces re-provision of all layers."
                 langs-fp (deb-packaging-dev--langs-fingerprint profiles))
         (setq profiles cached-profiles
               langs-fp cached-fp)))
-    (let* ((script (deb-packaging-dev--provision-script
+    (let* ((missing (deb-packaging-dev--missing-servers name profiles))
+           (script (deb-packaging-dev--provision-script
                     name distro pkg-dir mount pkg
-                    control-fp langs-fp tools-fp force profiles))
+                    control-fp langs-fp tools-fp force profiles missing))
            (buf (deb-packaging-commands--run-command
                  "dev-shell" (list "sh" "-c" script) pkg-dir 'dev-shell))
            (tramp-path (format "/lxc:%s:%s" name mount)))
+      (when missing
+        (message "Re-installing missing language servers: %s"
+                 (mapconcat #'identity missing ", ")))
       (when-let ((proc (get-buffer-process buf)))
         (deb-packaging-dev--open-on-success proc tramp-path))
       buf)))

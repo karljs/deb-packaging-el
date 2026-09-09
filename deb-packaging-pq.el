@@ -115,12 +115,23 @@ packaging branch, deletes the patch-queue branch."
 ;;;###autoload
 (defun deb-packaging-pq-drop ()
   "Delete the patch-queue branch without exporting.
-Useful to abort an edit session and start over."
+Useful to abort an edit session and start over.  Asks first: commits
+on the branch that were never exported are lost."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (deb-packaging-commands--after-compile
-   (deb-packaging-commands--compile "gbp pq drop")
-   #'deb-packaging-commands--notify-status-refresh))
+  (let* ((state (deb-packaging-pq--state))
+         (exists (plist-get state :exists-p))
+         (pq-branch (plist-get state :pq-branch)))
+    (unless exists
+      (user-error "No patch-queue branch to drop"))
+    (when (y-or-n-p
+           (if pq-branch
+               (format "Delete patch-queue branch %s (unexported commits will be lost)? "
+                       pq-branch)
+             "Delete the patch-queue branch (unexported commits will be lost)? "))
+      (deb-packaging-commands--after-compile
+       (deb-packaging-commands--compile "gbp pq drop")
+       #'deb-packaging-commands--notify-status-refresh))))
 
 ;;; Transient
 

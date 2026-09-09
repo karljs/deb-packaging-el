@@ -62,14 +62,20 @@ the learned key dead."
                     deb-packaging-dev-transient
                     deb-packaging-pq-transient
                     deb-packaging-propagate-transient
-                    deb-packaging-infra-dispatch))
+                    deb-packaging-update-transient
+                    deb-packaging-infra-dispatch
+                    deb-packaging-infra-schroots-dispatch
+                    deb-packaging-infra-lxd-dispatch
+                    deb-packaging-infra-qemu-dispatch
+                    deb-packaging-infra-ppas-dispatch
+                    deb-packaging-ppa-tests-dispatch))
     (let ((layout (deb-packaging-test-dispatch--layout prefix)))
       (should (string-match-p ":key \"q\"" layout))
       (should (string-match-p "transient-quit-one" layout)))))
 
 (ert-deftest deb-packaging-test-dispatch/upload-key-matches-status-map ()
   "The dispatch uses U for the upload transient, matching the status
-buffer map, where p is section navigation."
+  buffer map, where p is section navigation."
   (let ((layout (deb-packaging-test-dispatch--layout
                  'deb-packaging-dispatch-transient)))
     (should (string-match-p ":key \"U\"" layout))
@@ -81,6 +87,14 @@ buffer map, where p is section navigation."
     (should-not (string-match-p
                  ":key \"p\"[^)]*:command deb-packaging-upload-transient"
                  layout))))
+
+(ert-deftest deb-packaging-test-dispatch/dispatch-binds-clone ()
+  "The git-ubuntu clone entry point is reachable from the dispatch."
+  (let ((layout (deb-packaging-test-dispatch--layout
+                 'deb-packaging-dispatch-transient)))
+    (should (string-match-p
+             ":key \"C\".*:command deb-packaging-clone-git-ubuntu"
+             layout))))
 
 (provide 'deb-packaging-test-dispatch)
 ;;; deb-packaging-test-dispatch.el ends here

@@ -89,5 +89,57 @@
           (should (= fired 0)))
       (kill-buffer buf))))
 
+(ert-deftest deb-packaging-test-pq/after-compile-fires-on-failure-callback ()
+  "ON-FAILURE runs on a non-zero exit; ACTION still does not."
+  (let* ((compilation-finish-functions nil)
+         (buf (generate-new-buffer " *fake-compile-fail2*"))
+         (action 0) (failure 0))
+    (unwind-protect
+        (progn
+          (deb-packaging-commands--after-compile
+           buf (lambda () (cl-incf action)) (lambda () (cl-incf failure)))
+          (run-hook-with-args 'compilation-finish-functions
+                              buf "exited abnormally with code 1\n")
+          (should (= action 0))
+          (should (= failure 1)))
+      (kill-buffer buf))))
+
+(ert-deftest deb-packaging-test-pq/after-compile-failure-skips-on-kill ()
+  "The killed-buffer event fires neither callback (reuse race)."
+  (let* ((compilation-finish-functions nil)
+         (buf (generate-new-buffer " *fake-compile-kill*"))
+         (failure 0))
+    (unwind-protect
+        (progn
+          (deb-packaging-commands--after-compile
+           buf (lambda () nil) (lambda () (cl-incf failure)))
+          (run-hook-with-args 'compilation-finish-functions buf "killed\n")
+          (should (= failure 0)))
+      (kill-buffer buf))))
+
+(ert-deftest deb-packaging-test-pq/drop-asks-before-deleting ()
+  "Patch-queue commits are lost; no compile without confirmation."
+  (let ((compiled 0))
+    (cl-letf (((symbol-function 'deb-packaging-pq--ensure-quilt-repo) #'ignore)
+              ((symbol-function 'deb-packaging-pq--state)
+               (lambda () (list :on-pq-p t :branch "patch-queue/main"
+                                 :pq-branch "patch-queue/main" :exists-p t)))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) nil))
+              ((symbol-function 'deb-packaging-commands--compile)
+               (lambda (&rest _) (cl-incf compiled) nil)))
+      (let ((compilation-finish-functions nil))
+        (deb-packaging-pq-drop)
+        (should (= compiled 0))
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+          (deb-packaging-pq-drop)
+          (should (= compiled 1)))))))
+
+(ert-deftest deb-packaging-test-pq/drop-without-branch-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-pq--ensure-quilt-repo) #'ignore)
+            ((symbol-function 'deb-packaging-pq--state)
+             (lambda () (list :on-pq-p nil :branch "main"
+                               :pq-branch "patch-queue/main" :exists-p nil))))
+    (should-error (deb-packaging-pq-drop) :type 'user-error)))
+
 (provide 'deb-packaging-test-pq)
 ;;; deb-packaging-test-pq.el ends here

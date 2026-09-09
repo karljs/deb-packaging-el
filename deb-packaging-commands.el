@@ -202,17 +202,21 @@ when `fboundp'."
           (when (derived-mode-p mode)
             (funcall refresh-fn)))))))
 
-(defun deb-packaging-commands--after-compile (buf action)
+(defun deb-packaging-commands--after-compile (buf action &optional on-failure)
   "Call ACTION (no args) when the compilation in BUF finishes successfully.
-One-shot `compilation-finish-functions' hook; skips ACTION on failure
-since the buffer already shows the error.  With a reused *compilation*
-buffer, a second run kills the first and both hooks see the kill event:
-neither acts, so the affected row may need a manual refresh."
+ON-FAILURE (no args) runs instead on a non-zero exit; the buffer already
+shows the error, so it is for follow-up context, not the error itself.
+One-shot `compilation-finish-functions' hook; the killed-buffer event (a
+reused *compilation* buffer kills the first run and both hooks see it)
+runs neither, so the affected row may need a manual refresh."
   (letrec ((hook (lambda (finished-buf msg)
                    (when (eq finished-buf buf)
                      (remove-hook 'compilation-finish-functions hook)
-                     (when (string-match-p "finished" msg)
-                       (funcall action))))))
+                     (cond ((string-match-p "finished" msg)
+                            (funcall action))
+                           ((and on-failure
+                                 (not (string-match-p "\\`killed" msg)))
+                            (funcall on-failure)))))))
     (add-hook 'compilation-finish-functions hook)))
 
 (defun deb-packaging-commands--compile (cmd)
