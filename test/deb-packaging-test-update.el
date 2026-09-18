@@ -140,6 +140,10 @@
   (should (null (deb-packaging-update--target-version
                  "foo" "1.0" '("foo_1.0.orig.tar.gz") nil))))
 
+(ert-deftest deb-packaging-test-update/target-version-rejects-older-tarball ()
+  (should (null (deb-packaging-update--target-version
+                 "foo" "2.0" '("foo_1.0.orig.tar.gz") nil))))
+
 (ert-deftest deb-packaging-test-update/target-version-components-collapse ()
   (should (string= (deb-packaging-update--target-version
                     "foo" "1.0"

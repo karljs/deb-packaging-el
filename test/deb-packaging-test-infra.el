@@ -408,6 +408,14 @@ The sentinel fires during the wait, while the mode buffer is alive."
 
 ;;; PPA list fetch failure
 
+(ert-deftest deb-packaging-test-infra/ppa-loading-keeps-current-rows ()
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (setq tabulated-list-entries
+          (list (deb-packaging-infra--make-ppa-entry "ppa:me/old")))
+    (deb-packaging-infra--show-ppas-loading-message)
+    (should (assoc "ppa:me/old" tabulated-list-entries))))
+
 (ert-deftest deb-packaging-test-infra/ppa-list-failure-keeps-list-and-messages ()
   (let ((messages nil))
     (with-temp-buffer
@@ -426,6 +434,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
                           (current-buffer) temp-buf)
                          proc "exited abnormally with code 1\n"))
               (should (assoc "ppa:me/old" tabulated-list-entries))
+              (should (string-match-p "showing cached results" (buffer-string)))
               (should (cl-some (lambda (m) (string-match-p "failed" m))
                                messages)))
           (kill-buffer temp-buf))))))

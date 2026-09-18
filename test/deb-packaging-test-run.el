@@ -92,6 +92,21 @@ per record, not the first run's time forever."
     (deb-packaging-commands--record-run 'test-run 'success "*buf*")
     (should (null (deb-packaging-commands--run-summary 'test-run)))))
 
+(ert-deftest deb-packaging-test-run/records-are-package-scoped ()
+  (let ((deb-packaging-commands--run-history nil))
+    (deb-packaging-test--with-package-tree
+        '(:name "one" :version "1.0-1")
+      (deb-packaging-commands--record-run 'sbuild 'success "*one*")
+      (deb-packaging-test--with-package-tree
+          '(:name "two" :version "1.0-1")
+        (deb-packaging-commands--record-run 'sbuild 'failure "*two*")
+        (should (eq (plist-get (deb-packaging-commands-run-record 'sbuild)
+                               :status)
+                    'failure)))
+      (should (eq (plist-get (deb-packaging-commands-run-record 'sbuild)
+                             :status)
+                  'success)))))
+
 (ert-deftest deb-packaging-test-run/run-summary-parser-lint-keys ()
   (should (eq (deb-packaging-commands--run-summary-parser 'lintian-source)
               #'deb-packaging-commands--parse-lint-summary))

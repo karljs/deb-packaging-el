@@ -384,8 +384,9 @@ trigger row there is no log; RET triggers the basic test instead."
   "Run `ppa tests' for PPA/NAME/DISTRO; render the report when done.
 A fetch already in flight for the report buffer is killed first, so two
 fetches cannot race to render."
-  (let ((report-buf (get-buffer-create
-                     (deb-packaging-ppa-tests--buffer-name ppa name distro)))
+  (let ((scope (deb-packaging-commands--run-scope))
+        (report-buf (get-buffer-create
+                      (deb-packaging-ppa-tests--buffer-name ppa name distro)))
         (out-buf (generate-new-buffer " *deb-ppa-tests-output*")))
     (with-current-buffer report-buf
       (unless (derived-mode-p 'deb-packaging-ppa-tests-mode)
@@ -399,7 +400,7 @@ fetches cannot race to render."
         (erase-buffer)
         (insert (propertize (format "Fetching tests for %s...\n" ppa)
                             'font-lock-face 'shadow))))
-    (deb-packaging-commands--record-run 'ppa-tests 'running nil)
+    (deb-packaging-commands--record-run 'ppa-tests 'running nil nil scope)
     (deb-packaging-commands--notify-status-refresh)
     (condition-case err
         (let ((proc (make-process
@@ -412,19 +413,20 @@ fetches cannot race to render."
                      (lambda (proc _event)
                        (when (memq (process-status proc) '(exit signal))
                          (unwind-protect
-                             (deb-packaging-ppa-tests--fetch-done
-                              proc out-buf report-buf ppa)
+                              (deb-packaging-ppa-tests--fetch-done
+                               proc out-buf report-buf ppa scope)
                            (kill-buffer out-buf)))))))
           (with-current-buffer report-buf
             (setq deb-packaging-ppa-tests--process proc)))
       ;; Spawn itself can signal (e.g. ppa not installed); don't leak the
       ;; buffer or leave the run record stuck on `running'.
       (error (kill-buffer out-buf)
-             (deb-packaging-commands--record-run 'ppa-tests 'failure nil)
+              (deb-packaging-commands--record-run
+               'ppa-tests 'failure nil nil scope)
              (deb-packaging-commands--notify-status-refresh)
              (signal (car err) (cdr err))))))
 
-(defun deb-packaging-ppa-tests--fetch-done (proc out-buf report-buf ppa)
+(defun deb-packaging-ppa-tests--fetch-done (proc out-buf report-buf ppa &optional scope)
   "Handle `ppa tests' exit: parse and render, or dump raw output on failure.
 A killed process (a newer fetch replaced it) is ignored entirely."
   (cond
@@ -434,14 +436,14 @@ A killed process (a newer fetch replaced it) is ignored entirely."
                     (with-current-buffer out-buf (buffer-string))))
            (summary (deb-packaging-ppa-tests--summary parsed)))
       (deb-packaging-commands--record-run
-       'ppa-tests 'success (buffer-name report-buf) summary)
+       'ppa-tests 'success (buffer-name report-buf) summary scope)
       ;; The user may have killed the report buffer while we ran.
       (when (buffer-live-p report-buf)
         (with-current-buffer report-buf
           (deb-packaging-ppa-tests--render parsed ppa)))))
    ((eq (process-status proc) 'exit)
-    (deb-packaging-commands--record-run
-     'ppa-tests 'failure (buffer-name report-buf))
+     (deb-packaging-commands--record-run
+      'ppa-tests 'failure (buffer-name report-buf) nil scope)
     (when (buffer-live-p report-buf)
       (with-current-buffer report-buf
         (let ((inhibit-read-only t))

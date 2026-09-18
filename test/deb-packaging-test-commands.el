@@ -678,8 +678,8 @@ default would duplicate them (or break Debian builds)."
                  (get-buffer-create "*deb-test-compile*"))))
       (let ((buf (deb-packaging-commands--compile "make foo")))
         (should (equal captured
-                       (list "make foo" nil t
-                             (deb-packaging-display--action 'output))))
+                        (list "make foo" nil nil
+                              (deb-packaging-display--action 'output))))
         (should (eq (buffer-local-value 'deb-packaging-display-category buf)
                     'output))
         (kill-buffer buf)))))
@@ -687,6 +687,21 @@ default would duplicate them (or break Debian builds)."
 (ert-deftest deb-packaging-test-commands/compile-wrapper-tolerates-nil-buffer ()
   (cl-letf (((symbol-function 'compile) (lambda (&rest _) nil)))
     (should (null (deb-packaging-commands--compile "make foo")))))
+
+(ert-deftest deb-packaging-test-commands/compile-wrapper-uses-unique-buffers ()
+  (let (buffers)
+    (unwind-protect
+        (cl-letf (((symbol-function 'compile)
+                   (lambda (&rest _)
+                     (let ((buf (get-buffer-create
+                                 (funcall compilation-buffer-name-function
+                                          "compilation"))))
+                       (push buf buffers)
+                       buf))))
+          (deb-packaging-commands--compile "make one")
+          (deb-packaging-commands--compile "make two")
+          (should (= (length (delete-dups (mapcar #'buffer-name buffers))) 2)))
+      (mapc #'kill-buffer buffers))))
 
 ;;; sbuild shell-on-failure flag: single source of truth
 

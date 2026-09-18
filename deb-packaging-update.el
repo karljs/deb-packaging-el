@@ -103,15 +103,19 @@ Covers plain and extra-component tarballs (name_V.orig[-comp].tar.*)."
   "Return the upstream version to update to, or nil.
 TARBALLS are all orig tarball names in the build directory, DOWNLOADED
 the subset added by the uscan run that just finished.  Candidates
-exclude CURRENT (the changelog's upstream version; equal means there
-is nothing to update).  A single candidate returns outright; several
+include only versions newer than CURRENT.  A single candidate returns
+outright; several
 prompt, defaulting to a downloaded one.  Stale tarballs therefore
 merely cost a prompt, and re-running after a failed uupdate still
 finds its version without a fresh download."
   (let* ((versions (lambda (files)
                      (delete-dups
-                      (seq-remove
-                       (lambda (v) (or (null v) (string= v current)))
+                      (seq-filter
+                       (lambda (v)
+                         (and v
+                              (zerop (call-process
+                                      "dpkg" nil nil nil
+                                      "--compare-versions" v "gt" current))))
                        (mapcar (lambda (f)
                                  (deb-packaging-update--tarball-version name f))
                                files)))))

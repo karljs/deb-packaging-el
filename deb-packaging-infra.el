@@ -1025,6 +1025,12 @@ the text and send RET to bogus locations."
 (defvar-local deb-packaging-infra--ppa-fetch-failed nil
   "Non-nil when the last `ppa list' fetch exited non-zero.")
 
+(defvar-local deb-packaging-infra--ppa-pending-entries nil
+  "PPA rows collected by the current refresh.")
+
+(defvar-local deb-packaging-infra--ppa-fetch-succeeded nil
+  "Non-nil when any process in the current PPA refresh succeeded.")
+
 (defun deb-packaging-infra--cancel-ppa-processes ()
   "Cancel in-flight async PPA listing processes."
   (dolist (proc deb-packaging-infra--ppa-processes)
@@ -1032,30 +1038,37 @@ the text and send RET to bogus locations."
       (delete-process proc)))
   (setq deb-packaging-infra--ppa-processes nil))
 
-(defun deb-packaging-infra--append-ppa (ppa)
-  "Append PPA to `tabulated-list-entries' if not already present."
-  (unless (assoc ppa tabulated-list-entries)
-    (setq tabulated-list-entries
-          (append tabulated-list-entries
-                  (list (deb-packaging-infra--make-ppa-entry ppa))))))
-
 (defun deb-packaging-infra--finalize-ppas (buf)
   "Reprint the PPAs table in BUF, showing empty-state once all fetches finish."
   (when (buffer-live-p buf)
     (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer))
-      (tabulated-list-init-header)
-      (tabulated-list-print t)
-      (when (and (null deb-packaging-infra--ppa-processes)
-                 (null tabulated-list-entries))
+      (when (null deb-packaging-infra--ppa-processes)
+        (when deb-packaging-infra--ppa-fetch-succeeded
+          (if deb-packaging-infra--ppa-fetch-failed
+              (dolist (entry deb-packaging-infra--ppa-pending-entries)
+                (unless (assoc (car entry) tabulated-list-entries)
+                  (setq tabulated-list-entries
+                        (append tabulated-list-entries (list entry)))))
+            (setq tabulated-list-entries deb-packaging-infra--ppa-pending-entries)))
         (let ((inhibit-read-only t))
-          (goto-char (point-max))
-          (insert (propertize
-                   (if deb-packaging-infra--ppa-fetch-failed
-                       "\nppa list failed; press g to retry."
-                     "\nNo PPAs found.\nCreate one with 'c'.")
-                   'face 'shadow)))))))
+          (erase-buffer))
+        (tabulated-list-init-header)
+        (tabulated-list-print t)
+        (when (and deb-packaging-infra--ppa-fetch-failed
+                   tabulated-list-entries)
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (insert (propertize
+                     "\nSome PPA lists failed; showing cached results."
+                     'face 'warning))))
+        (when (null tabulated-list-entries)
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (insert (propertize
+                     (if deb-packaging-infra--ppa-fetch-failed
+                         "\nppa list failed; press g to retry."
+                       "\nNo PPAs found.\nCreate one with 'c'.")
+                     'face 'shadow))))))))
 
 (defun deb-packaging-infra--ppa-list-sentinel (buf temp-buf)
   "Return a sentinel for an async `ppa list' process.
@@ -1075,8 +1088,12 @@ processes (refresh cancels them) only clean up."
                       (let ((output (with-current-buffer temp-buf
                                       (buffer-string))))
                         (dolist (ppa (deb-packaging-infra--parse-ppa-lines output))
-                          (deb-packaging-infra--append-ppa ppa))
-                        (setq deb-packaging-infra--ppa-fetch-failed nil))
+                          (unless (assoc ppa deb-packaging-infra--ppa-pending-entries)
+                            (setq deb-packaging-infra--ppa-pending-entries
+                                  (append deb-packaging-infra--ppa-pending-entries
+                                          (list (deb-packaging-infra--make-ppa-entry
+                                                 ppa))))))
+                        (setq deb-packaging-infra--ppa-fetch-succeeded t))
                     (setq deb-packaging-infra--ppa-fetch-failed t)
                     (message "ppa list failed (exit %d); keeping previous list"
                              (process-exit-status proc))))
@@ -1086,7 +1103,6 @@ processes (refresh cancels them) only clean up."
 
 (defun deb-packaging-infra--show-ppas-loading-message ()
   "Show a loading message in the PPAs list buffer while async fetches run."
-  (setq tabulated-list-entries nil)
   (tabulated-list-init-header)
   (tabulated-list-print t)
   (let ((inhibit-read-only t))
@@ -1099,6 +1115,9 @@ processes (refresh cancels them) only clean up."
   (unless (derived-mode-p 'deb-packaging-infra-ppas-mode)
     (user-error "Not in a PPAs buffer"))
   (deb-packaging-infra--cancel-ppa-processes)
+  (setq deb-packaging-infra--ppa-pending-entries nil
+        deb-packaging-infra--ppa-fetch-succeeded nil
+        deb-packaging-infra--ppa-fetch-failed nil)
   (deb-packaging-infra--show-ppas-loading-message)
   (let ((buf (current-buffer)))
     (dolist (cfg (cons nil (deb-packaging-infra--team-config-files)))

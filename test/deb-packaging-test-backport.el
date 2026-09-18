@@ -248,6 +248,17 @@ index 0000000..3333333
 
 ;;; Writing
 
+(ert-deftest deb-packaging-test-backport/verification-always-pops ()
+  (let ((cmd (deb-packaging-backport--verify-command nil)))
+    (should (string-match-p "quilt applied" cmd))
+    (should (string-search "quilt push -a; rc=$?;" cmd))
+    (should (string-search "quilt pop -a; pop_rc=$?;" cmd))))
+
+(ert-deftest deb-packaging-test-backport/dry-run-does-not-pop ()
+  (let ((cmd (deb-packaging-backport--verify-command t)))
+    (should (string-match-p "--dry-run" cmd))
+    (should-not (string-match-p "quilt pop" cmd))))
+
 (ert-deftest deb-packaging-test-backport/write-block-creates-series ()
   (deb-packaging-test--with-package-tree
       '(:name "demo" :version "1.0-1" :source-format "3.0 (quilt)")

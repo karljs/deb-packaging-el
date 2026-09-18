@@ -115,6 +115,12 @@ Author: Me <me@example.com>")
          (got (deb-packaging-propagate--normalize-diff-paths input)))
     (should (string= got expected))))
 
+(ert-deftest deb-packaging-test-propagate/normalize-diff-paths-keeps-dev-null ()
+  (let* ((input "--- /dev/null\n+++ new.txt\n--- old.txt\n+++ /dev/null\n")
+         (expected "--- /dev/null\n+++ b/new.txt\n--- a/old.txt\n+++ /dev/null\n"))
+    (should (string= (deb-packaging-propagate--normalize-diff-paths input)
+                     expected))))
+
 ;;; quilt -> git-am conversion
 
 (ert-deftest deb-packaging-test-propagate/quilt-to-git-am-block ()
@@ -197,15 +203,21 @@ Author: A U Thor <author@example.com>
       (delete-directory deb-packaging-config-propagate-cache-dir t))))
 
 (ert-deftest deb-packaging-test-propagate/clone-exists-p ()
-  (let ((root (make-temp-file "clone-test-" t)))
-    (unwind-protect
-        (progn
-          (should-not (deb-packaging-propagate--clone-exists-p root))
-          (make-directory (expand-file-name ".git" root) t)
-          (should (deb-packaging-propagate--clone-exists-p root))
-          (should-not (deb-packaging-propagate--clone-exists-p
-                       (expand-file-name "nonexistent" root))))
-      (delete-directory root t))))
+  (deb-packaging-test--with-temp-git-repo
+    (should (deb-packaging-propagate--clone-exists-p repo-dir))
+    (should-not (deb-packaging-propagate--clone-exists-p
+                 (expand-file-name "nonexistent" repo-dir)))))
+
+(ert-deftest deb-packaging-test-propagate/clone-exists-p-worktree ()
+  (deb-packaging-test--with-temp-git-repo
+    (let ((worktree (concat (directory-file-name repo-dir) "-worktree")))
+      (unwind-protect
+          (progn
+            (deb-packaging-test--git repo-dir "worktree" "add" "-q" "-b" "worktree" worktree)
+            (should (file-regular-p (expand-file-name ".git" worktree)))
+            (should (deb-packaging-propagate--clone-exists-p worktree)))
+        (when (file-directory-p worktree)
+          (delete-directory worktree t))))))
 
 ;;; Git probes
 
@@ -615,21 +627,22 @@ invoked manually here to observe the `user-error'."
 ;;; Stale pending patch
 
 (ert-deftest deb-packaging-test-propagate/apply-quit-clears-pending-patch ()
-  (cl-letf (((symbol-function 'magit-toplevel) (lambda () "/repo"))
-            ((symbol-function 'deb-packaging-propagate--read-fix-source-one)
-             (lambda (&rest _) (list :type 'patch :name "p")))
-            ((symbol-function 'deb-packaging-propagate--produce-patch-file)
-             (lambda (&rest _) "/tmp/x.patch"))
-            ((symbol-function 'call-interactively) (lambda (&rest _) nil))
-            ((symbol-function 'message) #'ignore)
-            (transient-post-exit-hook nil))
-    (with-temp-buffer
-      (deb-packaging-propagate-apply)
-      (should (equal deb-packaging-propagate--pending-patch "/tmp/x.patch"))
-      ;; Simulate the transient exiting without applying.
-      (run-hooks 'transient-post-exit-hook)
-      (should (null deb-packaging-propagate--pending-patch))
-      (should (null transient-post-exit-hook)))))
+  (let ((patch (make-temp-file "propagate-test-" nil ".patch")))
+    (cl-letf (((symbol-function 'magit-toplevel) (lambda () "/repo"))
+              ((symbol-function 'deb-packaging-propagate--read-fix-source-one)
+               (lambda (&rest _) (list :type 'patch :name "p")))
+              ((symbol-function 'deb-packaging-propagate--produce-patch-file)
+               (lambda (&rest _) patch))
+              ((symbol-function 'call-interactively) (lambda (&rest _) nil))
+              ((symbol-function 'message) #'ignore)
+              (transient-post-exit-hook nil))
+      (with-temp-buffer
+        (deb-packaging-propagate-apply)
+        (should (equal deb-packaging-propagate--pending-patch patch))
+        (run-hooks 'transient-post-exit-hook)
+        (should-not (file-exists-p patch))
+        (should (null deb-packaging-propagate--pending-patch))
+        (should (null transient-post-exit-hook))))))
 
 ;;; Header-line preservation
 

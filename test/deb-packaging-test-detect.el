@@ -356,6 +356,16 @@
       (should (null (alist-get 'debs arts)))
       (should (null (alist-get 'buildinfo arts))))))
 
+(ert-deftest deb-packaging-test-detect/scan-artifacts-requires-exact-version ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2"
+            :artifacts '(("foo_1.20.dsc" . "")
+                         ("foo_1.20_source.changes" . "")))
+    (let ((arts (deb-packaging-detect--scan-artifacts
+                 "foo" "1.2" pkg-parent-dir)))
+      (should-not (alist-get 'dsc arts))
+      (should-not (alist-get 'source-changes arts)))))
+
 (ert-deftest deb-packaging-test-detect/scan-artifacts-empty-parent ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3")

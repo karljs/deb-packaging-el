@@ -43,20 +43,36 @@
 ;;; Run-outcome tracking
 
 (defvar deb-packaging-commands--run-history nil
-  "Alist mapping run KEY to its most recent record plist.
+  "Alist mapping package-scoped run keys to their most recent record plist.
 Keys: :status (`running'/`success'/`failure'), :time, :buffer, :summary.
 Session-only.")
 
-(defun deb-packaging-commands--record-run (key status buf-name &optional summary)
+(defun deb-packaging-commands--run-scope (&optional dir)
+  "Return the package and distro scope containing DIR, or nil."
+  (when-let ((pkg-dir (deb-packaging-detect--find-package-dir dir)))
+    (list (file-truename pkg-dir)
+          (nth 2 (deb-packaging-detect--parse-changelog pkg-dir)))))
+
+(defun deb-packaging-commands--scoped-run-key (key &optional scope)
+  "Return KEY namespaced to package SCOPE when available."
+  (if-let ((pkg-dir (or scope (deb-packaging-commands--run-scope))))
+      (cons pkg-dir key)
+    key))
+
+(defun deb-packaging-commands--record-run (key status buf-name &optional summary scope)
   "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY.
+SCOPE is the package root captured when the operation started.
 The :time stamp marks the start of a run: closing out an in-flight
 `running' record keeps its start time; any other record stamps now,
 so a re-run refreshes the displayed time."
   (when key
-    (let* ((existing (alist-get key deb-packaging-commands--run-history))
+    (let* ((scoped-key (deb-packaging-commands--scoped-run-key key scope))
+           (existing (alist-get scoped-key deb-packaging-commands--run-history
+                                nil nil #'equal))
            (in-flight (and existing
                            (eq (plist-get existing :status) 'running))))
-      (setf (alist-get key deb-packaging-commands--run-history)
+      (setf (alist-get scoped-key deb-packaging-commands--run-history
+                       nil nil #'equal)
             (list :status status
                   :time (if in-flight
                             (plist-get existing :time)
@@ -64,9 +80,11 @@ so a re-run refreshes the displayed time."
                   :buffer buf-name
                   :summary summary)))))
 
-(defun deb-packaging-commands-run-record (key)
-  "Return the most recent run record plist for KEY, or nil."
-  (alist-get key deb-packaging-commands--run-history))
+(defun deb-packaging-commands-run-record (key &optional scope)
+  "Return the current package's most recent record for KEY, or nil.
+SCOPE overrides package detection when supplied."
+  (alist-get (deb-packaging-commands--scoped-run-key key scope)
+             deb-packaging-commands--run-history nil nil #'equal))
 
 (defun deb-packaging-commands--run-summary (key)
   "Return the summary plist for KEY's last run, or nil."
@@ -142,9 +160,10 @@ Original sentinel is preserved and runs first."
        (when (memq (process-status p) '(exit signal))
          (funcall action p event))))))
 
-(defun deb-packaging-commands--attach-run-sentinel (proc key buf-name)
+(defun deb-packaging-commands--attach-run-sentinel (proc key buf-name &optional scope)
   "Attach a sentinel to PROC that records the outcome for KEY.
-Lint-style keys also get findings counts stored as :summary."
+Lint-style keys also get findings counts stored as :summary.  SCOPE is
+the package root captured when the process started."
   (deb-packaging-commands--wrap-sentinel
    proc
    (lambda (p _event)
@@ -154,7 +173,7 @@ Lint-style keys also get findings counts stored as :summary."
                       'failure))
             (parser (deb-packaging-commands--run-summary-parser key))
             (summary (when parser (funcall parser buf-name))))
-       (deb-packaging-commands--record-run key status buf-name summary)
+       (deb-packaging-commands--record-run key status buf-name summary scope)
        (deb-packaging-commands--notify-status-refresh)))))
 
 (defun deb-packaging-commands--run-command (name args &optional dir key buffer-dir)
@@ -165,7 +184,9 @@ BUFFER-DIR sets the buffer's `default-directory' when it differs from DIR,
 so commands run from the log buffer (e.g. `deb-packaging-status') stay in
 the package tree when the process itself must run in the parent build dir."
   (let* ((timestamp (format-time-string "%H:%M:%S"))
-         (buf-name (format "*deb-%s-%s*" name timestamp))
+         (buf-name (generate-new-buffer-name
+                    (format "*deb-%s-%s*" name timestamp)))
+         (scope (deb-packaging-commands--run-scope (or buffer-dir dir)))
          (cmd (mapconcat #'shell-quote-argument args " ")))
     ;; Bind `default-directory' only around `make-comint-in-buffer'.  A leaked
     ;; binding would make the status refresh scan the parent dir and report
@@ -182,9 +203,9 @@ the package tree when the process itself must run in the parent build dir."
       (add-hook 'comint-output-filter-functions
                 #'ansi-color-process-output nil t))
     (when key
-      (deb-packaging-commands--record-run key 'running buf-name)
+      (deb-packaging-commands--record-run key 'running buf-name nil scope)
       (when-let* ((proc (get-buffer-process buf-name)))
-        (deb-packaging-commands--attach-run-sentinel proc key buf-name))
+        (deb-packaging-commands--attach-run-sentinel proc key buf-name scope))
       (deb-packaging-commands--notify-status-refresh))
     (deb-packaging-display-buffer buf-name 'output)
     buf-name))
@@ -221,11 +242,14 @@ runs neither, so the affected row may need a manual refresh."
 
 (defun deb-packaging-commands--compile (cmd)
   "Run CMD via `compile' under the package's process conventions.
-No save-buffer prompts, a running compilation is killed without asking,
-and the window follows the package display policy.  Returns the
-compilation buffer (nil under mocks)."
+No save-buffer prompts, each run gets a separate buffer, and the window
+follows the package display policy.  Returns the compilation buffer
+(nil under mocks)."
   (let ((compilation-ask-about-save nil)
-        (compilation-always-kill t)
+        (compilation-always-kill nil)
+        (compilation-buffer-name-function
+         (lambda (_mode)
+           (generate-new-buffer-name "*deb-compilation*")))
         (display-buffer-overriding-action
          (deb-packaging-display--action 'output)))
     (let ((buf (compile cmd)))

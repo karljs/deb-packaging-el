@@ -243,7 +243,9 @@ Strips epoch and Debian revision.  Native packages return VERSION."
   "Scan DIR for artifacts matching NAME and VERSION.
 Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
   (let* ((file-version (deb-packaging-detect--version-to-filename version))
-         (base-pattern (format "^%s_%s" (regexp-quote name) (regexp-quote file-version)))
+         (base-pattern (format "^%s_%s\\(?:_\\|\\.\\)"
+                               (regexp-quote name)
+                               (regexp-quote file-version)))
          (files (directory-files dir nil base-pattern))
          (dsc nil)
          (source-changes nil)

@@ -242,6 +242,17 @@ An existing file must be confirmed for overwrite or a new name given."
             (throw 'done clean))
            (t (setq name clean))))))))
 
+(defun deb-packaging-backport--verify-command (check-only)
+  "Return the quilt verification command for CHECK-ONLY."
+  (if check-only
+      "QUILT_PATCHES=debian/patches quilt push -a --dry-run"
+    (concat
+     "test -z \"$(QUILT_PATCHES=debian/patches quilt applied 2>/dev/null)\""
+     " || { echo 'Quilt patches already applied; refusing to alter existing state'; exit 2; }; "
+     "QUILT_PATCHES=debian/patches quilt push -a; rc=$?; "
+     "QUILT_PATCHES=debian/patches quilt pop -a; pop_rc=$?; "
+     "[ $rc -eq 0 ] && [ $pop_rc -eq 0 ]")))
+
 ;;; Command
 
 ;;;###autoload
@@ -286,9 +297,7 @@ commits imports as one quilt patch per commit.  Each patch gets a
         ;; Verify by applying, then restore the pristine tree: a left-
         ;; applied patch set is a dirty worktree and double-applies on
         ;; the next build.
-        (let ((cmd (if check-only
-                       "QUILT_PATCHES=debian/patches quilt push -a --dry-run"
-                     "QUILT_PATCHES=debian/patches quilt push -a && QUILT_PATCHES=debian/patches quilt pop -a"))
+        (let ((cmd (deb-packaging-backport--verify-command check-only))
               (default-directory pkg-dir))
           (deb-packaging-commands--after-compile
            (deb-packaging-commands--compile cmd)

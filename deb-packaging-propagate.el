@@ -305,11 +305,13 @@ Return plist: :description, :author.  Description may be multi-line."
              (path (string-trim (match-string 2)))
              (clean (replace-regexp-in-string
                      "^\\([ab]\\)/" "" path)))
-        (replace-match (format "%s %s/%s"
-                               marker
-                               (if (string= marker "---") "a" "b")
-                               clean)
-                       t t)))
+        (replace-match (if (string= clean "/dev/null")
+                           (format "%s /dev/null" marker)
+                         (format "%s %s/%s"
+                                 marker
+                                 (if (string= marker "---") "a" "b")
+                                 clean))
+                        t t)))
     (buffer-string)))
 
 (defun deb-packaging-propagate--quilt-to-git-am-block (patch-path)
@@ -345,8 +347,10 @@ Return plist: :description, :author.  Description may be multi-line."
 
 (defun deb-packaging-propagate--clone-exists-p (dir)
   "Return non-nil if DIR is an existing git repo."
-  (and (file-directory-p dir)
-       (file-directory-p (expand-file-name ".git" dir))))
+  (when (file-directory-p dir)
+    (let ((default-directory dir))
+      (when-let ((root (magit-toplevel)))
+        (file-equal-p root dir)))))
 
 (defun deb-packaging-propagate--salsa-project-path (vcs-url)
   "Extract the project path from a salsa VCS-URL."
@@ -645,11 +649,14 @@ commit (marking already-applied items), and opens the apply transient."
     ;; Clear the pending patch if the transient exits without applying;
     ;; otherwise a stale pick could be applied by a later stray do-apply.
     (letrec ((owner (current-buffer))
-             (cleanup (lambda ()
-                        (when (buffer-live-p owner)
-                          (with-current-buffer owner
-                            (setq deb-packaging-propagate--pending-patch nil)))
-                        (remove-hook 'transient-post-exit-hook cleanup))))
+              (file patch-file)
+              (cleanup (lambda ()
+                         (when (buffer-live-p owner)
+                           (with-current-buffer owner
+                             (setq deb-packaging-propagate--pending-patch nil)))
+                         (when (file-exists-p file)
+                           (delete-file file))
+                         (remove-hook 'transient-post-exit-hook cleanup))))
       (add-hook 'transient-post-exit-hook cleanup))
     (call-interactively #'deb-packaging-propagate-apply-patch)
     (message "Patch ready: %s.  Toggle flags and press `a' to apply."
