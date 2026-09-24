@@ -567,6 +567,10 @@ default would duplicate them (or break Debian builds)."
 
 ;;; dput PPA save + auto-prompt
 
+(ert-deftest deb-packaging-test-commands/resolve-ppa-rejects-malformed-address ()
+  (should-error (deb-packaging-commands--resolve-ppa '("--ppa=not-a-ppa"))
+                :type 'user-error))
+
 (ert-deftest deb-packaging-test-commands/dput-upload-saves-ppa ()
   "dput-upload runs dput and saves the PPA per package+distro."
   (deb-packaging-test--with-package-tree

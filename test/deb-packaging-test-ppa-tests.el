@@ -246,6 +246,50 @@ package's named status faces, not raw success/error."
         (deb-packaging-ppa-tests-trigger-basic)))
     (should (equal requested "https://example.com/basic"))))
 
+(ert-deftest deb-packaging-test-ppa-tests/trigger-http-error-cleans-response ()
+  (let (callback message response)
+    (cl-letf (((symbol-function 'url-retrieve)
+               (lambda (_url fn &rest _) (setq callback fn)))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args) (setq message (apply #'format fmt args)))))
+      (with-temp-buffer
+        (insert (propertize "trigger"
+                            'deb-packaging-ppa-tests-basic-url
+                            "https://example.com/basic"
+                            'deb-packaging-ppa-tests-desc
+                            "mypkg on noble/amd64"))
+        (goto-char (point-min))
+        (deb-packaging-ppa-tests-trigger-basic))
+      (setq response (generate-new-buffer " *trigger-response*"))
+      (with-current-buffer response
+        (set (make-local-variable 'url-http-response-status) 500)
+        (funcall callback nil))
+      (should (string-match-p "Trigger failed: 500" message))
+      (should-not (buffer-live-p response)))))
+
+(ert-deftest deb-packaging-test-ppa-tests/trigger-success-cleans-response ()
+  (let (callback message response)
+    (cl-letf (((symbol-function 'url-retrieve)
+               (lambda (_url fn &rest _) (setq callback fn)))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args) (setq message (apply #'format fmt args)))))
+      (with-temp-buffer
+        (insert (propertize "trigger"
+                            'deb-packaging-ppa-tests-basic-url
+                            "https://example.com/basic"
+                            'deb-packaging-ppa-tests-desc
+                            "mypkg on noble/amd64"))
+        (goto-char (point-min))
+        (deb-packaging-ppa-tests-trigger-basic))
+      (setq response (generate-new-buffer " *trigger-response*"))
+      (with-current-buffer response
+        (set (make-local-variable 'url-http-response-status) 200)
+        (funcall callback nil))
+      (should (string-match-p "Triggered basic" message))
+      (should-not (buffer-live-p response)))))
+
 (ert-deftest deb-packaging-test-ppa-tests/trigger-declined ()
   (let (requested)
     (cl-letf (((symbol-function 'url-retrieve)

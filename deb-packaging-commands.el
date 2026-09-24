@@ -59,7 +59,7 @@ Session-only.")
       (cons pkg-dir key)
     key))
 
-(defun deb-packaging-commands--record-run (key status buf-name &optional summary scope)
+(defun deb-packaging-commands--record-run (key status buf-name &optional summary scope run-id)
   "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY.
 SCOPE is the package root captured when the operation started.
 The :time stamp marks the start of a run: closing out an in-flight
@@ -78,7 +78,16 @@ so a re-run refreshes the displayed time."
                             (plist-get existing :time)
                           (format-time-string "%H:%M:%S"))
                   :buffer buf-name
+                  :id (or run-id (plist-get existing :id))
                   :summary summary)))))
+
+(defun deb-packaging-commands--finish-run
+    (key run-id status buf-name &optional summary scope)
+  "Record completion for RUN-ID when it is still the current KEY run."
+  (let ((record (deb-packaging-commands-run-record key scope)))
+    (when (eq run-id (plist-get record :id))
+      (deb-packaging-commands--record-run
+       key status buf-name summary scope run-id))))
 
 (defun deb-packaging-commands-run-record (key &optional scope)
   "Return the current package's most recent record for KEY, or nil.
@@ -160,7 +169,8 @@ Original sentinel is preserved and runs first."
        (when (memq (process-status p) '(exit signal))
          (funcall action p event))))))
 
-(defun deb-packaging-commands--attach-run-sentinel (proc key buf-name &optional scope)
+(defun deb-packaging-commands--attach-run-sentinel
+    (proc key buf-name &optional scope run-id)
   "Attach a sentinel to PROC that records the outcome for KEY.
 Lint-style keys also get findings counts stored as :summary.  SCOPE is
 the package root captured when the process started."
@@ -173,7 +183,8 @@ the package root captured when the process started."
                       'failure))
             (parser (deb-packaging-commands--run-summary-parser key))
             (summary (when parser (funcall parser buf-name))))
-       (deb-packaging-commands--record-run key status buf-name summary scope)
+       (deb-packaging-commands--finish-run
+        key run-id status buf-name summary scope)
        (deb-packaging-commands--notify-status-refresh)))))
 
 (defun deb-packaging-commands--run-command (name args &optional dir key buffer-dir)
@@ -187,6 +198,7 @@ the package tree when the process itself must run in the parent build dir."
          (buf-name (generate-new-buffer-name
                     (format "*deb-%s-%s*" name timestamp)))
          (scope (deb-packaging-commands--run-scope (or buffer-dir dir)))
+         (run-id (make-symbol "deb-run"))
          (cmd (mapconcat #'shell-quote-argument args " ")))
     ;; Bind `default-directory' only around `make-comint-in-buffer'.  A leaked
     ;; binding would make the status refresh scan the parent dir and report
@@ -203,9 +215,11 @@ the package tree when the process itself must run in the parent build dir."
       (add-hook 'comint-output-filter-functions
                 #'ansi-color-process-output nil t))
     (when key
-      (deb-packaging-commands--record-run key 'running buf-name nil scope)
+      (deb-packaging-commands--record-run
+       key 'running buf-name nil scope run-id)
       (when-let* ((proc (get-buffer-process buf-name)))
-        (deb-packaging-commands--attach-run-sentinel proc key buf-name scope))
+        (deb-packaging-commands--attach-run-sentinel
+         proc key buf-name scope run-id))
       (deb-packaging-commands--notify-status-refresh))
     (deb-packaging-display-buffer buf-name 'output)
     buf-name))
@@ -664,13 +678,13 @@ Completion candidates come from `deb-packaging-infra--list-ppas'.
 Signals `user-error' on empty input."
   (let ((ppa (transient-arg-value "--ppa=" args)))
     (if (and ppa (not (string-empty-p ppa)))
-        ppa
+        (deb-packaging-ppa-validate ppa)
       (let ((choice (completing-read "PPA: "
-                                     (deb-packaging-infra--list-ppas)
-                                     nil nil)))
+                                      (deb-packaging-infra--list-ppas)
+                                      nil nil)))
         (if (or (null choice) (string-empty-p choice))
             (user-error "No PPA set")
-          choice)))))
+          (deb-packaging-ppa-validate choice))))))
 
 ;;; PPA upload (dput)
 

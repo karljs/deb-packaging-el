@@ -19,6 +19,19 @@
 (require 'subr-x)
 (require 'deb-packaging-detect)
 
+(defun deb-packaging-ppa-valid-p (ppa)
+  "Return non-nil when PPA is a complete ppa:owner/name address."
+  (and (stringp ppa)
+       (string-match-p
+        "\\`ppa:[[:alnum:]][[:alnum:].+_-]*/[[:alnum:]][[:alnum:].+_-]*\\'"
+        ppa)))
+
+(defun deb-packaging-ppa-validate (ppa)
+  "Return PPA, or signal `user-error' when it is malformed."
+  (unless (deb-packaging-ppa-valid-p ppa)
+    (user-error "Invalid PPA address: %s (expected ppa:owner/name)" ppa))
+  ppa)
+
 (defun deb-packaging-ppa--file (package distro)
   "Return the cache file path for PACKAGE and DISTRO."
   (expand-file-name
@@ -36,12 +49,13 @@
         (let ((line (buffer-substring-no-properties
                      (line-beginning-position)
                      (line-end-position))))
-          (unless (string-empty-p line)
+          (when (deb-packaging-ppa-valid-p line)
             line))))))
 
 (defun deb-packaging-ppa-save (package distro ppa)
   "Write PPA for PACKAGE and DISTRO to the cache.
 Creates the parent directory if needed."
+  (deb-packaging-ppa-validate ppa)
   (let ((file (deb-packaging-ppa--file package distro)))
     (make-directory (file-name-directory file) t)
     (with-temp-file file

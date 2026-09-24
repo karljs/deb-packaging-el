@@ -353,7 +353,8 @@ PPA being unset must not gate the phase."
                    (lambda (buf _category) (setq displayed buf))))
           (deb-packaging-status))
         (should (null answers))
-        (should (string= (buffer-name displayed) "*deb-packaging: foo*"))
+        (should (string= (buffer-name displayed)
+                         (deb-packaging-status--buffer-name "foo" pkg-dir)))
         (should (file-equal-p (buffer-local-value 'default-directory displayed)
                               pkg-dir))
         (should (equal (plist-get (buffer-local-value
@@ -373,8 +374,31 @@ PPA being unset must not gate the phase."
                   ((symbol-function 'deb-packaging-display-buffer)
                    (lambda (buf _category) (setq displayed buf))))
           (deb-packaging-status))
-        (should (string= (buffer-name displayed) "*deb-packaging: foo*"))
+        (should (string= (buffer-name displayed)
+                         (deb-packaging-status--buffer-name "foo" pkg-dir)))
         (kill-buffer displayed)))))
+
+(ert-deftest deb-packaging-test-status/same-name-checkouts-use-distinct-buffers ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3")
+    (let ((first-dir pkg-dir)
+          buffers)
+      (unwind-protect
+          (deb-packaging-test--with-package-tree
+              (list :name "foo" :version "1.2-3")
+            (let ((second-dir pkg-dir))
+              (deb-packaging-test--with-mocked-process
+                  '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+                (cl-letf (((symbol-function 'deb-packaging-display-buffer)
+                           (lambda (buf _category) (push buf buffers))))
+                  (let ((default-directory first-dir))
+                    (deb-packaging-status))
+                  (let ((default-directory second-dir))
+                    (deb-packaging-status))))
+              (should (= (length (delete-dups buffers)) 2))
+              (should-not (equal (buffer-name (nth 0 buffers))
+                                 (buffer-name (nth 1 buffers))))))
+        (mapc (lambda (buf) (when (buffer-live-p buf) (kill-buffer buf))) buffers)))))
 
 (ert-deftest deb-packaging-test-status/render-with-missing-tools ()
   "The render must not crash when dpkg/schroot/lxc are all absent."

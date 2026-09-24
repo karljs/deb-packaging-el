@@ -233,13 +233,16 @@ NAMES, when given, is a list of schroot names to update."
   (interactive)
   (deb-packaging-infra--end-session-list (deb-packaging-infra--list-sessions)))
 
-(defun deb-packaging-infra--compile-then-refresh (cmd mode refresh-fn)
+(defun deb-packaging-infra--compile-then-refresh
+    (cmd mode refresh-fn &optional on-success)
   "Run CMD via the compile wrapper; on success refresh the MODE list buffer.
 Keeps the row of a deleted item from lingering until a manual `g'."
   (when-let ((buf (deb-packaging-commands--compile cmd)))
     (deb-packaging-commands--after-compile
      buf
      (lambda ()
+       (when on-success
+         (funcall on-success))
        (deb-packaging-commands--refresh-buffer mode refresh-fn)))))
 
 (defun deb-packaging-infra--run-privileged (name args mode refresh-fn)
@@ -782,7 +785,9 @@ Return PPA address strings in order."
   (let (result)
     (dolist (line (split-string output "\n" t))
       (when (string-match "\\(ppa:[^ \t]+/[^ \t]+\\)" line)
-        (push (match-string 1 line) result)))
+        (let ((ppa (match-string 1 line)))
+          (when (deb-packaging-ppa-valid-p ppa)
+            (push ppa result)))))
     (nreverse result)))
 
 (defvar deb-packaging-infra--ppa-cache nil
@@ -800,7 +805,10 @@ Cons of (PPAS . FETCHED-AT-FLOAT-TIME), or nil.")
 
 (defun deb-packaging-infra--invalidate-ppa-cache ()
   "Clear the PPA cache.  Call after creating or deleting a PPA."
-  (setq deb-packaging-infra--ppa-cache nil))
+  (when (process-live-p deb-packaging-infra--ppa-warm-proc)
+    (delete-process deb-packaging-infra--ppa-warm-proc))
+  (setq deb-packaging-infra--ppa-warm-proc nil
+        deb-packaging-infra--ppa-cache nil))
 
 (defun deb-packaging-infra--warm-ppa-cache-async ()
   "Refresh the PPA cache in the background; never blocks the caller.
@@ -842,16 +850,19 @@ print."
                :command (list "sh" "-c" script)
                :noquery t
                :sentinel
-               (lambda (proc _event)
-                 (when (memq (process-status proc) '(exit signal))
-                   (unwind-protect
-                       (when (eq (process-status proc) 'exit)
-                         (setq deb-packaging-infra--ppa-cache
-                               (cons (deb-packaging-infra--parse-ppa-lines
-                                      (with-current-buffer temp-buf
-                                        (buffer-string)))
-                                     (float-time))))
-                     (kill-buffer temp-buf)))))))))))
+                (lambda (proc _event)
+                  (when (memq (process-status proc) '(exit signal))
+                    (unwind-protect
+                        (when (and (eq proc deb-packaging-infra--ppa-warm-proc)
+                                   (eq (process-status proc) 'exit))
+                          (setq deb-packaging-infra--ppa-cache
+                                (cons (deb-packaging-infra--parse-ppa-lines
+                                       (with-current-buffer temp-buf
+                                         (buffer-string)))
+                                      (float-time))))
+                      (when (eq proc deb-packaging-infra--ppa-warm-proc)
+                        (setq deb-packaging-infra--ppa-warm-proc nil))
+                      (kill-buffer temp-buf)))))))))))
 
 (defun deb-packaging-infra--list-ppas ()
   "Return PPA names for the user and configured teams, without blocking.
@@ -866,12 +877,14 @@ Free-text input at the callers works regardless of candidates."
 
 (defun deb-packaging-infra--ppa-owner (ppa)
   "Return the owner part of PPA string PPA."
-  (when (string-match "\\`ppa:\\([^/]+\\)" ppa)
+  (when (and (deb-packaging-ppa-valid-p ppa)
+             (string-match "\\`ppa:\\([^/]+\\)" ppa))
     (match-string 1 ppa)))
 
 (defun deb-packaging-infra--ppa-name (ppa)
   "Return the name part of PPA string PPA."
-  (when (string-match "\\`ppa:[^/]+/\\(.+\\)" ppa)
+  (when (and (deb-packaging-ppa-valid-p ppa)
+             (string-match "\\`ppa:[^/]+/\\(.+\\)\\'" ppa))
     (match-string 1 ppa)))
 
 (defun deb-packaging-infra--read-ppa (prompt)
@@ -880,13 +893,14 @@ Inside the PPAs list buffer, candidates are the buffer's own rows.
 Elsewhere the cached list is used; with no candidates (cold cache, the
 background refresh still running, or `ppa' not installed) the prompt
 falls back to free text rather than erroring."
-  (or (tabulated-list-get-id)
-      (let ((ppas (if (derived-mode-p 'deb-packaging-infra-ppas-mode)
-                      (mapcar #'car tabulated-list-entries)
-                    (deb-packaging-infra--list-ppas))))
-        (if ppas
-            (completing-read prompt ppas nil nil)
-          (read-string prompt)))))
+  (deb-packaging-ppa-validate
+   (or (tabulated-list-get-id)
+       (let ((ppas (if (derived-mode-p 'deb-packaging-infra-ppas-mode)
+                       (mapcar #'car tabulated-list-entries)
+                     (deb-packaging-infra--list-ppas))))
+         (if ppas
+             (completing-read prompt ppas nil nil)
+           (read-string prompt))))))
 
 (defun deb-packaging-infra-create-ppa ()
   "Create a Launchpad PPA via `ppa create'."
@@ -896,28 +910,29 @@ falls back to free text rather than erroring."
     (when (string-empty-p name)
       (user-error "No PPA name given"))
     (when (yes-or-no-p (format "Run: %s? " cmd))
-      (deb-packaging-infra--invalidate-ppa-cache)
-      (deb-packaging-commands--compile cmd))))
+      (deb-packaging-infra--compile-then-refresh
+       cmd 'deb-packaging-infra-ppas-mode #'deb-packaging-infra-refresh-ppas
+       #'deb-packaging-infra--invalidate-ppa-cache))))
 
 (defun deb-packaging-infra-delete-ppa (&optional name)
   "Delete a Launchpad PPA via `ppa destroy'.
 Use PPA at point, or prompt."
   (interactive
    (list (deb-packaging-infra--read-ppa "PPA to delete: ")))
-  (when (string-empty-p name)
-    (user-error "No PPA name given"))
+  (deb-packaging-ppa-validate name)
   (when (yes-or-no-p (format "Really delete PPA %s? " name))
-    (deb-packaging-infra--invalidate-ppa-cache)
     (deb-packaging-infra--compile-then-refresh
      (format "ppa destroy %s" (shell-quote-argument name))
      'deb-packaging-infra-ppas-mode
-     #'deb-packaging-infra-refresh-ppas)))
+     #'deb-packaging-infra-refresh-ppas
+     #'deb-packaging-infra--invalidate-ppa-cache)))
 
 (defun deb-packaging-infra-set-ppa-config (&optional name)
   "Configure a Launchpad PPA via `ppa set'.
 Use PPA at point, or prompt.  Prompts for display name and description."
   (interactive
    (list (deb-packaging-infra--read-ppa "PPA to configure: ")))
+  (deb-packaging-ppa-validate name)
   (let ((displayname (read-string "Display name (blank to skip): "))
         (description (read-string "Description (blank to skip): ")))
     (let* ((args (append (list "ppa" "set" name)
@@ -929,7 +944,9 @@ Use PPA at point, or prompt.  Prompts for display name and description."
       (if (= (length args) 3)
           (message "No configuration changes specified")
         (when (yes-or-no-p (format "Run: %s? " cmd))
-          (deb-packaging-commands--compile cmd))))))
+          (deb-packaging-infra--compile-then-refresh
+           cmd 'deb-packaging-infra-ppas-mode #'deb-packaging-infra-refresh-ppas
+           #'deb-packaging-infra--invalidate-ppa-cache))))))
 
 (defun deb-packaging-infra-show-ppa (&optional name)
   "Show Launchpad PPA info via `ppa show'.
@@ -939,8 +956,7 @@ would freeze Emacs on the Launchpad round trip) and fills a read-only
 the text and send RET to bogus locations."
   (interactive
    (list (deb-packaging-infra--read-ppa "PPA to show: ")))
-  (when (string-empty-p name)
-    (user-error "No PPA name given"))
+  (deb-packaging-ppa-validate name)
   (let ((buf (get-buffer-create (format "*deb-ppa: %s*" name)))
         (out-buf (generate-new-buffer " *deb-ppa-show*")))
     (with-current-buffer buf
@@ -1031,6 +1047,9 @@ the text and send RET to bogus locations."
 (defvar-local deb-packaging-infra--ppa-fetch-succeeded nil
   "Non-nil when any process in the current PPA refresh succeeded.")
 
+(defvar-local deb-packaging-infra--ppa-refresh-generation nil
+  "Identity of the current PPA refresh.")
+
 (defun deb-packaging-infra--cancel-ppa-processes ()
   "Cancel in-flight async PPA listing processes."
   (dolist (proc deb-packaging-infra--ppa-processes)
@@ -1070,7 +1089,7 @@ the text and send RET to bogus locations."
                        "\nNo PPAs found.\nCreate one with 'c'.")
                      'face 'shadow))))))))
 
-(defun deb-packaging-infra--ppa-list-sentinel (buf temp-buf)
+(defun deb-packaging-infra--ppa-list-sentinel (buf temp-buf &optional generation)
   "Return a sentinel for an async `ppa list' process.
 BUF is the PPAs list buffer; TEMP-BUF holds output.  A non-zero exit
 reports the failure instead of masquerading as an empty list.  Killed
@@ -1081,23 +1100,29 @@ processes (refresh cancels them) only clean up."
         (unwind-protect
             (when (buffer-live-p buf)
               (with-current-buffer buf
-                (setq deb-packaging-infra--ppa-processes
-                      (delq proc deb-packaging-infra--ppa-processes))
-                (when (eq status 'exit)
-                  (if (zerop (process-exit-status proc))
-                      (let ((output (with-current-buffer temp-buf
-                                      (buffer-string))))
-                        (dolist (ppa (deb-packaging-infra--parse-ppa-lines output))
-                          (unless (assoc ppa deb-packaging-infra--ppa-pending-entries)
-                            (setq deb-packaging-infra--ppa-pending-entries
-                                  (append deb-packaging-infra--ppa-pending-entries
-                                          (list (deb-packaging-infra--make-ppa-entry
-                                                 ppa))))))
-                        (setq deb-packaging-infra--ppa-fetch-succeeded t))
+                (when (or (null generation)
+                          (eq generation deb-packaging-infra--ppa-refresh-generation))
+                  (setq deb-packaging-infra--ppa-processes
+                        (delq proc deb-packaging-infra--ppa-processes))
+                  (if (and (eq status 'exit)
+                           (zerop (process-exit-status proc)))
+                      (let* ((output (with-current-buffer temp-buf
+                                       (buffer-string)))
+                             (ppas (deb-packaging-infra--parse-ppa-lines output)))
+                        (if (or ppas (string-empty-p (string-trim output)))
+                            (progn
+                              (dolist (ppa ppas)
+                                (unless (assoc ppa deb-packaging-infra--ppa-pending-entries)
+                                  (setq deb-packaging-infra--ppa-pending-entries
+                                        (append deb-packaging-infra--ppa-pending-entries
+                                                (list (deb-packaging-infra--make-ppa-entry
+                                                       ppa))))))
+                              (setq deb-packaging-infra--ppa-fetch-succeeded t))
+                          (setq deb-packaging-infra--ppa-fetch-failed t)
+                          (message "Unsupported ppa list output; keeping previous list")))
                     (setq deb-packaging-infra--ppa-fetch-failed t)
-                    (message "ppa list failed (exit %d); keeping previous list"
-                             (process-exit-status proc))))
-                (deb-packaging-infra--finalize-ppas buf)))
+                    (message "ppa list failed; keeping previous list"))
+                  (deb-packaging-infra--finalize-ppas buf))))
           (when (buffer-live-p temp-buf)
             (kill-buffer temp-buf)))))))
 
@@ -1114,25 +1139,27 @@ processes (refresh cancels them) only clean up."
   (interactive)
   (unless (derived-mode-p 'deb-packaging-infra-ppas-mode)
     (user-error "Not in a PPAs buffer"))
-  (deb-packaging-infra--cancel-ppa-processes)
-  (setq deb-packaging-infra--ppa-pending-entries nil
+  (let ((generation (make-symbol "ppa-refresh")))
+    (setq deb-packaging-infra--ppa-refresh-generation generation)
+    (deb-packaging-infra--cancel-ppa-processes)
+    (setq deb-packaging-infra--ppa-pending-entries nil
         deb-packaging-infra--ppa-fetch-succeeded nil
         deb-packaging-infra--ppa-fetch-failed nil)
-  (deb-packaging-infra--show-ppas-loading-message)
-  (let ((buf (current-buffer)))
-    (dolist (cfg (cons nil (deb-packaging-infra--team-config-files)))
-      (let* ((args (if cfg
-                       (list "ppa" "list" "-C" cfg)
-                     (list "ppa" "list")))
-             (temp-buf (generate-new-buffer " *ppa-list*"))
-             (proc (make-process
-                    :name "ppa-list"
-                    :buffer temp-buf
-                    :command args
-                    :noquery t
-                    :sentinel (deb-packaging-infra--ppa-list-sentinel
-                               buf temp-buf))))
-        (push proc deb-packaging-infra--ppa-processes)))))
+    (deb-packaging-infra--show-ppas-loading-message)
+    (let ((buf (current-buffer)))
+      (dolist (cfg (cons nil (deb-packaging-infra--team-config-files)))
+        (let* ((args (if cfg
+                         (list "ppa" "list" "-C" cfg)
+                       (list "ppa" "list")))
+               (temp-buf (generate-new-buffer " *ppa-list*"))
+               (proc (make-process
+                      :name "ppa-list"
+                      :buffer temp-buf
+                      :command args
+                      :noquery t
+                      :sentinel (deb-packaging-infra--ppa-list-sentinel
+                                 buf temp-buf generation))))
+          (push proc deb-packaging-infra--ppa-processes))))))
 
 (defun deb-packaging-infra-ppas ()
   "Open a buffer listing all Launchpad PPAs."

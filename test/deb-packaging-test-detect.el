@@ -359,12 +359,16 @@
 (ert-deftest deb-packaging-test-detect/scan-artifacts-requires-exact-version ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2"
-            :artifacts '(("foo_1.20.dsc" . "")
-                         ("foo_1.20_source.changes" . "")))
+            :artifacts '(("foo_1.2.1.dsc" . "")
+                         ("foo_1.2.1_source.changes" . "")
+                         ("foo_1.20_amd64.changes" . "Files:\n abc 1 devel optional foo_1.20_amd64.deb\n")
+                         ("foo_1.20_amd64.deb" . "")))
     (let ((arts (deb-packaging-detect--scan-artifacts
                  "foo" "1.2" pkg-parent-dir)))
       (should-not (alist-get 'dsc arts))
-      (should-not (alist-get 'source-changes arts)))))
+      (should-not (alist-get 'source-changes arts))
+      (should-not (alist-get 'binary-changes arts))
+      (should-not (alist-get 'debs arts)))))
 
 (ert-deftest deb-packaging-test-detect/scan-artifacts-empty-parent ()
   (deb-packaging-test--with-package-tree

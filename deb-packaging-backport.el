@@ -249,8 +249,10 @@ An existing file must be confirmed for overwrite or a new name given."
     (concat
      "test -z \"$(QUILT_PATCHES=debian/patches quilt applied 2>/dev/null)\""
      " || { echo 'Quilt patches already applied; refusing to alter existing state'; exit 2; }; "
+     "cleanup() { QUILT_PATCHES=debian/patches quilt pop -a; }; "
+     "trap cleanup EXIT; trap 'exit 130' HUP INT TERM; "
      "QUILT_PATCHES=debian/patches quilt push -a; rc=$?; "
-     "QUILT_PATCHES=debian/patches quilt pop -a; pop_rc=$?; "
+     "cleanup; pop_rc=$?; trap - EXIT HUP INT TERM; "
      "[ $rc -eq 0 ] && [ $pop_rc -eq 0 ]")))
 
 ;;; Command

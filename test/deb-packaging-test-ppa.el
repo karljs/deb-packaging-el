@@ -43,5 +43,18 @@
     (deb-packaging-ppa-save "mypkg" "noble" "ppa:me/y")
     (should (equal (deb-packaging-ppa-load "mypkg" "noble") "ppa:me/y"))))
 
+(ert-deftest deb-packaging-test-ppa/rejects-malformed-address ()
+  (deb-packaging-test-ppa--with-cache
+    (should-error (deb-packaging-ppa-save "mypkg" "noble" "me/x")
+                  :type 'user-error)
+    (should-not (file-exists-p (deb-packaging-ppa--file "mypkg" "noble")))))
+
+(ert-deftest deb-packaging-test-ppa/ignores-malformed-saved-address ()
+  (deb-packaging-test-ppa--with-cache
+    (let ((file (deb-packaging-ppa--file "mypkg" "noble")))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (insert "not-a-ppa\n"))
+      (should-not (deb-packaging-ppa-load "mypkg" "noble")))))
+
 (provide 'deb-packaging-test-ppa)
 ;;; deb-packaging-test-ppa.el ends here

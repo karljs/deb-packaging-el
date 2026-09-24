@@ -457,6 +457,92 @@ The sentinel fires during the wait, while the mode buffer is alive."
         (when (buffer-live-p temp-buf)
           (kill-buffer temp-buf))))))
 
+(ert-deftest deb-packaging-test-infra/ppa-list-unparseable-output-keeps-list ()
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (setq tabulated-list-entries
+          (list (deb-packaging-infra--make-ppa-entry "ppa:me/old")))
+    (let ((temp-buf (generate-new-buffer " *t*"))
+          (proc (make-process :name "t" :command '("true") :noquery t)))
+      (unwind-protect
+          (progn
+            (with-current-buffer temp-buf
+              (insert "output format changed\n"))
+            (deb-packaging-test-run--wait proc)
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (funcall (deb-packaging-infra--ppa-list-sentinel
+                        (current-buffer) temp-buf)
+                       proc "finished\n"))
+            (should (assoc "ppa:me/old" tabulated-list-entries))
+            (should (string-match-p "showing cached results" (buffer-string))))
+        (when (buffer-live-p temp-buf)
+          (kill-buffer temp-buf))))))
+
+(ert-deftest deb-packaging-test-infra/ppa-list-signal-keeps-list ()
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (setq tabulated-list-entries
+          (list (deb-packaging-infra--make-ppa-entry "ppa:me/old")))
+    (let ((temp-buf (generate-new-buffer " *t*"))
+          (proc (make-symbol "proc")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'process-status) (lambda (_) 'signal))
+                    ((symbol-function 'message) #'ignore))
+            (funcall (deb-packaging-infra--ppa-list-sentinel
+                      (current-buffer) temp-buf)
+                     proc "killed\n")
+            (should (assoc "ppa:me/old" tabulated-list-entries))
+            (should (string-match-p "showing cached results" (buffer-string))))
+        (when (buffer-live-p temp-buf)
+          (kill-buffer temp-buf))))))
+
+(ert-deftest deb-packaging-test-infra/old-ppa-refresh-cannot-update-new-one ()
+  (with-temp-buffer
+    (deb-packaging-infra-ppas-mode)
+    (let* ((old-generation (make-symbol "old"))
+           (deb-packaging-infra--ppa-refresh-generation (make-symbol "new"))
+           (temp-buf (generate-new-buffer " *t*"))
+           (proc (make-process :name "t" :command '("true") :noquery t)))
+      (unwind-protect
+          (progn
+            (with-current-buffer temp-buf (insert "ppa:me/stale\n"))
+            (deb-packaging-test-run--wait proc)
+            (funcall (deb-packaging-infra--ppa-list-sentinel
+                      (current-buffer) temp-buf old-generation)
+                     proc "finished\n")
+            (should-not (assoc "ppa:me/stale" tabulated-list-entries)))
+        (when (buffer-live-p temp-buf)
+          (kill-buffer temp-buf))))))
+
+(ert-deftest deb-packaging-test-infra/ppa-cache-invalidates-only-after-success ()
+  (let ((deb-packaging-infra--ppa-cache '(cached . 1))
+        success)
+    (cl-letf (((symbol-function 'deb-packaging-commands--compile)
+               (lambda (_) (get-buffer-create " *mutation*")))
+              ((symbol-function 'deb-packaging-commands--after-compile)
+               (lambda (_buf action &optional _failure) (setq success action)))
+              ((symbol-function 'deb-packaging-commands--refresh-buffer) #'ignore))
+      (unwind-protect
+          (progn
+            (deb-packaging-infra--compile-then-refresh
+             "ppa destroy ppa:me/x" 'deb-packaging-infra-ppas-mode #'ignore
+             #'deb-packaging-infra--invalidate-ppa-cache)
+            (should deb-packaging-infra--ppa-cache)
+            (funcall success)
+            (should-not deb-packaging-infra--ppa-cache))
+        (kill-buffer " *mutation*")))))
+
+(ert-deftest deb-packaging-test-infra/ppa-cache-invalidation-cancels-warm ()
+  (let ((deb-packaging-infra--ppa-cache '(cached . 1))
+        (deb-packaging-infra--ppa-warm-proc 'warm)
+        killed)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
+              ((symbol-function 'delete-process) (lambda (proc) (setq killed proc))))
+      (deb-packaging-infra--invalidate-ppa-cache)
+      (should (eq killed 'warm))
+      (should-not deb-packaging-infra--ppa-warm-proc)
+      (should-not deb-packaging-infra--ppa-cache))))
+
 ;;; PPA reading without network
 
 (ert-deftest deb-packaging-test-infra/read-ppa-uses-buffer-rows ()
@@ -486,11 +572,11 @@ in flight)."
       (cl-letf (((symbol-function 'deb-packaging-infra--list-ppas)
                  (lambda () nil))
                 ((symbol-function 'read-string)
-                 (lambda (prompt &rest _) (cons 'read prompt)))
+                 (lambda (&rest _) "ppa:me/manual"))
                 ((symbol-function 'completing-read)
                  (lambda (&rest _) (error "must not complete"))))
         (should (equal (deb-packaging-infra--read-ppa "PPA: ")
-                       '(read . "PPA: ")))))))
+                       "ppa:me/manual"))))))
 
 ;;; PPA candidate cache: non-blocking list, background warm
 

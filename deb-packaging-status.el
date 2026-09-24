@@ -46,9 +46,12 @@
 Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
 :source-format :orig-tarball :arch.")
 
-(defun deb-packaging-status--buffer-name (name)
-  "Return the status buffer name for package NAME."
-  (format "*deb-packaging: %s*" (or name "?")))
+(defun deb-packaging-status--buffer-name (name pkg-dir)
+  "Return the status buffer name for package NAME at PKG-DIR."
+  (format "*deb-packaging: %s [%s]*"
+          (or name "?")
+          (abbreviate-file-name
+           (directory-file-name (file-truename pkg-dir)))))
 
 (defun deb-packaging-status--collect-context ()
   "Gather fresh package context from `default-directory'.
@@ -883,7 +886,8 @@ Outside a package tree, prompt for one first (like `magit-status')."
                         (user-error nil))
                       (deb-packaging-detect--read-package-dir)))
          (name (deb-packaging-detect--package-name pkg-dir))
-         (buf (get-buffer-create (deb-packaging-status--buffer-name name))))
+         (buf (get-buffer-create
+               (deb-packaging-status--buffer-name name pkg-dir))))
     ;; Pre-warm the PPA candidate cache in the background so the first
     ;; upload/test PPA prompt usually has completion.  No-op when fresh.
     (when (fboundp 'deb-packaging-infra--warm-ppa-cache-async)

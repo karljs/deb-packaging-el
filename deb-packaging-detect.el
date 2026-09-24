@@ -243,9 +243,7 @@ Strips epoch and Debian revision.  Native packages return VERSION."
   "Scan DIR for artifacts matching NAME and VERSION.
 Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
   (let* ((file-version (deb-packaging-detect--version-to-filename version))
-         (base-pattern (format "^%s_%s\\(?:_\\|\\.\\)"
-                               (regexp-quote name)
-                               (regexp-quote file-version)))
+         (base-pattern (format "^%s_" (regexp-quote name)))
          (files (directory-files dir nil base-pattern))
          (dsc nil)
          (source-changes nil)
@@ -253,15 +251,16 @@ Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
          (debs nil)
          (buildinfo nil))
     (dolist (file files)
-      (cond
-       ((string-match "\\.dsc$" file)
-        (setq dsc (expand-file-name file dir)))
-       ((string-match "_source\\.changes$" file)
-        (setq source-changes (expand-file-name file dir)))
-       ((string-match "\\.changes$" file)
-        (push (expand-file-name file dir) binary-changes))
-       ((string-match "_source\\.buildinfo$" file)
-        (push (expand-file-name file dir) buildinfo))))
+      (when (equal (deb-packaging-detect--filename-version file) file-version)
+        (cond
+         ((string-match "\\.dsc$" file)
+          (setq dsc (expand-file-name file dir)))
+         ((string-match "_source\\.changes$" file)
+          (setq source-changes (expand-file-name file dir)))
+         ((string-match "\\.changes$" file)
+          (push (expand-file-name file dir) binary-changes))
+         ((string-match "_source\\.buildinfo$" file)
+          (push (expand-file-name file dir) buildinfo)))))
     ;; debs are only discoverable via the binary .changes.
     (dolist (changes-file binary-changes)
       (dolist (referenced (deb-packaging-detect--parse-changes-file changes-file))

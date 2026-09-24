@@ -107,6 +107,24 @@ per record, not the first run's time forever."
                              :status)
                   'success)))))
 
+(ert-deftest deb-packaging-test-run/older-run-cannot-overwrite-newer-run ()
+  (let ((deb-packaging-commands--run-history nil)
+        (old-id (make-symbol "old"))
+        (new-id (make-symbol "new")))
+    (deb-packaging-commands--record-run
+     'sbuild 'running "*old*" nil nil old-id)
+    (deb-packaging-commands--record-run
+     'sbuild 'running "*new*" nil nil new-id)
+    (deb-packaging-commands--finish-run
+     'sbuild old-id 'failure "*old*")
+    (let ((record (deb-packaging-commands-run-record 'sbuild)))
+      (should (eq (plist-get record :status) 'running))
+      (should (equal (plist-get record :buffer) "*new*")))
+    (deb-packaging-commands--finish-run
+     'sbuild new-id 'success "*new*")
+    (should (eq (plist-get (deb-packaging-commands-run-record 'sbuild) :status)
+                'success))))
+
 (ert-deftest deb-packaging-test-run/run-summary-parser-lint-keys ()
   (should (eq (deb-packaging-commands--run-summary-parser 'lintian-source)
               #'deb-packaging-commands--parse-lint-summary))
