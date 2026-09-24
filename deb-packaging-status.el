@@ -37,6 +37,7 @@
 (declare-function deb-packaging-propagate-transient "deb-packaging-propagate")
 (declare-function deb-packaging-pq-transient "deb-packaging-pq")
 (declare-function deb-packaging-pq--state "deb-packaging-pq")
+(declare-function deb-packaging-ppa-tests-show "deb-packaging-ppa-tests")
 
 ;;; Buffer-local context
 
@@ -68,6 +69,7 @@ Return a plist, or nil outside a Debian package tree."
     (deb-packaging-binary         . deb-packaging-binary-build-transient)
     (deb-packaging-check          . deb-packaging-lint-transient)
     (deb-packaging-test           . deb-packaging-test-transient)
+    (deb-packaging-ppa-test       . deb-packaging-ppa-tests-show)
     (deb-packaging-upload         . deb-packaging-upload-transient)
     (deb-packaging-stale          . deb-packaging-commands-clean-transient)
     (deb-packaging-dev            . deb-packaging-dev-transient)
@@ -127,36 +129,32 @@ Counts colored by severity, e.g. \" 2E 5W 12I\" or \" 1F 2E 3W\"."
     ""))
 
 (defun deb-packaging-status--ppa-tests-summary-note ()
-  "Return a colored PPA-test counts string, or empty.
-Counts come from the last ppa-tests run summary: \" 3P 1F 0B\"."
+  "Return a readable PPA-test counts string, or empty."
   (if-let* ((summary (deb-packaging-commands--run-summary 'ppa-tests)))
-      (concat "  "
-              (propertize (format "%dP" (plist-get summary :pass))
-                          'font-lock-face 'deb-packaging-status-done)
-              " "
-              (propertize (format "%dF" (plist-get summary :fail))
-                          'font-lock-face 'deb-packaging-status-failed)
-              " "
-              (propertize (format "%dB" (plist-get summary :bad))
-                          'font-lock-face 'deb-packaging-status-failed))
+      (format "  %d passed, %d failed, %d bad"
+              (or (plist-get summary :pass) 0)
+              (or (plist-get summary :fail) 0)
+              (or (plist-get summary :bad) 0))
     ""))
 
-(defun deb-packaging-status--insert-ppa-tests-row (ctx)
-  "Insert the PPA tests row: saved PPA, last run time, result counts.
-Builds the row directly rather than via `--insert-state-row', whose
-whole-value re-propertizing would flatten the inner faces."
+(defun deb-packaging-status--insert-ppa-tests (ctx hide)
+  "Insert the independent Launchpad autopkgtest section from CTX."
   (let* ((ppa (plist-get ctx :default-ppa))
          (record (deb-packaging-commands-run-record 'ppa-tests))
-         (time (plist-get record :time)))
-    (insert "    "
-            (propertize "PPA tests" 'font-lock-face 'shadow)
-            ": "
-            (or ppa (propertize "not set" 'font-lock-face 'shadow))
-            (if time
-                (propertize (format " (%s)" time) 'font-lock-face 'shadow)
-              "")
-            (deb-packaging-status--ppa-tests-summary-note)
-            "\n")))
+         (state (deb-packaging-status--phase-state 'ppa-tests nil ppa t)))
+    (magit-insert-section (deb-packaging-ppa-test nil hide)
+      (magit-insert-heading
+        (deb-packaging-status--phase-heading state "PPA autopkgtest" 'ppa-tests
+                                             (deb-packaging-status--ppa-tests-summary-note)))
+      (magit-insert-section-body
+        (deb-packaging-status--insert-state-row
+         (delq nil
+               (list (cons "PPA" (or ppa
+                                      (propertize "not set" 'font-lock-face 'shadow)))
+                     (when-let ((time (plist-get record :time)))
+                       (cons "Last run" time)))))
+        (unless ppa
+          (deb-packaging-status--insert-note "Set a default PPA to view package tests"))))))
 
 ;;; Phase state and fold decisions
 ;;
@@ -518,14 +516,14 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
            "Ubuntu upload policy checks (SRU, maintainer, bug references)"))))))
 
 (defun deb-packaging-status--insert-test (ctx hide)
-  "Insert the Test (autopkgtest) phase section from CTX, collapsed when HIDE."
+  "Insert the local autopkgtest section from CTX, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
          (debs (alist-get 'debs arts))
-         (arch (plist-get ctx :host-arch))
+          (arch (plist-get ctx :target-arch))
          (state (deb-packaging-status--phase-state 'autopkgtest nil debs)))
     (magit-insert-section (deb-packaging-test nil hide)
       (magit-insert-heading
-        (deb-packaging-status--phase-heading state "Test" 'autopkgtest))
+        (deb-packaging-status--phase-heading state "Local autopkgtest" 'autopkgtest))
       (magit-insert-section-body
         (if (not debs)
             (deb-packaging-status--insert-note "waiting on binary build")
@@ -559,8 +557,7 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                           (ignore-errors
                             (transient-args 'deb-packaging-test-transient)))
               (deb-packaging-status--insert-note
-               "Drops into a testbed shell on test failure")))))
-        (deb-packaging-status--insert-ppa-tests-row ctx))))
+                "Drops into a testbed shell on test failure"))))))))
 
 (defun deb-packaging-status--insert-upload (ctx hide)
   "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE."
@@ -569,10 +566,14 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
          (ppa (plist-get ctx :default-ppa))
          ;; Ready only when a source .changes exists to dput; the PPA is
          ;; chosen inside the transient and must not gate the phase.
-         (state (deb-packaging-status--phase-state 'dput nil changes)))
+          (state (deb-packaging-status--phase-state 'dput nil changes))
+         (record (deb-packaging-commands-run-record 'dput))
+         (label (if (eq (plist-get record :status) 'success)
+                    "Upload submitted"
+                  "Upload")))
     (magit-insert-section (deb-packaging-upload nil hide)
       (magit-insert-heading
-        (deb-packaging-status--phase-heading state "Upload" 'dput))
+        (deb-packaging-status--phase-heading state label 'dput))
       (magit-insert-section-body
         (deb-packaging-status--insert-state-row
          (delq nil
@@ -758,30 +759,42 @@ Point ends on the first phase heading."
                        (deb-packaging-status--hide-phase-p
                         (alist-get key phases) next key))))
           (deb-packaging-status--insert-header ctx)
-          (deb-packaging-status--insert-source
-           ctx (funcall hide 'source-build))
-          (deb-packaging-status--insert-binary
-           ctx (funcall hide 'sbuild))
-          ;; Lint groups two children and has no single phase state, so
-          ;; use the rollup fold decision instead.
-          (deb-packaging-status--insert-check
-           ctx (deb-packaging-status--lint-hide-p ctx))
-          (deb-packaging-status--insert-test
-           ctx (funcall hide 'autopkgtest))
-          (deb-packaging-status--insert-upload
-           ctx (funcall hide 'dput))
-          (deb-packaging-status--insert-stale ctx t)
-          (deb-packaging-status--insert-dev ctx t)
-          (deb-packaging-status--insert-pq ctx t))))
-     ;; Show the root once so fold indicators appear before any manual toggle.
-     (when magit-root-section
-       (magit-section-show magit-root-section))))
+          (magit-insert-section (deb-packaging-build nil nil)
+            (magit-insert-heading "Build")
+            (magit-insert-section-body
+              (deb-packaging-status--insert-source
+               ctx (funcall hide 'source-build))
+              (deb-packaging-status--insert-binary
+               ctx (funcall hide 'sbuild))))
+          (magit-insert-section (deb-packaging-verify nil nil)
+            (magit-insert-heading "Verify")
+            (magit-insert-section-body
+              (deb-packaging-status--insert-check
+               ctx (deb-packaging-status--lint-hide-p ctx))
+              (deb-packaging-status--insert-test
+               ctx (funcall hide 'autopkgtest))
+              (deb-packaging-status--insert-ppa-tests ctx t)))
+          (magit-insert-section (deb-packaging-publish nil nil)
+            (magit-insert-heading "Publish")
+            (magit-insert-section-body
+              (deb-packaging-status--insert-upload
+               ctx (funcall hide 'dput))))
+          (magit-insert-section (deb-packaging-workspace nil t)
+            (magit-insert-heading "Workspace")
+            (magit-insert-section-body
+              (deb-packaging-status--insert-stale ctx t)
+              (deb-packaging-status--insert-dev ctx t)
+              (deb-packaging-status--insert-pq ctx t)))))
+      ;; Show the root once so fold indicators appear before any manual toggle.
+      (when magit-root-section
+        (magit-section-show magit-root-section)))))
 
 (defun deb-packaging-status--goto-first-phase ()
   "Move point to the first phase heading (Source build)."
   (goto-char (point-min))
   (when-let ((section (magit-get-section
                        '((deb-packaging-source)
+                         (deb-packaging-build)
                          (deb-packaging-status-root)))))
     (goto-char (oref section start))))
 
@@ -834,6 +847,39 @@ filesystem each time."
 
 ;;; Actions
 
+(defconst deb-packaging-status--section-run-keys
+  '((deb-packaging-source . source-build)
+    (deb-packaging-binary . sbuild)
+    (deb-packaging-commands-lintian-source . lintian-source)
+    (deb-packaging-commands-lintian-binary . lintian-binary)
+    (deb-packaging-commands-ubuntu-lint . ubuntu-lint)
+    (deb-packaging-test . autopkgtest)
+    (deb-packaging-ppa-test . ppa-tests)
+    (deb-packaging-upload . dput))
+  "Map status row section types to their latest run keys.")
+
+(defun deb-packaging-status--run-key-at-point ()
+  "Return the nearest tracked run key for the section at point."
+  (let ((section (magit-current-section)) key)
+    (while (and section (not key))
+      (setq key (alist-get (oref section type)
+                           deb-packaging-status--section-run-keys)
+            section (oref section parent)))
+    key))
+
+(defun deb-packaging-status-open-output ()
+  "Open the latest recorded output for the section at point."
+  (interactive)
+  (let* ((key (or (deb-packaging-status--run-key-at-point)
+                  (user-error "No tracked operation for this section")))
+         (record (deb-packaging-commands-run-record key))
+         (buffer (and record (get-buffer (plist-get record :buffer)))))
+    (unless (buffer-live-p buffer)
+      (user-error "No live output buffer for %s" key))
+    (deb-packaging-display-buffer
+     buffer (or (buffer-local-value 'deb-packaging-display-category buffer)
+                'output))))
+
 (defun deb-packaging-status-visit ()
   "Visit the artifact file at point, or open the section's transient.
 RET on a text artifact line (e.g. the .changes before upload) opens the
@@ -862,6 +908,7 @@ transient. Mnemonic verbs open tool transients.
 Navigation and folding come from `magit-section-mode'."
   :parent magit-section-mode-map
   "RET" #'deb-packaging-status-visit
+  "o"   #'deb-packaging-status-open-output
   "s"   #'deb-packaging-commands-source-build-transient
   "b"   #'deb-packaging-binary-build-transient
   "l"   #'deb-packaging-lint-transient

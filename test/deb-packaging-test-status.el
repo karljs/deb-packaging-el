@@ -333,9 +333,65 @@ PPA being unset must not gate the phase."
     (should (equal (deb-packaging-status--ppa-tests-summary-note) ""))
     (deb-packaging-commands--record-run
      'ppa-tests 'success nil (list :pass 3 :fail 1 :bad 0))
-    (should (string-match-p "3P" (deb-packaging-status--ppa-tests-summary-note)))
-    (should (string-match-p "1F" (deb-packaging-status--ppa-tests-summary-note)))
-    (should (string-match-p "0B" (deb-packaging-status--ppa-tests-summary-note)))))
+    (should (string-match-p "3 passed" (deb-packaging-status--ppa-tests-summary-note)))
+    (should (string-match-p "1 failed" (deb-packaging-status--ppa-tests-summary-note)))
+    (should (string-match-p "0 bad" (deb-packaging-status--ppa-tests-summary-note)))))
+
+(ert-deftest deb-packaging-test-status/map-binds-output-key ()
+  (should (eq (lookup-key deb-packaging-status-mode-map "o")
+              #'deb-packaging-status-open-output)))
+
+(ert-deftest deb-packaging-test-status/status-groups-local-and-ppa-tests ()
+  (deb-packaging-test--with-package-tree
+      '(:name "foo" :version "1.2-3" :distro "noble")
+    (let ((deb-packaging-commands--run-history nil))
+      (deb-packaging-commands--record-run 'dput 'success nil)
+      (deb-packaging-test--with-mocked-process
+          '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+        (cl-letf (((symbol-function 'deb-packaging-dev--list-containers)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'deb-packaging-transients--effective-repos)
+                   (lambda () nil)))
+          (with-temp-buffer
+            (deb-packaging-status-mode)
+            (setq default-directory pkg-dir)
+            (deb-packaging-status--render)
+            (let ((text (buffer-string)))
+              (dolist (label '("Build" "Verify" "Publish" "Workspace"
+                               "Local autopkgtest" "PPA autopkgtest"
+                               "Upload submitted"))
+                (should (string-match-p (regexp-quote label) text))))))))))
+
+(ert-deftest deb-packaging-test-status/open-output-uses-nearest-run-section ()
+  (deb-packaging-test--with-package-tree
+      '(:name "foo" :version "1.2-3" :distro "noble")
+    (let ((deb-packaging-commands--run-history nil)
+          (output (get-buffer-create "*status-test-output*"))
+          displayed)
+      (unwind-protect
+          (progn
+            (with-current-buffer output
+              (setq deb-packaging-display-category 'output))
+            (deb-packaging-commands--record-run
+             'sbuild 'success (buffer-name output))
+            (deb-packaging-test--with-mocked-process
+                '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+              (cl-letf (((symbol-function 'deb-packaging-dev--list-containers)
+                         (lambda (&rest _) nil))
+                        ((symbol-function 'deb-packaging-transients--effective-repos)
+                         (lambda () nil))
+                        ((symbol-function 'deb-packaging-display-buffer)
+                         (lambda (buf _category) (setq displayed buf))))
+                (with-temp-buffer
+                  (deb-packaging-status-mode)
+                  (setq default-directory pkg-dir)
+                  (deb-packaging-status--render)
+                  (goto-char (point-min))
+                  (search-forward "Binary build")
+                  (should (eq (deb-packaging-status--run-key-at-point) 'sbuild))
+                  (deb-packaging-status-open-output)
+                   (should (eq displayed output))))))
+        (when (buffer-live-p output) (kill-buffer output))))))
 
 ;;; Entry point prompting
 
