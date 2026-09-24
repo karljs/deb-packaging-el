@@ -273,7 +273,9 @@
       (list :name "foo" :version "1.2-3"
             :vcs-git "https://github.com/example/foo.git -b nightly")
     (should (string= (deb-packaging-detect--vcs-git pkg-dir)
-                     "https://github.com/example/foo.git"))))
+                     "https://github.com/example/foo.git"))
+    (should (equal (deb-packaging-detect--vcs-git-info pkg-dir)
+                   '("https://github.com/example/foo.git" "nightly")))))
 
 (ert-deftest deb-packaging-test-detect/vcs-git-missing ()
   (deb-packaging-test--with-package-tree
@@ -491,9 +493,66 @@
         (should (string= (plist-get ctx :distro) "noble"))
         (should (file-equal-p (plist-get ctx :pkg-dir) pkg-dir))
         (should (file-equal-p (plist-get ctx :parent-dir) pkg-parent-dir))
+        (should-not (plist-get ctx :git-p))
+        (should-not (plist-get ctx :repo-dir))
         (should (string= (plist-get ctx :source-format) "3.0 (quilt)"))
         (should (alist-get 'dsc (plist-get ctx :artifacts)))
-        (should (string= (plist-get ctx :arch) "amd64"))))))
+        (should (string= (plist-get ctx :arch) "amd64"))
+        (should (string= (plist-get ctx :host-arch) "amd64"))))))
+
+(ert-deftest deb-packaging-test-detect/scan-context-git-metadata ()
+  (deb-packaging-test--with-temp-git-repo
+    (deb-packaging-test--build-tree
+     repo-dir (file-name-directory (directory-file-name repo-dir))
+     '(:name "foo" :version "1.2-3"
+       :vcs-git "https://example.com/foo.git -b debian/noble"))
+    (deb-packaging-test--git repo-dir "add" "debian")
+    (deb-packaging-test--git repo-dir "commit" "-q" "-m" "packaging")
+    (let ((ctx (deb-packaging-detect--scan-context
+                (expand-file-name "debian" repo-dir))))
+      (should (plist-get ctx :git-p))
+      (should (file-equal-p (plist-get ctx :repo-dir) repo-dir))
+      (should (equal (plist-get ctx :branch) "main"))
+      (should-not (plist-get ctx :dirty-p))
+      (should (equal (plist-get ctx :vcs-url)
+                     "https://example.com/foo.git"))
+      (should (equal (plist-get ctx :vcs-branch) "debian/noble")))
+    (deb-packaging-test--write-file (expand-file-name "untracked" repo-dir) "x")
+    (should (plist-get (deb-packaging-detect--scan-context repo-dir) :dirty-p))))
+
+(ert-deftest deb-packaging-test-detect/scan-context-detached-head ()
+  (deb-packaging-test--with-temp-git-repo
+    (deb-packaging-test--build-tree
+     repo-dir (file-name-directory (directory-file-name repo-dir))
+     '(:name "foo" :version "1.2-3"))
+    (deb-packaging-test--git repo-dir "add" "debian")
+    (deb-packaging-test--git repo-dir "commit" "-q" "-m" "packaging")
+    (deb-packaging-test--git repo-dir "checkout" "-q" "--detach")
+    (let ((ctx (deb-packaging-detect--scan-context repo-dir)))
+      (should (plist-get ctx :git-p))
+      (should-not (plist-get ctx :branch)))))
+
+(ert-deftest deb-packaging-test-detect/scan-context-worktree-and-symlink ()
+  (deb-packaging-test--with-temp-git-repo
+    (deb-packaging-test--build-tree
+     repo-dir (file-name-directory (directory-file-name repo-dir))
+     '(:name "foo" :version "1.2-3"))
+    (deb-packaging-test--git repo-dir "add" "debian")
+    (deb-packaging-test--git repo-dir "commit" "-q" "-m" "packaging")
+    (let ((worktree (concat (directory-file-name repo-dir) "-worktree"))
+          (link (concat (directory-file-name repo-dir) "-link")))
+      (unwind-protect
+          (progn
+            (deb-packaging-test--git
+             repo-dir "worktree" "add" "-q" "-b" "worktree" worktree)
+            (make-symbolic-link worktree link)
+            (let ((ctx (deb-packaging-detect--scan-context
+                        (expand-file-name "debian" link))))
+              (should (file-equal-p (plist-get ctx :pkg-dir) worktree))
+              (should (file-equal-p (plist-get ctx :repo-dir) worktree))
+              (should (equal (plist-get ctx :branch) "worktree"))))
+        (when (file-symlink-p link) (delete-file link))
+        (when (file-directory-p worktree) (delete-directory worktree t))))))
 
 (ert-deftest deb-packaging-test-detect/scan-context-outside-package ()
   (let ((tmp (make-temp-file "deb-pkg-test-" t)))

@@ -38,6 +38,16 @@
           (should (equal (nreverse called) '(status transient))))
       (delete-directory tmp t))))
 
+(ert-deftest deb-packaging-test-dispatch/header-uses-shared-context ()
+  (cl-letf (((symbol-function 'deb-packaging-status--collect-context)
+             (lambda ()
+               '(:name "foo" :version "1.2-3" :distro "noble"
+                 :host-arch "arm64" :git-p t :branch "ubuntu/noble"
+                 :dirty-p t))))
+    (let ((header (deb-packaging--dispatch-header)))
+      (should (string-match-p "foo 1.2-3 | noble | arm64" header))
+      (should (string-match-p "git: ubuntu/noble (modified)" header)))))
+
 ;;; Mnemonic consistency
 
 (defun deb-packaging-test-dispatch--layout (prefix)

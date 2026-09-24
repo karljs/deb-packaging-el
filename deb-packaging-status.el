@@ -25,7 +25,6 @@
 (require 'seq)
 (require 'magit-section)
 (require 'deb-packaging-detect)
-(require 'deb-packaging-config)
 (require 'deb-packaging-commands)
 (require 'deb-packaging-ppa)
 (require 'deb-packaging-transients)
@@ -44,7 +43,8 @@
 (defvar-local deb-packaging-status--context nil
   "Buffer-local plist describing the package shown.
 Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
-:source-format :orig-tarball :arch.")
+:source-format :orig-tarball :repo-dir :git-p :branch :dirty-p
+:vcs-url :vcs-branch :host-arch :default-ppa.")
 
 (defun deb-packaging-status--buffer-name (name pkg-dir)
   "Return the status buffer name for package NAME at PKG-DIR."
@@ -56,7 +56,10 @@ Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
 (defun deb-packaging-status--collect-context ()
   "Gather fresh package context from `default-directory'.
 Return a plist, or nil outside a Debian package tree."
-  (deb-packaging-detect--scan-context))
+  (when-let ((ctx (deb-packaging-detect--scan-context)))
+    (plist-put ctx :default-ppa
+               (deb-packaging-ppa-load
+                (plist-get ctx :name) (plist-get ctx :distro)))))
 
 ;;; Section -> action dispatch
 ;;
@@ -141,14 +144,11 @@ Counts come from the last ppa-tests run summary: \" 3P 1F 0B\"."
                           'font-lock-face 'deb-packaging-status-failed))
     ""))
 
-(defun deb-packaging-status--insert-ppa-tests-row ()
+(defun deb-packaging-status--insert-ppa-tests-row (ctx)
   "Insert the PPA tests row: saved PPA, last run time, result counts.
 Builds the row directly rather than via `--insert-state-row', whose
 whole-value re-propertizing would flatten the inner faces."
-  (let* ((pkg-name (deb-packaging-detect--package-name))
-         (ppa (and pkg-name
-                   (deb-packaging-ppa-load
-                    pkg-name (deb-packaging-config--effective-distro))))
+  (let* ((ppa (plist-get ctx :default-ppa))
          (record (deb-packaging-commands-run-record 'ppa-tests))
          (time (plist-get record :time)))
     (insert "    "
@@ -317,17 +317,27 @@ get the default face."
   "Insert the package title, path, and stale indicator from CTX."
   (let ((name (plist-get ctx :name))
         (version (plist-get ctx :version))
+        (distro (plist-get ctx :distro))
         (pkg-dir (plist-get ctx :pkg-dir))
+        (repo-dir (plist-get ctx :repo-dir))
+        (branch (plist-get ctx :branch))
+        (host-arch (plist-get ctx :host-arch))
         (stale (plist-get ctx :stale)))
     (insert (propertize name 'font-lock-face 'deb-packaging-status-title)
             " "
             (propertize version 'font-lock-face 'deb-packaging-status-version)
-            "  "
-            (propertize (deb-packaging-config--effective-distro)
-                        'font-lock-face 'deb-packaging-status-distro)
             "\n")
     (insert (propertize (abbreviate-file-name pkg-dir)
                         'font-lock-face 'deb-packaging-status-path)
+            "\n")
+    (insert (propertize distro 'font-lock-face 'deb-packaging-status-distro)
+            (format " | %s | %s"
+                    (or host-arch "unknown arch")
+                    (if repo-dir
+                        (format "git | %s | %s"
+                                (or branch "detached")
+                                (if (plist-get ctx :dirty-p) "modified" "clean"))
+                      "not a git repository"))
             "\n")
     (when stale
       (insert (propertize (format "⚠ %d stale" (length stale))
@@ -392,8 +402,8 @@ last-run time, DETAIL is an optional dimmed fragment."
          (dsc (alist-get 'dsc arts))
          (bin-changes (alist-get 'binary-changes arts))
          (debs (alist-get 'debs arts))
-         (arch (plist-get ctx :arch))
-         (distro (deb-packaging-config--effective-distro))
+         (arch (plist-get ctx :host-arch))
+         (distro (plist-get ctx :distro))
          (schroot (when (and distro arch)
                     (deb-packaging-detect--schroot-exists-p distro arch)))
          (repos (deb-packaging-transients--effective-repos))
@@ -510,7 +520,7 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
   "Insert the Test (autopkgtest) phase section from CTX, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
          (debs (alist-get 'debs arts))
-         (arch (plist-get ctx :arch))
+         (arch (plist-get ctx :host-arch))
          (state (deb-packaging-status--phase-state 'autopkgtest nil debs)))
     (magit-insert-section (deb-packaging-test nil hide)
       (magit-insert-heading
@@ -518,7 +528,8 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
       (magit-insert-section-body
         (if (not debs)
             (deb-packaging-status--insert-note "waiting on binary build")
-          (let* ((info (deb-packaging-commands--test-image-info))
+           (let* ((info (deb-packaging-commands--test-image-info
+                         nil (plist-get ctx :distro)))
                  (runner (plist-get info :runner))
                  (image (plist-get info :image))
                  (exists (plist-get info :exists)))
@@ -538,7 +549,7 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                                            'deb-packaging-status-failed)))))))
             (when (and image (not exists))
               (when-let ((hint (deb-packaging-commands--test-image-build-hint
-                                 runner (deb-packaging-config--effective-distro))))
+                                  runner (plist-get ctx :distro))))
                 (deb-packaging-status--insert-note
                  (format "Build it with: %s" hint))))
             (dolist (d debs)
@@ -548,16 +559,13 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                             (transient-args 'deb-packaging-test-transient)))
               (deb-packaging-status--insert-note
                "Drops into a testbed shell on test failure")))))
-        (deb-packaging-status--insert-ppa-tests-row))))
+        (deb-packaging-status--insert-ppa-tests-row ctx))))
 
 (defun deb-packaging-status--insert-upload (ctx hide)
   "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE."
   (let* ((arts (plist-get ctx :artifacts))
          (changes (alist-get 'source-changes arts))
-         (ppa (transient-arg-value
-               "--ppa="
-               (ignore-errors
-                 (transient-args 'deb-packaging-upload-transient))))
+         (ppa (plist-get ctx :default-ppa))
          ;; Ready only when a source .changes exists to dput; the PPA is
          ;; chosen inside the transient and must not gate the phase.
          (state (deb-packaging-status--phase-state 'dput nil changes)))

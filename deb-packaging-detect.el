@@ -16,6 +16,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'magit)
 
 ;;; Package Directory Detection
 
@@ -155,13 +156,17 @@ Skips comments, blanks, and quilt options.  Returns nil if series absent."
             (forward-line 1))
           (nreverse patches))))))
 
+(defun deb-packaging-detect--vcs-git-info (&optional pkg-dir)
+  "Return (URL BRANCH) parsed from Vcs-Git in PKG-DIR."
+  (when-let* ((value (deb-packaging-detect--control-field "Vcs-Git" pkg-dir))
+              (parts (split-string value)))
+    (list (car parts)
+          (when-let ((tail (member "-b" parts)))
+            (cadr tail)))))
+
 (defun deb-packaging-detect--vcs-git (&optional pkg-dir)
-  "Return the Vcs-Git URL for PKG-DIR, sans trailing `-b BRANCH'.
-Returns nil if debian/control has no Vcs-Git field."
-  (let ((value (deb-packaging-detect--control-field "Vcs-Git" pkg-dir)))
-    (when value
-      (string-trim
-       (replace-regexp-in-string "\\s-+-b\\s-+\\S-+$" "" value)))))
+  "Return the Vcs-Git URL for PKG-DIR, or nil."
+  (car (deb-packaging-detect--vcs-git-info pkg-dir)))
 
 (defun deb-packaging-detect--orig-tarball (name version parent-dir)
   "Return the .orig.tar.* path matching `NAME_UPSTREAM' in PARENT-DIR, or nil."
@@ -366,19 +371,33 @@ package tree.  Keys:
   :name          source package name
   :version       full version string
   :distro        target distribution
-  :pkg-dir       directory containing debian/changelog
+  :pkg-dir       canonical directory containing debian/changelog
   :parent-dir    build-output directory
+  :repo-dir      canonical Git top-level, or nil
+  :git-p         non-nil inside a Git repository
+  :branch        current branch, or nil for detached HEAD/non-Git
+  :dirty-p       non-nil for staged, unstaged, untracked, or submodule changes
+  :vcs-url       URL from Vcs-Git, or nil
+  :vcs-branch    branch from Vcs-Git -b, or nil
   :artifacts     alist from `deb-packaging-detect--scan-artifacts'
   :stale         list from `deb-packaging-detect--scan-stale-artifacts'
   :source-format source format string, or nil
   :orig-tarball  .orig.tar.* path, or nil
-  :arch          build architecture string"
-  (when-let* ((pkg-dir (deb-packaging-detect--find-package-dir start-dir))
+  :arch          host architecture string (compatibility key)
+  :host-arch     host architecture string"
+  (when-let* ((found-dir (deb-packaging-detect--find-package-dir start-dir))
+              (pkg-dir (file-name-as-directory (file-truename found-dir)))
               (info (deb-packaging-detect--parse-changelog pkg-dir)))
     (let* ((name (nth 0 info))
            (version (nth 1 info))
            (distro (nth 2 info))
            (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
+           (default-directory pkg-dir)
+           (repo-dir (when-let ((root (ignore-errors (magit-toplevel))))
+                       (file-name-as-directory (file-truename root))))
+           (vcs-git (deb-packaging-detect--vcs-git-info pkg-dir))
+           (host-arch (deb-packaging-detect--call-process-string
+                       "dpkg" "--print-architecture"))
            (artifacts (deb-packaging-detect--scan-artifacts name version parent-dir))
            (stale (deb-packaging-detect--scan-stale-artifacts name version parent-dir pkg-dir)))
       (list :name name
@@ -386,12 +405,22 @@ package tree.  Keys:
             :distro distro
             :pkg-dir pkg-dir
             :parent-dir parent-dir
+            :repo-dir repo-dir
+            :git-p (and repo-dir t)
+            :branch (when repo-dir (magit-get-current-branch))
+            :dirty-p (and repo-dir
+                          (magit-git-lines "status" "--porcelain"
+                                           "--untracked-files=normal"
+                                           "--ignore-submodules=none")
+                          t)
+            :vcs-url (car vcs-git)
+            :vcs-branch (cadr vcs-git)
             :artifacts artifacts
             :stale stale
             :source-format (deb-packaging-detect--source-format pkg-dir)
             :orig-tarball (deb-packaging-detect--orig-tarball name version parent-dir)
-            :arch (deb-packaging-detect--call-process-string
-                   "dpkg" "--print-architecture")))))
+            :arch host-arch
+            :host-arch host-arch))))
 
 (provide 'deb-packaging-detect)
 ;;; deb-packaging-detect.el ends here

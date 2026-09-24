@@ -339,6 +339,27 @@ PPA being unset must not gate the phase."
 
 ;;; Entry point prompting
 
+(ert-deftest deb-packaging-test-status/collect-context-adds-default-ppa ()
+  (let (loaded)
+    (cl-letf (((symbol-function 'deb-packaging-detect--scan-context)
+               (lambda () '(:name "foo" :distro "noble")))
+              ((symbol-function 'deb-packaging-ppa-load)
+               (lambda (name distro)
+                 (setq loaded (list name distro))
+                 "ppa:me/foo")))
+      (let ((ctx (deb-packaging-status--collect-context)))
+        (should (equal loaded '("foo" "noble")))
+        (should (equal (plist-get ctx :default-ppa) "ppa:me/foo"))))))
+
+(ert-deftest deb-packaging-test-status/header-renders-repository-context ()
+  (with-temp-buffer
+    (deb-packaging-status--insert-header
+     '(:name "foo" :version "1.2-3" :distro "noble"
+       :pkg-dir "/tmp/foo/" :repo-dir "/tmp/foo/" :branch "main"
+       :dirty-p t :host-arch "arm64"))
+    (should (string-match-p "noble | arm64 | git | main | modified"
+                            (buffer-string)))))
+
 (ert-deftest deb-packaging-test-status/status-prompts-outside-package ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3")

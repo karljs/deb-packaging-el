@@ -36,9 +36,19 @@
 ;;; Top-level dispatch hub
 
 (defun deb-packaging--dispatch-header ()
-  "Header for the dispatch transient, showing the target distro."
-  (format "Debian Packaging\nTarget distro: %s"
-          (deb-packaging-config--effective-distro)))
+  "Header for the dispatch transient, showing workspace context."
+  (if-let ((ctx (deb-packaging-status--collect-context)))
+      (format "Debian Packaging\n%s %s | %s | %s | %s"
+              (plist-get ctx :name)
+              (plist-get ctx :version)
+              (plist-get ctx :distro)
+              (or (plist-get ctx :host-arch) "unknown arch")
+              (if (plist-get ctx :git-p)
+                  (format "git: %s%s"
+                          (or (plist-get ctx :branch) "detached")
+                          (if (plist-get ctx :dirty-p) " (modified)" ""))
+                "not a git repository"))
+    "Debian Packaging"))
 
 (transient-define-prefix deb-packaging-dispatch-transient ()
   "Debian packaging commands.
