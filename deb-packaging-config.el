@@ -19,6 +19,10 @@
 (require 'subr-x)
 (require 'deb-packaging-detect)
 
+(defgroup deb-packaging nil
+  "Debian and Ubuntu packaging workflows."
+  :group 'tools)
+
 ;;; Target distribution
 
 ;; One distro, from the changelog: it decides where an upload lands
@@ -34,6 +38,62 @@
 Falls back to `deb-packaging-config-default-distro' outside a tree."
   (or (nth 2 (deb-packaging-detect--parse-changelog))
       deb-packaging-config-default-distro))
+
+;;; Target architecture
+
+(defcustom deb-packaging-config-default-architecture nil
+  "Default target architecture, or nil to use the host architecture."
+  :type '(choice (const :tag "Host architecture" nil) string)
+  :group 'deb-packaging)
+
+(defun deb-packaging-config--architecture-valid-p (architecture)
+  "Return non-nil when ARCHITECTURE is a plausible Debian architecture."
+  (and (stringp architecture)
+       (string-match-p "\\`[[:alnum:]][[:alnum:]-]*\\'" architecture)))
+
+(defun deb-packaging-config--architecture-file (package distro)
+  "Return the target-architecture cache file for PACKAGE and DISTRO."
+  (expand-file-name
+   (format "%s.%s" package distro)
+   (expand-file-name "deb-packaging/architectures"
+                     (deb-packaging-detect--cache-dir))))
+
+(defun deb-packaging-config-load-architecture (package distro)
+  "Return the saved target architecture for PACKAGE and DISTRO, or nil."
+  (let ((file (deb-packaging-config--architecture-file package distro)))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (let ((architecture (string-trim (buffer-string))))
+          (when (deb-packaging-config--architecture-valid-p architecture)
+            architecture))))))
+
+(defun deb-packaging-config-save-architecture (package distro architecture)
+  "Persist target ARCHITECTURE for PACKAGE and DISTRO."
+  (unless (deb-packaging-config--architecture-valid-p architecture)
+    (user-error "Invalid Debian architecture: %s" architecture))
+  (let ((file (deb-packaging-config--architecture-file package distro)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (insert architecture "\n"))))
+
+(defun deb-packaging-config--effective-architecture (&optional context)
+  "Return the active target architecture for CONTEXT or the current package."
+  (when (and deb-packaging-config-default-architecture
+             (not (deb-packaging-config--architecture-valid-p
+                   deb-packaging-config-default-architecture)))
+    (user-error "Invalid `deb-packaging-config-default-architecture': %s"
+                deb-packaging-config-default-architecture))
+  (let* ((name (or (plist-get context :name)
+                   (deb-packaging-detect--package-name)))
+         (distro (or (plist-get context :distro)
+                     (deb-packaging-config--effective-distro)))
+         (saved (and name distro
+                     (deb-packaging-config-load-architecture name distro)))
+         (host (or (plist-get context :host-arch)
+                   (deb-packaging-detect--call-process-string
+                    "dpkg" "--print-architecture"))))
+    (or saved deb-packaging-config-default-architecture host "amd64")))
 
 ;;; Propagation
 

@@ -244,9 +244,10 @@ Strips epoch and Debian revision.  Native packages return VERSION."
           (forward-line 1))
         (nreverse files)))))
 
-(defun deb-packaging-detect--scan-artifacts (name version dir)
+(defun deb-packaging-detect--scan-artifacts (name version dir &optional arch)
   "Scan DIR for artifacts matching NAME and VERSION.
-Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
+Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo.
+When ARCH is non-nil, include only binary changes for ARCH or `all'."
   (let* ((file-version (deb-packaging-detect--version-to-filename version))
          (base-pattern (format "^%s_" (regexp-quote name)))
          (files (directory-files dir nil base-pattern))
@@ -262,8 +263,10 @@ Return alist with keys: dsc, source-changes, binary-changes, debs, buildinfo."
           (setq dsc (expand-file-name file dir)))
          ((string-match "_source\\.changes$" file)
           (setq source-changes (expand-file-name file dir)))
-         ((string-match "\\.changes$" file)
-          (push (expand-file-name file dir) binary-changes))
+         ((string-match "_\\([^_]+\\)\\.changes$" file)
+          (when (or (null arch)
+                    (member (match-string 1 file) (list arch "all")))
+            (push (expand-file-name file dir) binary-changes)))
          ((string-match "_source\\.buildinfo$" file)
           (push (expand-file-name file dir) buildinfo)))))
     ;; debs are only discoverable via the binary .changes.

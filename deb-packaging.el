@@ -42,7 +42,11 @@
               (plist-get ctx :name)
               (plist-get ctx :version)
               (plist-get ctx :distro)
-              (or (plist-get ctx :host-arch) "unknown arch")
+              (let* ((host (plist-get ctx :host-arch))
+                     (target (or (plist-get ctx :target-arch) host)))
+                (if (and host (not (equal target host)))
+                    (format "%s (host %s)" target host)
+                  (or target host "unknown arch")))
               (if (plist-get ctx :git-p)
                   (format "git: %s%s"
                           (or (plist-get ctx :branch) "detached")

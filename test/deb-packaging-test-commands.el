@@ -274,6 +274,22 @@ and re-emit without doubling the argument."
 
 ;;; deb-packaging-commands-sbuild multi-value
 
+(ert-deftest deb-packaging-test-commands/sbuild-target-architecture ()
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (captured-args captured-save)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &optional _dir _key _buffer-dir)
+                   (setq captured-args args)))
+                ((symbol-function 'deb-packaging-repos-save) #'ignore)
+                ((symbol-function 'deb-packaging-config-save-architecture)
+                 (lambda (package distro arch)
+                   (setq captured-save (list package distro arch)))))
+        (deb-packaging-commands-sbuild '("--arch=arm64")))
+      (should (member "--arch=arm64" captured-args))
+      (should (equal captured-save '("mypkg" "noble" "arm64"))))))
+
 (ert-deftest deb-packaging-test-commands/sbuild-multiple-extra-repos ()
   "sbuild receives one expanded --extra-repository= flag per entry."
   (deb-packaging-test--with-package-tree
@@ -287,7 +303,7 @@ and re-emit without doubling the argument."
                  (lambda (pkg distro entries)
                    (setq captured-save (list pkg distro entries)))))
         (deb-packaging-test--with-mocked-process
-            '(("curl" . "200"))
+            '(("dpkg" . "amd64") ("curl" . "200"))
           (deb-packaging-commands-sbuild
            (deb-packaging-test-commands--sbuild-args
             '("ppa:me/x" "proposed"
@@ -362,6 +378,9 @@ and re-emit without doubling the argument."
             (deb-packaging-repos-save "mypkg" "noble"
                                       '("ppa:me/x" "proposed"))
             (let ((default (deb-packaging-transients--binary-default-value)))
+              (should (cl-some (lambda (arg)
+                                 (string-prefix-p "--arch=" arg))
+                               default))
               (should (member "--extra-repository=ppa:me/x" default))
               (should (member "--extra-repository=proposed" default))))
         (delete-directory tmp t)))))
@@ -376,7 +395,8 @@ args: the chroot's own sources.list provides the distro's pockets."
                                       process-environment)))
       (unwind-protect
           (let ((default (deb-packaging-transients--binary-default-value)))
-            (should (equal default '("-A"))))
+            (should (equal (car default) "-A"))
+            (should (string-prefix-p "--arch=" (cadr default))))
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/binary-default-value-cleared-repos-stick ()
@@ -773,7 +793,7 @@ Binds `captured-args' to whatever sbuild would run."
 before sbuild runs."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
-        '(("curl" . "403"))
+        '(("dpkg" . "amd64") ("curl" . "403"))
       (should-error (deb-packaging-commands-sbuild
                      (deb-packaging-test-commands--sbuild-args
                       '("ppa:karljs/empty")))
@@ -783,7 +803,7 @@ before sbuild runs."
 (ert-deftest deb-packaging-test-commands/sbuild-errors-on-missing-series ()
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
-        '(("curl" . "404"))
+        '(("dpkg" . "amd64") ("curl" . "404"))
       (should-error (deb-packaging-commands-sbuild
                      (deb-packaging-test-commands--sbuild-args
                       '("ppa:karljs/only-noble")))
@@ -793,7 +813,7 @@ before sbuild runs."
 (ert-deftest deb-packaging-test-commands/sbuild-proceeds-when-published ()
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
-        '(("curl" . "200"))
+        '(("dpkg" . "amd64") ("curl" . "200"))
       (deb-packaging-commands-sbuild
        (deb-packaging-test-commands--sbuild-args '("ppa:karljs/good")))
       (should (cl-some (lambda (a) (string-prefix-p
@@ -806,7 +826,7 @@ before sbuild runs."
 the build."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
-        '(("curl" . "000"))
+        '(("dpkg" . "amd64") ("curl" . "000"))
       (deb-packaging-commands-sbuild
        (deb-packaging-test-commands--sbuild-args '("ppa:karljs/flaky")))
       (should captured-args))))
@@ -815,7 +835,7 @@ the build."
   "Variant names and raw deb lines skip the probe entirely."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
-        '(("curl" . (error . "must not probe")))
+        '(("dpkg" . "amd64") ("curl" . (error . "must not probe")))
       (deb-packaging-commands-sbuild
        (deb-packaging-test-commands--sbuild-args
         '("proposed" "deb http://example.com/ubuntu noble main")))

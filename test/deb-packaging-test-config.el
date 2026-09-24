@@ -44,5 +44,49 @@ cached global can disagree with it."
 (ert-deftest deb-packaging-test-config/default-distro-is-user-tunable ()
   (should (stringp deb-packaging-config-default-distro)))
 
+(ert-deftest deb-packaging-test-config/architecture-resolution-order ()
+  (deb-packaging-test--with-package-tree
+      '(:name "foo" :version "1.2-3" :distro "noble")
+    (let* ((tmp (make-temp-file "deb-arch-test-" t))
+           (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                      process-environment))
+           (deb-packaging-config-default-architecture "i386"))
+      (unwind-protect
+          (cl-letf (((symbol-function 'deb-packaging-detect--call-process-string)
+                     (lambda (&rest _) "amd64")))
+            (should (equal (deb-packaging-config--effective-architecture)
+                           "i386"))
+            (deb-packaging-config-save-architecture "foo" "noble" "arm64")
+            (should (equal (deb-packaging-config--effective-architecture)
+                           "arm64")))
+        (delete-directory tmp t)))))
+
+(ert-deftest deb-packaging-test-config/architecture-host-and-final-fallback ()
+  (let ((tmp (make-temp-file "deb-config-test-" t)))
+    (unwind-protect
+        (let ((default-directory (file-name-as-directory tmp))
+              (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
+                                         process-environment))
+              (deb-packaging-config-default-architecture nil))
+          (cl-letf (((symbol-function 'deb-packaging-detect--call-process-string)
+                     (lambda (&rest _) "ppc64el")))
+            (should (equal (deb-packaging-config--effective-architecture)
+                           "ppc64el")))
+          (cl-letf (((symbol-function 'deb-packaging-detect--call-process-string)
+                     (lambda (&rest _) nil)))
+            (should (equal (deb-packaging-config--effective-architecture)
+                           "amd64"))))
+      (delete-directory tmp t))))
+
+(ert-deftest deb-packaging-test-config/architecture-rejects-invalid-value ()
+  (should-error
+   (deb-packaging-config-save-architecture "foo" "noble" "arm64; nope")
+   :type 'user-error))
+
+(ert-deftest deb-packaging-test-config/architecture-rejects-invalid-default ()
+  (let ((deb-packaging-config-default-architecture "not an arch"))
+    (should-error (deb-packaging-config--effective-architecture)
+                  :type 'user-error)))
+
 (provide 'deb-packaging-test-config)
 ;;; deb-packaging-test-config.el ends here

@@ -319,6 +319,8 @@ get the default face."
         (repo-dir (plist-get ctx :repo-dir))
         (branch (plist-get ctx :branch))
         (host-arch (plist-get ctx :host-arch))
+        (target-arch (or (plist-get ctx :target-arch)
+                         (plist-get ctx :host-arch)))
         (stale (plist-get ctx :stale)))
     (insert (propertize name 'font-lock-face 'deb-packaging-status-title)
             " "
@@ -329,7 +331,9 @@ get the default face."
             "\n")
     (insert (propertize distro 'font-lock-face 'deb-packaging-status-distro)
             (format " | %s | %s"
-                    (or host-arch "unknown arch")
+                    (if (and host-arch (not (equal target-arch host-arch)))
+                        (format "%s (host %s)" target-arch host-arch)
+                      (or target-arch host-arch "unknown arch"))
                     (if repo-dir
                         (format "git | %s | %s"
                                 (or branch "detached")
@@ -399,7 +403,7 @@ last-run time, DETAIL is an optional dimmed fragment."
          (dsc (alist-get 'dsc arts))
          (bin-changes (alist-get 'binary-changes arts))
          (debs (alist-get 'debs arts))
-         (arch (plist-get ctx :host-arch))
+         (arch (plist-get ctx :target-arch))
          (distro (plist-get ctx :distro))
          (schroot (when (and distro arch)
                     (deb-packaging-detect--schroot-exists-p distro arch)))

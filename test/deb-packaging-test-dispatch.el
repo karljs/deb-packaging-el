@@ -42,17 +42,27 @@
   (cl-letf (((symbol-function 'deb-packaging-status--collect-context)
              (lambda ()
                '(:name "foo" :version "1.2-3" :distro "noble"
-                 :host-arch "arm64" :git-p t :branch "ubuntu/noble"
+                 :host-arch "arm64" :target-arch "arm64"
+                 :git-p t :branch "ubuntu/noble"
                  :dirty-p t))))
     (let ((header (deb-packaging--dispatch-header)))
       (should (string-match-p "foo 1.2-3 | noble | arm64" header))
       (should (string-match-p "git: ubuntu/noble (modified)" header)))))
 
+(ert-deftest deb-packaging-test-dispatch/header-shows-target-and-host ()
+  (cl-letf (((symbol-function 'deb-packaging-status--collect-context)
+             (lambda ()
+               '(:name "foo" :version "1.2-3" :distro "noble"
+                 :host-arch "amd64" :target-arch "arm64"))))
+    (should (string-match-p "arm64 (host amd64)"
+                            (deb-packaging--dispatch-header)))))
+
 (ert-deftest deb-packaging-test-dispatch/operation-header-shows-context-and-ppa ()
   (cl-letf (((symbol-function 'deb-packaging-transients--context)
              (lambda ()
                '(:name "foo" :version "1.2-3" :distro "noble"
-                 :host-arch "arm64" :git-p t :branch "ubuntu/noble"
+                 :host-arch "arm64" :target-arch "arm64"
+                 :git-p t :branch "ubuntu/noble"
                  :default-ppa "ppa:me/foo"))))
     (let ((header (deb-packaging-transients--context-header)))
       (should (string-match-p "foo 1.2-3 | noble | arm64" header))

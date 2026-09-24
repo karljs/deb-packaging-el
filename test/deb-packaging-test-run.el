@@ -114,6 +114,21 @@ per record, not the first run's time forever."
                  'external deb-packaging-commands--unscoped)
                 'external))))
 
+(ert-deftest deb-packaging-test-run/records-are-target-architecture-scoped ()
+  (let ((deb-packaging-commands--run-history nil)
+        (amd64 '("/pkg/" "noble" "amd64"))
+        (arm64 '("/pkg/" "noble" "arm64")))
+    (deb-packaging-commands--record-run
+     'sbuild 'success "*amd64*" nil amd64)
+    (deb-packaging-commands--record-run
+     'sbuild 'failure "*arm64*" nil arm64)
+    (should (eq (plist-get (deb-packaging-commands-run-record 'sbuild amd64)
+                           :status)
+                'success))
+    (should (eq (plist-get (deb-packaging-commands-run-record 'sbuild arm64)
+                           :status)
+                'failure))))
+
 (ert-deftest deb-packaging-test-run/older-run-cannot-overwrite-newer-run ()
   (let ((deb-packaging-commands--run-history nil)
         (old-id (make-symbol "old"))

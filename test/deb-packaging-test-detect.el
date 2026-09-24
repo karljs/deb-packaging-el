@@ -372,6 +372,22 @@
       (should-not (alist-get 'binary-changes arts))
       (should-not (alist-get 'debs arts)))))
 
+(ert-deftest deb-packaging-test-detect/scan-artifacts-filters-binary-architecture ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3"
+            :artifacts '(("foo_1.2-3_amd64.changes" . "Files:\n a 1 x y foo_1.2-3_amd64.deb\n")
+                         ("foo_1.2-3_amd64.deb" . "")
+                         ("foo_1.2-3_arm64.changes" . "Files:\n b 1 x y foo_1.2-3_arm64.deb\n")
+                         ("foo_1.2-3_arm64.deb" . "")))
+    (let ((arts (deb-packaging-detect--scan-artifacts
+                 "foo" "1.2-3" pkg-parent-dir "arm64")))
+      (should (= (length (alist-get 'binary-changes arts)) 1))
+      (should (string-suffix-p "_arm64.changes"
+                               (car (alist-get 'binary-changes arts))))
+      (should (= (length (alist-get 'debs arts)) 1))
+      (should (string-suffix-p "_arm64.deb"
+                               (car (alist-get 'debs arts)))))))
+
 (ert-deftest deb-packaging-test-detect/scan-artifacts-empty-parent ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3")

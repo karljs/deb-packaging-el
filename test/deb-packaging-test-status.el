@@ -356,7 +356,7 @@ PPA being unset must not gate the phase."
     (deb-packaging-status--insert-header
      '(:name "foo" :version "1.2-3" :distro "noble"
        :pkg-dir "/tmp/foo/" :repo-dir "/tmp/foo/" :branch "main"
-       :dirty-p t :host-arch "arm64"))
+       :dirty-p t :host-arch "arm64" :target-arch "arm64"))
     (should (string-match-p "noble | arm64 | git | main | modified"
                             (buffer-string)))))
 

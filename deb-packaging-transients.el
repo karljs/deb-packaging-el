@@ -59,9 +59,20 @@ Used as :environment for the prefixes in this package."
 (defun deb-packaging-transients--context ()
   "Return the current workspace context with its saved default PPA."
   (when-let ((ctx (deb-packaging-detect--scan-context)))
-    (plist-put ctx :default-ppa
-               (deb-packaging-ppa-load
-                (plist-get ctx :name) (plist-get ctx :distro)))))
+    (setq ctx (plist-put ctx :default-ppa
+                         (deb-packaging-ppa-load
+                          (plist-get ctx :name) (plist-get ctx :distro))))
+    (let ((target (deb-packaging-config--effective-architecture ctx)))
+      (setq ctx (plist-put ctx :target-arch target))
+      (when (and (plist-get ctx :name)
+                 (plist-get ctx :version)
+                 (plist-get ctx :parent-dir))
+        (setq ctx
+              (plist-put ctx :artifacts
+                         (deb-packaging-detect--scan-artifacts
+                          (plist-get ctx :name) (plist-get ctx :version)
+                          (plist-get ctx :parent-dir) target))))
+      ctx)))
 
 (defun deb-packaging-transients--context-header ()
   "Return a compact header for package operation transients."
@@ -71,7 +82,11 @@ Used as :environment for the prefixes in this package."
                (plist-get ctx :name)
                (plist-get ctx :version)
                (plist-get ctx :distro)
-               (or (plist-get ctx :host-arch) "unknown arch")
+               (let* ((host (plist-get ctx :host-arch))
+                      (target (or (plist-get ctx :target-arch) host)))
+                 (if (and host (not (equal target host)))
+                     (format "%s (host %s)" target host)
+                   (or target host "unknown arch")))
                (if (plist-get ctx :git-p)
                    (format "git: %s%s"
                            (or (plist-get ctx :branch) "detached")
@@ -146,9 +161,16 @@ proposed can add the `proposed' candidate in the -e menu."
 Restores the saved extra-repository set for the current package and
 changelog distro; nothing extra when no set was saved (the chroot's own
 sources.list provides the distro's pockets)."
-  (cons "-A"
-        (mapcar (lambda (r) (concat "--extra-repository=" r))
-                (deb-packaging-transients--effective-repos))))
+  (append (list "-A" (concat "--arch="
+                              (deb-packaging-config--effective-architecture)))
+          (mapcar (lambda (r) (concat "--extra-repository=" r))
+                  (deb-packaging-transients--effective-repos))))
+
+(defun deb-packaging-transients--read-architecture (prompt initial-input _history)
+  "Read a Debian architecture with common values as completion candidates."
+  (completing-read prompt '("amd64" "arm64" "armhf" "i386" "ppc64el"
+                            "riscv64" "s390x")
+                   nil nil initial-input))
 
 (defun deb-packaging-transients--seed-from-prefix (obj arg-prefix)
   "Seed OBJ's value from flat ARG-PREFIX args in the prefix value.
@@ -265,7 +287,13 @@ The distro comes from the changelog."
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-transients--context-header]
   ["Arguments"
-   ("-A" "Build arch-all packages"  "-A")
+    ("-a" "Target architecture"
+     "--arch="
+     :class transient-option
+     :reader deb-packaging-transients--read-architecture
+     :always-read t
+     :allow-empty nil)
+    ("-A" "Build arch-all packages"  "-A")
    ("-v" "Verbose"                  "-v")
    ("-u" "apt upgrade"              "--apt-upgrade")
     ("-S" "Purge session"

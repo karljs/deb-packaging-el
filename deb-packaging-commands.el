@@ -55,10 +55,14 @@ Session-only.")
 (defun deb-packaging-commands--run-scope (&optional dir context)
   "Return the package and distro scope containing DIR, or nil."
   (if context
-      (list (plist-get context :pkg-dir) (plist-get context :distro))
+      (list (plist-get context :pkg-dir)
+            (plist-get context :distro)
+            (plist-get context :target-arch))
     (when-let ((pkg-dir (deb-packaging-detect--find-package-dir dir)))
-      (list (file-truename pkg-dir)
-            (nth 2 (deb-packaging-detect--parse-changelog pkg-dir))))))
+      (let ((default-directory pkg-dir))
+        (list (file-truename pkg-dir)
+              (nth 2 (deb-packaging-detect--parse-changelog pkg-dir))
+              (deb-packaging-config--effective-architecture))))))
 
 (defun deb-packaging-commands--scoped-run-key (key &optional scope)
   "Return KEY namespaced to package SCOPE when available."
@@ -207,6 +211,10 @@ the package tree when the process itself must run in the parent build dir."
          (buf-name (generate-new-buffer-name
                     (format "*deb-%s-%s*" name timestamp)))
          (context (deb-packaging-detect--scan-context (or buffer-dir dir)))
+         (context (when context
+                    (plist-put context :target-arch
+                               (deb-packaging-config--effective-architecture
+                                context))))
          (scope (if context
                     (deb-packaging-commands--run-scope nil context)
                   deb-packaging-commands--unscoped))
@@ -273,7 +281,11 @@ runs neither, so the affected row may need a manual refresh."
 No save-buffer prompts, each run gets a separate buffer, and the window
 follows the package display policy.  Returns the compilation buffer
 (nil under mocks)."
-  (let ((context (deb-packaging-detect--scan-context))
+  (let* ((context (deb-packaging-detect--scan-context))
+         (context (when context
+                    (plist-put context :target-arch
+                               (deb-packaging-config--effective-architecture
+                                context))))
         (compilation-ask-about-save nil)
         (compilation-always-kill nil)
         (compilation-buffer-name-function
@@ -551,6 +563,9 @@ The --dist chroot selection always comes from the changelog."
       (unless dsc-file
         (user-error "No .dsc file found; run a source build first"))
       (let* ((distro (deb-packaging-config--effective-distro))
+             (arch-value (transient-arg-value "--arch=" args))
+             (arch (or arch-value
+                       (deb-packaging-config--effective-architecture)))
              (repo-args (cl-remove-if-not
                          (lambda (a) (string-prefix-p "--extra-repository=" a))
                          args))
@@ -562,8 +577,10 @@ The --dist chroot selection always comes from the changelog."
                                  distro)))
                       repo-args))
              (passthrough (cl-remove-if
-                           (lambda (a) (string-prefix-p "--extra-repository=" a))
-                           args)))
+                            (lambda (a)
+                              (or (string-prefix-p "--extra-repository=" a)
+                                  (string-prefix-p "--arch=" a)))
+                            args)))
         ;; Pre-flight ppa: extra-repos: a PPA with no series for this
         ;; distro kills apt-get update minutes into the build; fail at
         ;; dispatch with the reason instead.  Only a definitive
@@ -587,11 +604,15 @@ Remove %s from the binary-build -e menu, or publish the series."
           (deb-packaging-repos-save
            (nth 0 info) distro
            (mapcar (lambda (a) (string-remove-prefix "--extra-repository=" a))
-                   repo-args)))
+                    repo-args))
+          (when arch-value
+            (deb-packaging-config-save-architecture
+             (nth 0 info) distro arch)))
         (deb-packaging-commands--run-command
          "sbuild"
          (append (list "sbuild")
-                 (list (format "--dist=%s" distro))
+                 (list (format "--dist=%s" distro)
+                       (format "--arch=%s" arch))
                  passthrough
                  extra-repo-arg
                  (list dsc-file))
