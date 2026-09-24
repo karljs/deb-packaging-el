@@ -19,6 +19,83 @@
 
 ;;; deb-packaging-commands--filter-args
 
+(ert-deftest deb-packaging-test-commands/gbp-build-uses-repo-and-configured-export-dir ()
+  (deb-packaging-test--with-temp-git-repo
+    (deb-packaging-test--build-tree
+     repo-dir (file-name-directory (directory-file-name repo-dir))
+     '(:name "foo" :version "1.0-1"))
+    (deb-packaging-test--git repo-dir "add" "debian")
+    (deb-packaging-test--git repo-dir "commit" "-q" "-m" "packaging")
+    (should (plist-get (deb-packaging-commands--package-context repo-dir)
+                       :git-p))
+    (let ((real-process-file (symbol-function 'process-file))
+          captured args artifact-dir)
+      (cl-letf (((symbol-function 'executable-find) (lambda (_) t))
+                ((symbol-function 'process-file)
+                 (lambda (program &rest args)
+                   (if (equal program "gbp")
+                       (progn
+                         (when (eq (nth 1 args) t)
+                           (insert "buildpackage.export-dir=build-area\n"))
+                         0)
+                     (apply real-process-file program args))))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name command &optional dir key buffer-dir)
+                   (setq captured (list dir key buffer-dir)
+                         args command)
+                   "*gbp-test*"))
+                ((symbol-function 'deb-packaging-commands--set-run-artifact-dir)
+                 (lambda (_key _buffer path) (setq artifact-dir path))))
+        (deb-packaging-commands-gbp-build
+         '("--git-ignore-new" "--git-builder=sbuild")))
+      (should (equal args '("gbp" "buildpackage" "--git-ignore-new"
+                            "--git-builder=sbuild")))
+      (should (equal (car captured) repo-dir))
+      (should (eq (cadr captured) 'gbp-build))
+      (should (equal (caddr captured) repo-dir))
+      (should (equal artifact-dir (expand-file-name "build-area" repo-dir))))))
+
+(ert-deftest deb-packaging-test-commands/package-context-uses-gbp-output-dir ()
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.0-1")
+    (let ((export-dir (make-temp-file "gbp-export-" t)))
+      (unwind-protect
+          (progn
+            (deb-packaging-test--write-file
+             (expand-file-name "foo_1.0-1.dsc" export-dir) "")
+            (cl-letf (((symbol-function 'deb-packaging-commands-run-record)
+                       (lambda (&rest _) (list :artifact-dir export-dir)))
+                      ((symbol-function 'deb-packaging-config--effective-architecture)
+                       (lambda (&optional _) "amd64")))
+              (let ((ctx (deb-packaging-commands--package-context pkg-dir)))
+                (should (equal (plist-get ctx :artifact-dir) export-dir))
+                 (should (equal (alist-get 'dsc (plist-get ctx :artifacts))
+                                (expand-file-name "foo_1.0-1.dsc" export-dir))))))
+        (delete-directory export-dir t)))))
+
+(ert-deftest deb-packaging-test-commands/gbp-orig-uses-gbp-builder ()
+  (deb-packaging-test--with-temp-git-repo
+    (deb-packaging-test--build-tree
+     repo-dir (file-name-directory (directory-file-name repo-dir))
+     '(:name "foo" :version "1.0-1"))
+    (deb-packaging-test--git repo-dir "add" "debian")
+    (deb-packaging-test--git repo-dir "commit" "-q" "-m" "packaging")
+    (let ((real-process-file (symbol-function 'process-file))
+          args)
+      (cl-letf (((symbol-function 'executable-find) (lambda (_) t))
+                ((symbol-function 'process-file)
+                 (lambda (program &rest call-args)
+                   (if (equal program "gbp")
+                       2
+                     (apply real-process-file program call-args))))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name command &rest _) (setq args command) "*gbp*"))
+                ((symbol-function 'deb-packaging-commands--set-run-artifact-dir)
+                 #'ignore))
+        (deb-packaging-commands-gbp-export-orig))
+      (should (equal args '("gbp" "buildpackage"
+                            "--git-builder=/bin/true" "--git-no-hooks"))))))
+
 (ert-deftest deb-packaging-test-commands/filter-keeps-exact-bare-flag ()
   (should (equal (deb-packaging-commands--filter-args
                   '("-i" "-I" "--foo")

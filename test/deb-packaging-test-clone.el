@@ -94,7 +94,41 @@
         (should (equal called
                        (list "ubuntu" "clone" "foo"
                              (expand-file-name "foo" root))))
-        (should (functionp sentinel))))))
+         (should (functionp sentinel))))))
+
+(ert-deftest deb-packaging-test-clone/gbp-clone-preserves-requested-branch ()
+  (deb-packaging-test-clone--with-temp-dir
+    (let* ((target (expand-file-name "foo" root))
+           props)
+      (cl-letf (((symbol-function 'executable-find) (lambda (_) "gbp"))
+                ((symbol-function 'make-process)
+                 (lambda (&rest args) (setq props args) 'gbp-process))
+                ((symbol-function 'process-put) #'ignore)
+                ((symbol-function 'deb-packaging-display-buffer) #'ignore))
+        (deb-packaging-clone-gbp "https://example.test/foo.git"
+                                 target
+                                 "debian/noble"))
+      (unwind-protect
+          (should (equal (plist-get props :command)
+                         (list "gbp" "clone" "--debian-branch=debian/noble"
+                               "https://example.test/foo.git" target)))
+        (when (buffer-live-p (plist-get props :buffer))
+          (kill-buffer (plist-get props :buffer)))))))
+
+(ert-deftest deb-packaging-test-clone/gbp-clone-follows-vcs-git-branch ()
+  (deb-packaging-test--with-temp-git-repo
+    (deb-packaging-test--build-tree
+     repo-dir repo-dir
+     '(:name "foo" :version "1.0-1"
+       :vcs-git "https://example.test/foo.git -b debian/noble"))
+    (deb-packaging-test--git repo-dir "add" "debian")
+    (deb-packaging-test--git repo-dir "commit" "-q" "-m" "packaging")
+    (deb-packaging-test--git repo-dir "remote" "add" "origin" repo-dir)
+    (deb-packaging-test--git repo-dir "update-ref"
+                             "refs/remotes/origin/debian/noble" "HEAD")
+    (deb-packaging-clone--select-vcs-branch repo-dir)
+    (let ((default-directory repo-dir))
+      (should (equal (magit-get-current-branch) "debian/noble")))))
 
 (provide 'deb-packaging-test-clone)
 ;;; deb-packaging-test-clone.el ends here

@@ -43,7 +43,7 @@
 
 (defvar-local deb-packaging-status--context nil
   "Buffer-local plist describing the package shown.
-Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
+Keys: package, repository, architecture, artifact, and default-PPA state.
 :source-format :orig-tarball :repo-dir :git-p :branch :dirty-p
 :vcs-url :vcs-branch :host-arch :default-ppa.")
 
@@ -66,6 +66,8 @@ Return a plist, or nil outside a Debian package tree."
 
 (defconst deb-packaging-status--section-actions
   '((deb-packaging-source         . deb-packaging-commands-source-build-transient)
+    (deb-packaging-gbp-build      . deb-packaging-gbp-build-transient)
+    (deb-packaging-gbp-orig       . deb-packaging-commands-gbp-export-orig)
     (deb-packaging-binary         . deb-packaging-binary-build-transient)
     (deb-packaging-check          . deb-packaging-lint-transient)
     (deb-packaging-test           . deb-packaging-test-transient)
@@ -363,7 +365,7 @@ last-run time, DETAIL is an optional dimmed fragment."
          (buildinfo (alist-get 'buildinfo arts))
          (source-format (plist-get ctx :source-format))
          (orig-tarball (plist-get ctx :orig-tarball))
-         (parent-dir (plist-get ctx :parent-dir))
+          (parent-dir (plist-get ctx :artifact-dir))
          (done (and dsc src-changes))
          (ready (deb-packaging-status--source-ready-p ctx))
          (state (deb-packaging-status--phase-state 'source-build done ready)))
@@ -391,9 +393,11 @@ last-run time, DETAIL is an optional dimmed fragment."
           (dolist (b buildinfo)
             (when (string-match-p "_source\\.buildinfo$" b)
               (deb-packaging-status--insert-file-line b))))
-         ((not ready)
-          (deb-packaging-status--insert-note
-           "missing orig tarball; run git ubuntu export-orig")))))))
+          ((not ready)
+           (deb-packaging-status--insert-note
+             (if (plist-get ctx :git-p)
+                 "missing orig tarball; use the gbp orig action or Git-Ubuntu export"
+               "missing orig tarball; run git ubuntu export-orig"))))))))
 
 (defun deb-packaging-status--insert-binary (ctx hide)
   "Insert the Binary phase section from CTX, collapsed when HIDE."
@@ -558,6 +562,46 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                             (transient-args 'deb-packaging-test-transient)))
               (deb-packaging-status--insert-note
                 "Drops into a testbed shell on test failure"))))))))
+
+(defun deb-packaging-status--insert-gbp-build (ctx)
+  "Insert the explicit git-buildpackage action for CTX."
+  (let* ((repo-dir (plist-get ctx :repo-dir))
+         (available (and repo-dir (executable-find "gbp")))
+         (record (deb-packaging-commands-run-record 'gbp-build))
+         (state (deb-packaging-status--phase-state 'gbp-build nil available t))
+         (artifact-dir (plist-get ctx :artifact-dir)))
+    (magit-insert-section (deb-packaging-gbp-build nil
+                              (not (memq state '(running failed))))
+      (magit-insert-heading
+        (deb-packaging-status--phase-heading state "gbp buildpackage" 'gbp-build))
+      (magit-insert-section-body
+        (deb-packaging-status--insert-state-row
+         (delq nil
+               (list (when repo-dir
+                       (cons "Repository" (abbreviate-file-name repo-dir)))
+                     (when artifact-dir
+                       (cons "Output" (abbreviate-file-name artifact-dir))))))
+        (unless repo-dir
+          (deb-packaging-status--insert-note "Not in a Git repository"))
+        (when (and repo-dir (not (executable-find "gbp")))
+          (deb-packaging-status--insert-note "gbp is not installed"))
+        (when (and (eq (plist-get record :status) 'success)
+                   (null (alist-get 'dsc (plist-get ctx :artifacts))))
+          (deb-packaging-status--insert-note "No matching .dsc found in build output"))))))
+
+(defun deb-packaging-status--insert-gbp-orig (ctx)
+  "Insert the explicit gbp orig-tarball action for CTX."
+  (let* ((orig (plist-get ctx :orig-tarball))
+         (ready (and (plist-get ctx :repo-dir) (executable-find "gbp")))
+         (state (deb-packaging-status--phase-state 'gbp-export-orig orig ready)))
+    (magit-insert-section (deb-packaging-gbp-orig nil
+                              (not (memq state '(running failed))))
+      (magit-insert-heading
+        (deb-packaging-status--phase-heading state "gbp orig tarball" 'gbp-export-orig))
+      (magit-insert-section-body
+        (deb-packaging-status--insert-state-row
+         (list (cons "Orig tarball"
+                     (if orig (file-name-nondirectory orig) "not present"))))))))
 
 (defun deb-packaging-status--insert-upload (ctx hide)
   "Insert the Upload (Launchpad PPA) phase section, collapsed when HIDE."
@@ -764,6 +808,8 @@ Point ends on the first phase heading."
             (magit-insert-section-body
               (deb-packaging-status--insert-source
                ctx (funcall hide 'source-build))
+              (deb-packaging-status--insert-gbp-build ctx)
+              (deb-packaging-status--insert-gbp-orig ctx)
               (deb-packaging-status--insert-binary
                ctx (funcall hide 'sbuild))))
           (magit-insert-section (deb-packaging-verify nil nil)
@@ -849,6 +895,8 @@ filesystem each time."
 
 (defconst deb-packaging-status--section-run-keys
   '((deb-packaging-source . source-build)
+    (deb-packaging-gbp-build . gbp-build)
+    (deb-packaging-gbp-orig . gbp-export-orig)
     (deb-packaging-binary . sbuild)
     (deb-packaging-commands-lintian-source . lintian-source)
     (deb-packaging-commands-lintian-binary . lintian-binary)

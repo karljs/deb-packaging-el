@@ -25,6 +25,7 @@
 
 ;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging-commands--runner-choices "deb-packaging-commands")
+(declare-function deb-packaging-commands--package-context "deb-packaging-commands")
 
 ;; Tool-specific variables live in deb-packaging-commands.el.
 (defvar deb-packaging-commands-sbuild-variants)
@@ -58,21 +59,10 @@ Used as :environment for the prefixes in this package."
 
 (defun deb-packaging-transients--context ()
   "Return the current workspace context with its saved default PPA."
-  (when-let ((ctx (deb-packaging-detect--scan-context)))
-    (setq ctx (plist-put ctx :default-ppa
-                         (deb-packaging-ppa-load
-                          (plist-get ctx :name) (plist-get ctx :distro))))
-    (let ((target (deb-packaging-config--effective-architecture ctx)))
-      (setq ctx (plist-put ctx :target-arch target))
-      (when (and (plist-get ctx :name)
-                 (plist-get ctx :version)
-                 (plist-get ctx :parent-dir))
-        (setq ctx
-              (plist-put ctx :artifacts
-                         (deb-packaging-detect--scan-artifacts
-                          (plist-get ctx :name) (plist-get ctx :version)
-                          (plist-get ctx :parent-dir) target))))
-      ctx)))
+  (when-let ((ctx (deb-packaging-commands--package-context)))
+    (plist-put ctx :default-ppa
+               (deb-packaging-ppa-load
+                (plist-get ctx :name) (plist-get ctx :distro)))))
 
 (defun deb-packaging-transients--context-header ()
   "Return a compact header for package operation transients."
@@ -98,6 +88,8 @@ Used as :environment for the prefixes in this package."
 
 ;; Forward-declare command functions.
 (declare-function deb-packaging-commands-source-build "deb-packaging-commands")
+(declare-function deb-packaging-commands-gbp-build "deb-packaging-commands")
+(declare-function deb-packaging-commands-gbp-export-orig "deb-packaging-commands")
 (declare-function deb-packaging-commands-export-orig "deb-packaging-commands")
 (declare-function deb-packaging-commands-sbuild "deb-packaging-commands")
 (declare-function deb-packaging-commands-lintian-source "deb-packaging-commands")
@@ -138,6 +130,7 @@ lint-transient pattern)."
   ["Run"
    ("s" "Build source" deb-packaging-commands-source-build)
    ("e" "Export orig (git ubuntu)" deb-packaging-commands-export-orig)
+   ("g" "Create orig tarball (gbp)" deb-packaging-commands-gbp-export-orig)
    ("q" "Quit" transient-quit-one)])
 
 ;;; 2. Binary build (sbuild)
@@ -318,6 +311,21 @@ The distro comes from the changelog."
      :description "Local .deb to install in chroot")]
   ["Build"
    ("b" "Build binary" deb-packaging-commands-sbuild)
+   ("q" "Quit" transient-quit-one)])
+
+;;; git-buildpackage
+
+(declare-function deb-packaging-commands-gbp-build "deb-packaging-commands")
+
+(transient-define-prefix deb-packaging-gbp-build-transient ()
+  "Build this repository with git-buildpackage."
+  :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
+  ["Options"
+   ("-i" "Ignore uncommitted changes and branch mismatch" "--git-ignore-new")
+   ("-s" "Use sbuild as builder" "--git-builder=sbuild")]
+  ["Run"
+   ("b" "Build with gbp buildpackage" deb-packaging-commands-gbp-build)
    ("q" "Quit" transient-quit-one)])
 
 ;;; 3. Lint (lintian + ubuntu-lint)

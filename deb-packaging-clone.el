@@ -9,19 +9,15 @@
 
 ;;; Commentary:
 
-;; Clone an Ubuntu source package with git-ubuntu and open the packaging
-;; status buffer in the result.  The clone runs through Magit's async
-;; process machinery: progress lands in *magit-process* and a sentinel
-;; opens the status buffer on success.  Usable from any buffer since no
-;; package context is needed up front.
-;;
-;; Entry point: `deb-packaging-clone-git-ubuntu'.
+;; Clone Ubuntu packages with git-ubuntu or packaging repositories with gbp.
 
 ;;; Code:
 
 (require 'subr-x)
 (require 'magit)
+(require 'deb-packaging-detect)
 (require 'deb-packaging-status)
+(require 'deb-packaging-display)
 
 (defun deb-packaging-clone--open-status (dir)
   "Open `deb-packaging-status' with DIR as the package directory."
@@ -73,6 +69,83 @@ already contains a package tree, skip the clone and open status there."
       (user-error "%s exists and is not a package tree" target))
      (t
       (deb-packaging-clone--async package target)))))
+
+(defun deb-packaging-clone--select-vcs-branch (pkg-dir)
+  "Switch PKG-DIR to its declared Vcs-Git branch when it exists remotely."
+  (let* ((info (deb-packaging-detect--vcs-git-info pkg-dir))
+         (branch (cadr info))
+         (default-directory pkg-dir))
+    (when (and branch
+               (not (equal branch (magit-get-current-branch)))
+               (zerop (call-process "git" nil nil nil "check-ref-format"
+                                    "--branch" branch))
+               (zerop (call-process "git" nil nil nil "show-ref" "--verify"
+                                    "--quiet"
+                                    (concat "refs/remotes/origin/" branch))))
+      (let ((local (zerop (call-process "git" nil nil nil "show-ref" "--verify"
+                                        "--quiet"
+                                        (concat "refs/heads/" branch)))))
+        (unless (zerop (if local
+                           (call-process "git" nil nil nil "switch" branch)
+                         (call-process "git" nil nil nil "switch" "--track" "-c"
+                                       branch (concat "origin/" branch))))
+          (message "Could not switch to Vcs-Git branch %s" branch))))))
+
+(defun deb-packaging-clone--gbp-sentinel (target output)
+  "Return a sentinel that opens TARGET after a successful gbp clone."
+  (lambda (proc _event)
+    (when (memq (process-status proc) '(exit signal))
+      (unwind-protect
+          (if (and (eq (process-status proc) 'exit)
+                   (zerop (process-exit-status proc)))
+              (if-let ((pkg-dir (deb-packaging-detect--find-package-dir target)))
+                  (progn
+                    (deb-packaging-clone--select-vcs-branch pkg-dir)
+                    (deb-packaging-clone--open-status pkg-dir))
+                (message "gbp clone completed, but no debian/changelog was found"))
+            (message "gbp clone failed; see %s" (buffer-name output)))
+      (when (buffer-live-p output)
+        (with-current-buffer output
+          (setq deb-packaging-display-category 'output)))))))
+
+;;;###autoload
+(defun deb-packaging-clone-gbp (repository target &optional debian-branch)
+  "Clone REPOSITORY with gbp into TARGET.
+When DEBIAN-BRANCH is non-empty, ask gbp to track that packaging branch.
+After cloning, follow Vcs-Git -b when that remote branch exists."
+  (interactive
+   (list (read-string "Git repository URL: ")
+         (read-directory-name "Clone into directory: " nil nil nil)
+         (let ((branch (read-string "Packaging branch (blank for gbp default): ")))
+           (unless (string-empty-p branch) branch))))
+  (when (string-empty-p repository)
+    (user-error "No Git repository given"))
+  (unless (executable-find "gbp")
+    (user-error "gbp not found in `exec-path'"))
+  (let ((target (expand-file-name target)))
+    (when (file-exists-p target)
+      (user-error "%s already exists" target))
+    (let* ((default-directory (file-name-directory target))
+           (output (generate-new-buffer "*gbp-clone*"))
+           (args (append (list "gbp" "clone")
+                         (when debian-branch
+                           (list (concat "--debian-branch=" debian-branch)))
+                         (list repository target))))
+      (condition-case err
+          (let ((proc (make-process
+                       :name "gbp-clone"
+                       :buffer output
+                       :command args
+                       :noquery t
+                       :sentinel (deb-packaging-clone--gbp-sentinel
+                                  target output))))
+            (process-put proc 'inhibit-refresh t)
+            (deb-packaging-display-buffer output 'output)
+            proc)
+        (error
+         (when (buffer-live-p output)
+           (kill-buffer output))
+         (signal (car err) (cdr err)))))))
 
 (provide 'deb-packaging-clone)
 ;;; deb-packaging-clone.el ends here

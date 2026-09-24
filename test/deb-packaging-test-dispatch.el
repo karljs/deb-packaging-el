@@ -83,6 +83,7 @@ a transient default (only C-g is); a menu without the binding leaves
 the learned key dead."
   (dolist (prefix '(deb-packaging-dispatch-transient
                     deb-packaging-commands-source-build-transient
+                    deb-packaging-gbp-build-transient
                     deb-packaging-binary-build-transient
                     deb-packaging-lint-transient
                     deb-packaging-test-transient
@@ -125,6 +126,18 @@ the learned key dead."
     (should (string-match-p
              ":key \"C\".*:command deb-packaging-clone-git-ubuntu"
               layout))))
+
+(ert-deftest deb-packaging-test-dispatch/dispatch-binds-gbp-build ()
+  (let ((layout (deb-packaging-test-dispatch--layout
+                 'deb-packaging-dispatch-transient)))
+    (should (string-match-p
+             ":key \"G\"[^)]*:command deb-packaging-gbp-build-transient"
+             layout))))
+
+(ert-deftest deb-packaging-test-dispatch/source-transient-binds-gbp-orig ()
+  (let ((layout (deb-packaging-test-dispatch--layout
+                 'deb-packaging-commands-source-build-transient)))
+    (should (string-match-p "deb-packaging-commands-gbp-export-orig" layout))))
 
 (ert-deftest deb-packaging-test-dispatch/autopkgtest-binds-proposed ()
   "The local autopkgtest transient exposes the proposed pocket."

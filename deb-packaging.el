@@ -61,7 +61,8 @@ The target distro comes from the changelog; other transients inherit it."
   [:description deb-packaging--dispatch-header]
   ["Build"
    ("s" "Source build..."  deb-packaging-commands-source-build-transient)
-   ("b" "Binary build..."  deb-packaging-binary-build-transient)]
+   ("b" "sbuild binary build..."  deb-packaging-binary-build-transient)
+   ("G" "gbp buildpackage..." deb-packaging-gbp-build-transient)]
   ["Check & Test"
    ("l" "Lint..."           deb-packaging-lint-transient)
    ("t" "Autopkgtest..."   deb-packaging-test-transient)]
@@ -78,8 +79,9 @@ The target distro comes from the changelog; other transients inherit it."
    ("c" "Clean artifacts..." deb-packaging-commands-clean-transient)
    ("K" "Kill build-output buffers" deb-packaging-commands-kill-output-buffers)
    ("r" "Reset source tree..." deb-packaging-commands-reset-transient)]
-    ["Other"
-     ("C" "Clone source package (git-ubuntu)..." deb-packaging-clone-git-ubuntu)
+     ["Other"
+      ("C" "Clone source package (git-ubuntu)..." deb-packaging-clone-git-ubuntu)
+      ("L" "Clone packaging repository (gbp)..." deb-packaging-clone-gbp)
      ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
      ("q" "Quit"             transient-quit-one)])
 

@@ -92,6 +92,7 @@ so a re-run refreshes the displayed time."
                           (format-time-string "%H:%M:%S"))
                   :buffer buf-name
                   :id (or run-id (plist-get existing :id))
+                  :artifact-dir (plist-get existing :artifact-dir)
                   :summary summary)))))
 
 (defun deb-packaging-commands--finish-run
@@ -111,6 +112,72 @@ SCOPE overrides package detection when supplied."
 (defun deb-packaging-commands--run-summary (key)
   "Return the summary plist for KEY's last run, or nil."
   (plist-get (deb-packaging-commands-run-record key) :summary))
+
+(defun deb-packaging-commands--package-context (&optional pkg-dir)
+  "Return current package context, including a completed gbp export dir."
+  (let* ((default-directory (or pkg-dir default-directory))
+         (ctx (deb-packaging-detect--scan-context)))
+    (when ctx
+      (setq ctx (plist-put ctx :target-arch
+                           (deb-packaging-config--effective-architecture ctx)))
+      (let* ((scope (deb-packaging-commands--run-scope nil ctx))
+             (record (or (deb-packaging-commands-run-record 'gbp-build scope)
+                         (deb-packaging-commands-run-record
+                          'gbp-export-orig scope)))
+             (artifact-dir (plist-get record :artifact-dir)))
+        (setq ctx (plist-put ctx :artifact-dir
+                             (or (and artifact-dir (file-directory-p artifact-dir)
+                                      artifact-dir)
+                                 (plist-get ctx :parent-dir))))
+        (when (and artifact-dir (file-directory-p artifact-dir))
+          (setq ctx
+                (plist-put ctx :artifacts
+                           (deb-packaging-detect--scan-artifacts
+                            (plist-get ctx :name) (plist-get ctx :version)
+                            artifact-dir (plist-get ctx :target-arch)))
+                ctx (plist-put ctx :orig-tarball
+                               (or (plist-get ctx :orig-tarball)
+                                   (deb-packaging-detect--orig-tarball
+                                    (plist-get ctx :name) (plist-get ctx :version)
+                                    artifact-dir)))))
+      ctx))))
+
+(defun deb-packaging-commands--gbp-export-dir (repo-dir default-dir)
+  "Return gbp's configured export directory from REPO-DIR or DEFAULT-DIR."
+  (let ((value
+         (with-temp-buffer
+           (let ((default-directory repo-dir))
+             (when (and (executable-find "gbp")
+                        (eq 0 (condition-case nil
+                                  (process-file "gbp" nil t nil "config"
+                                                "buildpackage.export-dir")
+                                (file-missing nil))))
+               (goto-char (point-min))
+               (when (re-search-forward
+                      "^buildpackage\\.export-dir=\\(.*\\)$" nil t)
+                 (string-trim (match-string 1))))))))
+    (if (and value (not (string-empty-p value)))
+        (expand-file-name value repo-dir)
+      default-dir)))
+
+(defun deb-packaging-commands--set-run-artifact-dir (key buffer artifact-dir)
+  "Attach ARTIFACT-DIR to the tracked run KEY in BUFFER."
+  (setq buffer (if (bufferp buffer) buffer (get-buffer buffer)))
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq deb-packaging-commands--context
+            (plist-put deb-packaging-commands--context :artifact-dir artifact-dir))
+      (when-let ((proc (get-buffer-process buffer)))
+        (process-put proc 'deb-packaging-context deb-packaging-commands--context))
+      (let* ((scope (deb-packaging-commands--run-scope
+                     nil deb-packaging-commands--context))
+             (scoped-key (deb-packaging-commands--scoped-run-key key scope))
+             (record (alist-get scoped-key deb-packaging-commands--run-history
+                                nil nil #'equal)))
+        (when record
+          (setf (alist-get scoped-key deb-packaging-commands--run-history
+                           nil nil #'equal)
+                (plist-put record :artifact-dir artifact-dir)))))))
 
 (defun deb-packaging-commands--notify-status-refresh ()
   "Refresh the status buffer if it is live."
@@ -343,7 +410,55 @@ Any processes still writing into the buffers are stopped."
     (deb-packaging-commands--run-command "source-build"
                                  (cons "dpkg-buildpackage" args)
                                  pkg-dir
-                                 'source-build)))
+                                  'source-build)))
+
+(defun deb-packaging-commands-gbp-build (&optional args)
+  "Run `gbp buildpackage' with ARGS from the gbp-build transient."
+  (interactive (list (transient-args 'deb-packaging-gbp-build-transient)))
+  (let* ((ctx (deb-packaging-commands--package-context
+               (deb-packaging-detect--find-package-dir nil t)))
+         (repo-dir (plist-get ctx :repo-dir))
+         (pkg-dir (plist-get ctx :pkg-dir)))
+    (unless ctx
+      (user-error "Not in a Debian package directory"))
+    (unless repo-dir
+      (user-error "gbp buildpackage requires a Git repository"))
+    (unless (executable-find "gbp")
+      (user-error "gbp not found in `exec-path'"))
+    (let* ((artifact-dir
+            (deb-packaging-commands--gbp-export-dir
+             repo-dir (plist-get ctx :parent-dir)))
+           (buffer (deb-packaging-commands--run-command
+                    "gbp-build" (append '("gbp" "buildpackage") args)
+                    repo-dir 'gbp-build pkg-dir)))
+      (deb-packaging-commands--set-run-artifact-dir
+       'gbp-build buffer artifact-dir)
+      buffer)))
+
+(defun deb-packaging-commands-gbp-export-orig ()
+  "Create upstream tarballs through gbp's configured pristine-tar setup."
+  (interactive)
+  (let* ((ctx (deb-packaging-commands--package-context
+               (deb-packaging-detect--find-package-dir nil t)))
+         (repo-dir (plist-get ctx :repo-dir))
+         (pkg-dir (plist-get ctx :pkg-dir)))
+    (unless ctx
+      (user-error "Not in a Debian package directory"))
+    (unless repo-dir
+      (user-error "gbp orig reconstruction requires a Git repository"))
+    (unless (executable-find "gbp")
+      (user-error "gbp not found in `exec-path'"))
+    (let* ((artifact-dir
+            (deb-packaging-commands--gbp-export-dir
+             repo-dir (plist-get ctx :parent-dir)))
+           (buffer (deb-packaging-commands--run-command
+                    "gbp-export-orig"
+                    '("gbp" "buildpackage" "--git-builder=/bin/true"
+                      "--git-no-hooks")
+                    repo-dir 'gbp-build pkg-dir)))
+      (deb-packaging-commands--set-run-artifact-dir
+       'gbp-build buffer artifact-dir)
+      buffer)))
 
 ;;;###autoload
 (defun deb-packaging-commands-export-orig ()
@@ -388,10 +503,11 @@ exactly.  Lets lintian and ubuntu-lint share one transient."
   "Run lintian on TARGETS (file paths) with ARGS, tracked as KEY.
 ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
 .debs, or a mix."
-  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
-    (unless pkg-dir
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (ctx (deb-packaging-commands--package-context pkg-dir)))
+    (unless ctx
       (user-error "Not in a Debian package directory"))
-    (let ((parent-dir (deb-packaging-detect--parent-dir pkg-dir))
+    (let ((parent-dir (plist-get ctx :artifact-dir))
           (lint-args (deb-packaging-commands--filter-args
                       args
                       deb-packaging-commands--lintian-arg-prefixes)))
@@ -405,10 +521,8 @@ ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
   "Run lintian on the source .dsc file with ARGS."
   (interactive (list (transient-args 'deb-packaging-lint-transient)))
   (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
-         (info (deb-packaging-detect--package-info pkg-dir))
-         (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
-         (artifacts (deb-packaging-detect--scan-artifacts
-                     (nth 0 info) (nth 1 info) parent-dir))
+         (ctx (deb-packaging-commands--package-context pkg-dir))
+         (artifacts (plist-get ctx :artifacts))
          (dsc (alist-get 'dsc artifacts)))
     (unless dsc
       (user-error "No .dsc file found; run a source build first"))
@@ -418,11 +532,8 @@ ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
   "Return the .deb files for the current package.
 Signal `user-error' if none exist."
   (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
-         (info (deb-packaging-detect--package-info pkg-dir))
-         (parent-dir (when pkg-dir (deb-packaging-detect--parent-dir pkg-dir)))
-         (artifacts (when info
-                      (deb-packaging-detect--scan-artifacts
-                       (nth 0 info) (nth 1 info) parent-dir)))
+         (ctx (deb-packaging-commands--package-context pkg-dir))
+         (artifacts (plist-get ctx :artifacts))
          (debs (alist-get 'debs artifacts)))
     (unless debs
       (user-error "No .deb files found; run a binary build first"))
@@ -451,14 +562,10 @@ MODE is `changes' (default), `source-dir', or `changelog'.  Default adds
     ("source-dir" (list "--source-dir" pkg-dir))
     ("changelog" (list "--changelog"
                        (expand-file-name "debian/changelog" pkg-dir)))
-    (_
-     (let* ((info (deb-packaging-detect--package-info pkg-dir))
-            (name (nth 0 info))
-            (version (nth 1 info))
-            (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
-            (artifacts (when info
-                         (deb-packaging-detect--scan-artifacts name version parent-dir)))
-            (changes (alist-get 'source-changes artifacts)))
+     (_
+      (let* ((ctx (deb-packaging-commands--package-context pkg-dir))
+             (artifacts (plist-get ctx :artifacts))
+             (changes (alist-get 'source-changes artifacts)))
        (if changes
            (list "--source-dir" pkg-dir "--changes-file" changes)
          (list "--source-dir" pkg-dir))))))
@@ -551,14 +658,14 @@ is returned unchanged."
   "Run sbuild with ARGS from the binary-build transient.
 The --dist chroot selection always comes from the changelog."
   (interactive (list (transient-args 'deb-packaging-binary-build-transient)))
-  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
-    (unless pkg-dir
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (ctx (deb-packaging-commands--package-context pkg-dir)))
+    (unless ctx
       (user-error "Not in a Debian package directory"))
-    (let* ((info (deb-packaging-detect--package-info pkg-dir))
-           (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
-           (artifacts (when info
-                        (deb-packaging-detect--scan-artifacts
-                         (nth 0 info) (nth 1 info) parent-dir)))
+    (let* ((info (list (plist-get ctx :name) (plist-get ctx :version)
+                       (plist-get ctx :distro)))
+           (parent-dir (plist-get ctx :artifact-dir))
+           (artifacts (plist-get ctx :artifacts))
            (dsc-file (alist-get 'dsc artifacts)))
       (unless dsc-file
         (user-error "No .dsc file found; run a source build first"))
@@ -673,20 +780,17 @@ Return nil if RUNNER has no registered hint."
   "Run autopkgtest with ARGS from the test transient.
 The test image's distro comes from the changelog."
   (interactive (list (transient-args 'deb-packaging-test-transient)))
-  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
-    (unless pkg-dir
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (ctx (deb-packaging-commands--package-context pkg-dir)))
+    (unless ctx
       (user-error "Not in a Debian package directory"))
-    (let* ((info (deb-packaging-detect--package-info pkg-dir))
-           (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
-           (artifacts (when info
-                        (deb-packaging-detect--scan-artifacts
-                         (nth 0 info) (nth 1 info) parent-dir)))
+    (let* ((artifacts (plist-get ctx :artifacts))
            (debs (alist-get 'debs artifacts)))
       (unless debs
         (user-error "No .deb files found; run a binary build first"))
       (let* ((runner (or (transient-arg-value "--runner=" args)
                          "lxd"))
-             (distro (deb-packaging-config--effective-distro))
+              (distro (plist-get ctx :distro))
              (image-info (deb-packaging-commands--test-image-info runner distro))
              (image (plist-get image-info :image))
              (image-exists (plist-get image-info :exists))
@@ -733,15 +837,12 @@ ARGS comes from `deb-packaging-upload-transient'.  Prompts when no PPA is
 set; the used PPA is saved per package+distro (changelog distro)."
   (interactive (list (transient-args 'deb-packaging-upload-transient)))
   (let* ((ppa (deb-packaging-commands--resolve-ppa args))
-         (distro (deb-packaging-config--effective-distro)))
-    (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
-           (info (deb-packaging-detect--package-info pkg-dir))
-           (name (nth 0 info))
-           (version (nth 1 info))
-           (parent-dir (when pkg-dir (deb-packaging-detect--parent-dir pkg-dir)))
-           (artifacts (when (and name version parent-dir)
-                        (deb-packaging-detect--scan-artifacts
-                         name version parent-dir)))
+         (pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (ctx (deb-packaging-commands--package-context pkg-dir))
+         (distro (plist-get ctx :distro)))
+    (let* ((name (plist-get ctx :name))
+           (parent-dir (plist-get ctx :artifact-dir))
+           (artifacts (plist-get ctx :artifacts))
            (changes (alist-get 'source-changes artifacts)))
       (unless changes
         (user-error "No source .changes file found; run a source build first"))

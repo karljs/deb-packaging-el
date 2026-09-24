@@ -359,6 +359,7 @@ PPA being unset must not gate the phase."
             (let ((text (buffer-string)))
               (dolist (label '("Build" "Verify" "Publish" "Workspace"
                                "Local autopkgtest" "PPA autopkgtest"
+                               "gbp buildpackage"
                                "Upload submitted"))
                 (should (string-match-p (regexp-quote label) text))))))))))
 
@@ -397,7 +398,7 @@ PPA being unset must not gate the phase."
 
 (ert-deftest deb-packaging-test-status/collect-context-adds-default-ppa ()
   (let (loaded)
-    (cl-letf (((symbol-function 'deb-packaging-detect--scan-context)
+    (cl-letf (((symbol-function 'deb-packaging-commands--package-context)
                (lambda () '(:name "foo" :distro "noble")))
               ((symbol-function 'deb-packaging-ppa-load)
                (lambda (name distro)
