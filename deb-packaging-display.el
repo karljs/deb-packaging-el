@@ -19,16 +19,40 @@
 ;;                         same category, else the selected window
 ;;                         (quit-window restores the previous buffer)
 ;;
-;; The policy is authoritative for package buffers: it is applied via
-;; `display-buffer-overriding-action', which outranks user
-;; `display-buffer-alist' rules (e.g. comint side windows).  The
-;; override is bound dynamically per call, so user rules still govern
-;; all other buffers.  No side windows are used anywhere.
+;; The policy overrides user rules by default; Customize can disable the
+;; override or change actions by category. No side windows are used.
 
 ;;; Code:
 
 (require 'seq)
 (require 'subr-x)
+
+(defcustom deb-packaging-display-category-actions
+  '((status display-buffer-same-window display-buffer-pop-up-window)
+    (list display-buffer-same-window display-buffer-pop-up-window)
+    (report display-buffer-same-window display-buffer-pop-up-window)
+    (output display-buffer-reuse-window
+            deb-packaging-display--reuse-category-window
+            display-buffer-same-window display-buffer-pop-up-window)
+    (shell display-buffer-reuse-window
+           deb-packaging-display--reuse-category-window
+           display-buffer-same-window display-buffer-pop-up-window))
+  "Display action functions for each deb-packaging buffer category."
+  :type '(alist :key-type (choice (const status) (const list) (const report)
+                                  (const output) (const shell))
+                :value-type (repeat function))
+  :group 'deb-packaging)
+
+(defcustom deb-packaging-display-override-user-rules t
+  "Whether package buffer rules take precedence over `display-buffer-alist'."
+  :type 'boolean
+  :group 'deb-packaging)
+
+(defcustom deb-packaging-display-transient-action
+  '(deb-packaging-display--transient-window (inhibit-same-window . t))
+  "Display action for package transients."
+  :type 'sexp
+  :group 'deb-packaging)
 
 (defvar-local deb-packaging-display-category nil
   "Display category of this buffer, or nil.
@@ -36,7 +60,7 @@ Set on output and shell buffers at creation so a visible window already
 showing the same category can be reused for new buffers of that
 category.")
 
-(defun deb-packaging-display--reuse-category-window (buffer alist)
+(defun deb-packaging-display--reuse-category-window (buffer _alist)
   "Display BUFFER in a window showing a buffer of the same display category.
 Skips dedicated and side windows.  ALIST is the display action alist.
 Return the window used, or nil when no category window is visible."
@@ -52,7 +76,8 @@ Return the window used, or nil when no category window is visible."
                                    (window-buffer w))
                                   category)))
                        (window-list nil 'nomini))))
-    (window--display-buffer buffer window 'reuse alist)))
+     (set-window-buffer window buffer)
+     window))
 
 (defun deb-packaging-display--transient-window (buffer alist)
   "Display the transient menu BUFFER without adding a split.
@@ -68,8 +93,10 @@ selected one."
                                   'deb-packaging-display-category
                                   (window-buffer w))
                                  '(output shell))))
-                    (window-list nil 'nomini))))
-      (window--display-buffer buffer window 'reuse alist)
+                     (window-list nil 'nomini))))
+       (progn
+         (set-window-buffer window buffer)
+         window)
     (when-let ((window (display-buffer-below-selected buffer alist)))
       (set-window-dedicated-p window t)
       window)))
@@ -77,25 +104,20 @@ selected one."
 (defun deb-packaging-display--action (category)
   "Return the `display-buffer' action for CATEGORY.
 CATEGORY is one of status, list, report, output, or shell."
-  (pcase category
-    ((or 'status 'list 'report)
-     '((display-buffer-same-window
-        display-buffer-pop-up-window)))
-    ((or 'output 'shell)
-     '((display-buffer-reuse-window
-        deb-packaging-display--reuse-category-window
-        display-buffer-same-window
-        display-buffer-pop-up-window)))
-    (_ (error "Unknown deb-packaging display category: %S" category))))
+  (if-let ((functions (alist-get category deb-packaging-display-category-actions)))
+      (list functions)
+    (error "Unknown deb-packaging display category: %S" category)))
 
 (defun deb-packaging-display-buffer (buffer category)
   "Display BUFFER according to CATEGORY and select its window.
-Binds `display-buffer-overriding-action' so the package policy wins
-over user `display-buffer-alist' rules for package buffers.
+Uses the package policy unless `deb-packaging-display-override-user-rules'
+is nil.
 CATEGORY is one of status, list, report, output, or shell."
   (select-window
-   (let ((display-buffer-overriding-action
-          (deb-packaging-display--action category)))
+   (if deb-packaging-display-override-user-rules
+       (let ((display-buffer-overriding-action
+              (deb-packaging-display--action category)))
+         (display-buffer buffer))
      (display-buffer buffer))))
 
 (provide 'deb-packaging-display)

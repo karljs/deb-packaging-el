@@ -725,22 +725,41 @@ Remove %s from the binary-build -e menu, or publish the series."
                  (list dsc-file))
          parent-dir
          'sbuild
-         pkg-dir)))))
+          pkg-dir)))))
+
+(defun deb-packaging-commands-build-binary ()
+  "Build binary packages from the current working tree with dpkg-buildpackage -b."
+  (interactive)
+  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
+         (context (deb-packaging-commands--package-context pkg-dir)))
+    (unless context
+      (user-error "Not in a Debian package directory"))
+    (unless (equal (plist-get context :target-arch)
+                   (plist-get context :host-arch))
+      (user-error "Local binary builds use host architecture %s; use sbuild for %s"
+                  (plist-get context :host-arch)
+                  (plist-get context :target-arch)))
+    (deb-packaging-commands--run-command
+     "dpkg-buildpackage-binary"
+     '("dpkg-buildpackage" "-b")
+     pkg-dir 'dpkg-buildpackage-binary pkg-dir)))
 
 ;;; autopkgtest
 
-(defvar deb-packaging-commands-test-runners
-  '(("lxd"  . "autopkgtest/ubuntu/%s/amd64")
-    ("qemu" . "/var/lib/adt-images/autopkgtest-%s-amd64.img"))
-  "Alist of runner name to image path template (%s = distro).
-Also the source of --runner completion.  For Debian, add entries like
-(\"lxd\" . \"autopkgtest/debian/%s/amd64\").")
+(defcustom deb-packaging-commands-test-runners
+  '(("lxd"  . "autopkgtest/ubuntu/%s/%s")
+    ("qemu" . "autopkgtest-%s-%s.img"))
+  "Alist of runner name to image path template (%s = distro, %s = architecture).
+QEMU image names are relative to `deb-packaging-config-qemu-dir'."
+  :type '(alist :key-type string :value-type string)
+  :group 'deb-packaging)
 
-(defvar deb-packaging-commands-test-build-hints
-  '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s")
-    ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s"))
-  "Alist of runner name to image-build command template (%s = distro).
-Shown when a test image is missing.")
+(defcustom deb-packaging-commands-test-build-hints
+  '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s/%s")
+    ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s"))
+  "Alist of runner name to build command template (%s = distro, %s = architecture)."
+  :type '(alist :key-type string :value-type string)
+  :group 'deb-packaging)
 
 (defun deb-packaging-commands--runner-choices ()
   "Return the configured autopkgtest runner names from
@@ -753,14 +772,21 @@ Nil when lxc is not installed (the image is then not available either)."
   (ignore-errors
     (zerop (call-process "lxc" nil nil nil "image" "info" image))))
 
-(defun deb-packaging-commands--test-image-info (&optional runner distro)
+(defun deb-packaging-commands--test-image-info (&optional runner distro architecture)
   "Return a plist describing the test image for RUNNER and DISTRO.
-RUNNER defaults to \"lxd\", DISTRO to `deb-packaging-config--effective-distro'.
+RUNNER defaults to \"lxd\", DISTRO and ARCHITECTURE to the active package.
 Keys: :runner, :image, :exists."
   (let* ((runner (or runner "lxd"))
          (distro (or distro (deb-packaging-config--effective-distro)))
+         (architecture (or architecture
+                            (deb-packaging-config--effective-architecture)))
          (template (cdr (assoc runner deb-packaging-commands-test-runners)))
-         (image (when template (format template distro)))
+         (image-name (when template (format template distro architecture)))
+         (image (when image-name
+                  (if (equal runner "qemu")
+                      (expand-file-name image-name
+                                        deb-packaging-config-qemu-dir)
+                    image-name)))
          (exists (when image
                    (cond
                     ((equal runner "lxd")
@@ -770,11 +796,14 @@ Keys: :runner, :image, :exists."
                     (t nil)))))
     (list :runner runner :image image :exists exists)))
 
-(defun deb-packaging-commands--test-image-build-hint (runner distro)
-  "Return the command string to build a missing test image for RUNNER, DISTRO.
+(defun deb-packaging-commands--test-image-build-hint
+    (runner distro &optional architecture)
+  "Return the command to build a missing test image for RUNNER/DISTRO/ARCHITECTURE.
 Return nil if RUNNER has no registered hint."
   (when-let ((template (cdr (assoc runner deb-packaging-commands-test-build-hints))))
-    (format template distro)))
+    (format template distro
+            (or architecture
+                (deb-packaging-config--effective-architecture)))))
 
 (defun deb-packaging-commands-autopkgtest (&optional args)
   "Run autopkgtest with ARGS from the test transient.
@@ -791,7 +820,9 @@ The test image's distro comes from the changelog."
       (let* ((runner (or (transient-arg-value "--runner=" args)
                          "lxd"))
               (distro (plist-get ctx :distro))
-             (image-info (deb-packaging-commands--test-image-info runner distro))
+              (architecture (plist-get ctx :target-arch))
+              (image-info (deb-packaging-commands--test-image-info
+                           runner distro architecture))
              (image (plist-get image-info :image))
              (image-exists (plist-get image-info :exists))
              (passthrough (cl-remove-if
@@ -803,7 +834,8 @@ The test image's distro comes from the changelog."
           (user-error "%s image '%s' not found.\nBuild it with:\n  %s"
                       (capitalize runner)
                       image
-                      (or (deb-packaging-commands--test-image-build-hint runner distro)
+                       (or (deb-packaging-commands--test-image-build-hint
+                            runner distro architecture)
                           "(unknown; add an entry to deb-packaging-commands-test-build-hints)")))
         (deb-packaging-commands--run-command
          "autopkgtest"

@@ -151,6 +151,16 @@ The parent is the longest chroot name that is a prefix of SESSION."
                         'deb-packaging-infra-chroot)))
         (list name))))
 
+(defun deb-packaging-infra--read-architecture ()
+  "Prompt for a Debian architecture, defaulting to the active target."
+  (let* ((default (deb-packaging-config--effective-architecture))
+         (architecture
+          (deb-packaging-transients--read-architecture
+           (format "Architecture (default %s): " default) default nil)))
+    (unless (deb-packaging-config--architecture-valid-p architecture)
+      (user-error "Invalid Debian architecture: %s" architecture))
+    architecture))
+
 (defun deb-packaging-infra-create-schroot ()
   "Create a schroot with mk-sbuild.
 mk-sbuild self-sudos; the comint buffer's pty carries its prompt."
@@ -159,9 +169,7 @@ mk-sbuild self-sudos; the comint buffer's pty carries its prompt."
                   (format "Distro (default %s): "
                           (deb-packaging-config--effective-distro))
                   nil nil (deb-packaging-config--effective-distro)))
-         (arch (completing-read "Arch (default amd64): "
-                                '("amd64" "i386" "arm64" "armhf")
-                                nil t nil nil "amd64")))
+         (arch (deb-packaging-infra--read-architecture)))
     (when (yes-or-no-p (format "Run: mk-sbuild --arch=%s %s? " arch distro))
       (deb-packaging-infra--run-privileged
        "mk-sbuild"
@@ -452,8 +460,7 @@ Each plist has :name, :type, :status, and type-specific keys."
                   (format "Distro (default %s): "
                           (deb-packaging-config--effective-distro))
                   nil nil (deb-packaging-config--effective-distro)))
-         (arch (completing-read "Arch (default amd64): "
-                                '("amd64" "arm64") nil t nil nil "amd64"))
+         (arch (deb-packaging-infra--read-architecture))
          (cmd (format "autopkgtest-build-lxd ubuntu-daily:%s/%s" distro arch)))
     (when (yes-or-no-p (format "Run: %s? " cmd))
       (deb-packaging-commands--compile cmd))))
@@ -632,8 +639,7 @@ Image rows get no binding rather than a pretend action.")
 
 ;;; QEMU Management
 
-(defconst deb-packaging-infra-qemu-dir "/var/lib/adt-images/"
-  "Directory where QEMU autopkgtest images are stored.")
+(defvaralias 'deb-packaging-infra-qemu-dir 'deb-packaging-config-qemu-dir)
 
 (defun deb-packaging-infra--list-qemu-images ()
   "Return list of QEMU image plists.
@@ -658,8 +664,7 @@ buffer) is used only when it is not user-writable."
                   (format "Distro (default %s): "
                           (deb-packaging-config--effective-distro))
                   nil nil (deb-packaging-config--effective-distro)))
-         (arch (completing-read "Arch (default amd64): "
-                                '("amd64" "arm64" "i386") nil t nil nil "amd64"))
+         (arch (deb-packaging-infra--read-architecture))
          (sudo-p (not (file-writable-p deb-packaging-infra-qemu-dir))))
     (when (yes-or-no-p
            (format "Run: %sautopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s? "
@@ -797,6 +802,8 @@ Return PPA address strings in order."
 Cons of (RECORDS . FETCHED-AT-FLOAT-TIME), or nil.")
 
 (defvar deb-packaging-infra--ppa-cache-ttl 300
+  "Seconds before the PPA cache is stale and refreshed in the background.")
+
 (defun deb-packaging-infra--parse-ppa-records (output)
   "Parse tagged ppa-list OUTPUT into records that keep config provenance."
   (let ((marker "__DEB_PACKAGING_PPA_CONFIG__=")
@@ -864,8 +871,6 @@ Cons of (RECORDS . FETCHED-AT-FLOAT-TIME), or nil.")
                           (deb-packaging-ppa-validate choice)))))
         (deb-packaging-ppa-validate (plist-get record :address))
         record)))
-
-  "Seconds before the PPA cache is stale and refreshed in the background.")
 
 (defvar deb-packaging-infra--ppa-warm-proc nil
   "In-flight background `ppa list' refresh, or nil.")
@@ -945,11 +950,6 @@ print."
     (deb-packaging-infra--warm-ppa-cache-async))
   (car deb-packaging-infra--ppa-cache))
 
-(defun deb-packaging-infra--ppa-owner (ppa)
-  "Return the owner part of PPA string PPA."
-  (when (and (deb-packaging-ppa-valid-p ppa)
-             (string-match "\\`ppa:\\([^/]+\\)" ppa))
-    (match-string 1 ppa)))
 (defun deb-packaging-infra--list-ppas ()
   "Return PPA addresses for the user and configured teams, without blocking."
   (cl-remove-duplicates
@@ -957,6 +957,11 @@ print."
            (deb-packaging-infra--list-ppa-records))
    :test #'equal :from-end t))
 
+(defun deb-packaging-infra--ppa-owner (ppa)
+  "Return the owner part of PPA string PPA."
+  (when (and (deb-packaging-ppa-valid-p ppa)
+             (string-match "\\`ppa:\\([^/]+\\)" ppa))
+    (match-string 1 ppa)))
 
 (defun deb-packaging-infra--ppa-name (ppa)
   "Return the name part of PPA string PPA."
@@ -974,7 +979,9 @@ falls back to free text rather than erroring."
    (or (and (derived-mode-p 'deb-packaging-infra-ppas-mode)
             (plist-get (tabulated-list-get-id) :address))
        (let ((ppas (if (derived-mode-p 'deb-packaging-infra-ppas-mode)
-                       (mapcar #'car tabulated-list-entries)
+                       (mapcar (lambda (entry)
+                                 (plist-get (car entry) :address))
+                               tabulated-list-entries)
                      (deb-packaging-infra--list-ppas))))
          (if ppas
              (completing-read prompt ppas nil nil)
@@ -1173,20 +1180,13 @@ the text and send RET to bogus locations."
                      (insert-buffer-substring out-buf))
                    (goto-char (point-min))
                    (special-mode)
+                   (goto-address-mode)
                    (setq deb-packaging-display-category 'report)
                    (deb-packaging-display-buffer buf 'report))))
            (when (buffer-live-p out-buf)
              (kill-buffer out-buf))))))
     (deb-packaging-display-buffer buf 'report)))
 
-;;; PPA list buffer
-
-(defun deb-packaging-infra-visit-ppa ()
-  "Show the PPA at point (`ppa show')."
-  (interactive)
-  (if-let ((ppa (tabulated-list-get-id)))
-      (deb-packaging-infra-show-ppa ppa)
-   (user-error "No PPA on this line")))
 (defun deb-packaging-infra-open-ppa (&optional ppa)
   "Open PPA at point or PPA in the Launchpad browser."
   (interactive
@@ -1198,12 +1198,21 @@ the text and send RET to bogus locations."
              (deb-packaging-infra--ppa-owner address)
              (deb-packaging-infra--ppa-name address)))))
 
+;;; PPA list buffer
+
+(defun deb-packaging-infra-visit-ppa ()
+  "Show the PPA at point (`ppa show')."
+  (interactive)
+  (if-let ((ppa (tabulated-list-get-id)))
+      (deb-packaging-infra-show-ppa ppa)
+   (user-error "No PPA on this line")))
 
 (defvar-keymap deb-packaging-infra-ppas-mode-map
   :doc "Keymap for the PPAs list buffer."
   :parent tabulated-list-mode-map
   "RET" #'deb-packaging-infra-visit-ppa
   "s" #'deb-packaging-infra-show-ppa
+  "w" #'deb-packaging-infra-open-ppa
   "d" #'deb-packaging-infra-delete-ppa
   "e" #'deb-packaging-infra-set-ppa-config
   "c" #'deb-packaging-infra-create-ppa
@@ -1212,11 +1221,11 @@ the text and send RET to bogus locations."
   "q" #'quit-window)
 
 (define-derived-mode deb-packaging-infra-ppas-mode tabulated-list-mode "Infra-PPAs"
-  "w" #'deb-packaging-infra-open-ppa
   "Major mode for listing Launchpad PPAs."
   (setq tabulated-list-format
         [("Owner" 25 t)
-         ("Name" 40 t)])
+         ("Name" 40 t)
+         ("Context" 24 t)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key nil))
 
@@ -1421,15 +1430,6 @@ processes (refresh cancels them) only clean up."
    ("g" "Refresh" deb-packaging-infra-refresh-qemu-images)
    ("q" "Quit"    transient-quit-one)])
 
-(transient-define-prefix deb-packaging-infra-ppas-dispatch ()
-  "Manage Launchpad PPAs in the PPAs buffer."
-  :environment #'deb-packaging-transients--env
-  ["PPAs"
-   ("s" "Show PPA"      deb-packaging-infra-show-ppa)
-   ("e" "Configure PPA" deb-packaging-infra-set-ppa-config)
-   ("d" "Delete PPA"    deb-packaging-infra-delete-ppa)
-   ("c" "Create PPA"    deb-packaging-infra-create-ppa)]
-  ["Navigation"
 (defun deb-packaging-infra--ppa-config-header ()
   "Header for the active PPA config transient."
   (let ((record (transient-scope 'deb-packaging-infra-ppa-config-transient)))
@@ -1453,13 +1453,22 @@ processes (refresh cancels them) only clean up."
    ("s" "Apply settings" deb-packaging-infra--apply-ppa-config)
    ("q" "Quit" transient-quit-one)])
 
+(transient-define-prefix deb-packaging-infra-ppas-dispatch ()
+  "Manage Launchpad PPAs in the PPAs buffer."
+  :environment #'deb-packaging-transients--env
+  ["PPAs"
+   ("s" "Show PPA"      deb-packaging-infra-show-ppa)
+   ("b" "Package builds..." deb-packaging-infra-show-ppa-package)
+   ("w" "Open Launchpad" deb-packaging-infra-open-ppa)
+   ("e" "Configure PPA" deb-packaging-infra-set-ppa-config)
+   ("d" "Delete PPA"    deb-packaging-infra-delete-ppa)
+   ("c" "Create PPA"    deb-packaging-infra-create-ppa)]
+  ["Navigation"
    ("g" "Refresh" deb-packaging-infra-refresh-ppas)
    ("q" "Quit"    transient-quit-one)])
 
 (transient-define-prefix deb-packaging-infra-dispatch ()
   "Manage build and test infrastructure."
-   ("b" "Package builds..." deb-packaging-infra-show-ppa-package)
-   ("w" "Open Launchpad" deb-packaging-infra-open-ppa)
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-infra--header]
   ["Infrastructure"

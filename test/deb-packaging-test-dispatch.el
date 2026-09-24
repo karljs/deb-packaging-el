@@ -14,6 +14,25 @@
 (require 'deb-packaging-test)
 (require 'deb-packaging)
 
+(ert-deftest deb-packaging-test-dispatch/doctor-reports-tools-and-opens-customize ()
+  (let (displayed customized)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (tool) (and (equal tool "ppa") "/usr/bin/ppa")))
+              ((symbol-function 'deb-packaging-display-buffer)
+               (lambda (buf _category) (setq displayed buf)))
+              ((symbol-function 'customize-group)
+               (lambda (group) (setq customized group)))
+              ((symbol-function 'message) #'ignore))
+      (deb-packaging-doctor))
+    (unwind-protect
+        (progn
+          (should (eq customized 'deb-packaging))
+          (with-current-buffer displayed
+            (should (string-match-p "ppa +available" (buffer-string)))
+            (should (string-match-p "sbuild +missing" (buffer-string)))))
+      (when (buffer-live-p displayed)
+        (kill-buffer displayed)))))
+
 (ert-deftest deb-packaging-test-dispatch/inside-package-opens-transient ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3")

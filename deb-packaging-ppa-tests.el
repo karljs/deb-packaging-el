@@ -34,6 +34,7 @@
 ;; in the mode map and transients.
 (declare-function deb-packaging-test-transient "deb-packaging-transients")
 (declare-function deb-packaging-transients--env "deb-packaging-transients")
+(declare-function deb-packaging-infra--ppa-record-for-address "deb-packaging-infra")
 
 ;;; Parsing
 
@@ -159,9 +160,9 @@ Return a plist with :triggers, :results, :running, :waiting."
 (defvar-local deb-packaging-ppa-tests--distro nil
   "Release filter of the current report buffer.")
 
-(defun deb-packaging-ppa-tests--buffer-name (ppa name distro)
 (defvar-local deb-packaging-ppa-tests--config-file nil)
 
+(defun deb-packaging-ppa-tests--buffer-name (ppa name distro)
   "Return the report buffer name for PPA/NAME/DISTRO.
 All three parameters key the buffer: a fetch is parameterized by them,
 so keying only on the PPA would clobber reports across packages."
@@ -194,9 +195,6 @@ RET opens the result's log, or triggers a basic test on a trigger row;
   ["Navigation"
    ("q" "Quit" transient-quit-one)])
 
-(defconst deb-packaging-ppa-tests--status-icons
-  '((pass . "✅") (fail . "❌") (bad . "⛔")))
-
 (defun deb-packaging-ppa-tests--subtest-face (state)
   "Return the status face for a subtest STATE string.
 PASS green, SKIP dim (not run, not passed), FLAKY yellow, failures red."
@@ -223,9 +221,16 @@ PASS green, SKIP dim (not run, not passed), FLAKY yellow, failures red."
                 (deb-packaging-ppa-tests-result nil (eq status 'pass))
               (magit-insert-heading
                 (concat "  "
-                        (cdr (assq status
-                                   deb-packaging-ppa-tests--status-icons))
-                        " "
+                        (propertize
+                         (pcase status
+                           ('pass "passed")
+                           ('fail "failed")
+                           ('bad "bad"))
+                         'font-lock-face
+                         (if (eq status 'pass)
+                             'deb-packaging-status-done
+                           'deb-packaging-status-failed))
+                        "  "
                         (propertize
                          (format "%s on %s for %s @ %s"
                                  (plist-get r :source)

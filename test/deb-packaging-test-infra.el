@@ -59,17 +59,21 @@
                            "sudo rm -rf /srv/schroot/s && sudo rm /etc/schroot/s"))))))
 
 (ert-deftest deb-packaging-test-infra/create-schroot-runs-mk-sbuild-on-confirm ()
-  "mk-sbuild self-sudos; no sudo prefix and no sudo preflight."
+  "mk-sbuild self-sudos; only the active target architecture is probed."
   (let (args (probed nil))
     (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "noble"))
               ((symbol-function 'completing-read) (lambda (&rest _) "amd64"))
               ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
               ((symbol-function 'call-process)
-               (lambda (&rest _) (setq probed t) 0))
+               (lambda (program &rest _)
+                 (push program probed)
+                 (when (equal program "dpkg")
+                   (insert "amd64"))
+                 0))
               ((symbol-function 'deb-packaging-commands--run-command)
                (lambda (_name a &rest _) (setq args a) nil)))
       (deb-packaging-infra-create-schroot)
-      (should-not probed)
+       (should (equal probed '("dpkg")))
       (should (equal args '("mk-sbuild" "--arch=amd64" "noble"))))))
 
 ;;; ppa show rendering
@@ -113,10 +117,6 @@ Return the report buffer once its sentinel has fired."
             (should (string-match-p "failed" (buffer-string)))))
       (kill-buffer buf))))
 
-;;; Empty-list prompts
-
-(ert-deftest deb-packaging-test-infra/update-schroots-no-schroots-errors ()
-  (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
 (ert-deftest deb-packaging-test-infra/show-ppa-uses-team-config ()
   (let ((real-make-process (symbol-function 'make-process))
         (proc nil)
@@ -167,6 +167,10 @@ Return the report buffer once its sentinel has fired."
                              "--architectures" "arm64" "ppa:team/foo"))))
         (kill-buffer "*deb-ppa: ppa:team/foo foo noble/arm64*")))))
 
+;;; Empty-list prompts
+
+(ert-deftest deb-packaging-test-infra/update-schroots-no-schroots-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
              (lambda () nil))
             ((symbol-function 'deb-packaging-infra--chroot-targets)
              (lambda () nil))
@@ -352,6 +356,17 @@ Return the report buffer once its sentinel has fired."
 
 ;;; Real defaults in create prompts
 
+(ert-deftest deb-packaging-test-infra/read-architecture-accepts-new-debian-arches ()
+  (let (require-match)
+    (cl-letf (((symbol-function 'deb-packaging-config--effective-architecture)
+               (lambda (&optional _) "amd64"))
+              ((symbol-function 'completing-read)
+               (lambda (_prompt _choices _predicate must-match &rest _)
+                 (setq require-match must-match)
+                 "loong64")))
+      (should (equal (deb-packaging-infra--read-architecture) "loong64"))
+      (should-not require-match))))
+
 (defun deb-packaging-test-infra--capture-prompts (fn)
   "Call FN with prompt functions mocked; return (read-string-args cr-args).
 yes-or-no-p declines so nothing runs."
@@ -359,7 +374,7 @@ yes-or-no-p declines so nothing runs."
     (cl-letf (((symbol-function 'read-string)
                (lambda (&rest args) (setq rs-args args) (nth 3 args)))
               ((symbol-function 'completing-read)
-               (lambda (&rest args) (setq cr-args args) (nth 6 args)))
+               (lambda (&rest args) (setq cr-args args) (nth 4 args)))
               ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
       (funcall fn)
       (list rs-args cr-args))))
@@ -371,8 +386,8 @@ yes-or-no-p declines so nothing runs."
          (cr (cadr res)))
     (should (null (nth 1 rs)))
     (should (equal (nth 3 rs) (deb-packaging-config--effective-distro)))
-    (should (null (nth 4 cr)))
-    (should (equal (nth 6 cr) "amd64"))))
+    (should (equal (nth 4 cr)
+                   (deb-packaging-config--effective-architecture)))))
 
 (ert-deftest deb-packaging-test-infra/create-lxd-passes-real-defaults ()
   (let* ((res (deb-packaging-test-infra--capture-prompts
@@ -381,8 +396,8 @@ yes-or-no-p declines so nothing runs."
          (cr (cadr res)))
     (should (null (nth 1 rs)))
     (should (equal (nth 3 rs) (deb-packaging-config--effective-distro)))
-    (should (null (nth 4 cr)))
-    (should (equal (nth 6 cr) "amd64"))))
+    (should (equal (nth 4 cr)
+                   (deb-packaging-config--effective-architecture)))))
 
 (ert-deftest deb-packaging-test-infra/create-qemu-passes-real-defaults ()
   (let* ((res (deb-packaging-test-infra--capture-prompts
@@ -391,8 +406,8 @@ yes-or-no-p declines so nothing runs."
          (cr (cadr res)))
     (should (null (nth 1 rs)))
     (should (equal (nth 3 rs) (deb-packaging-config--effective-distro)))
-    (should (null (nth 4 cr)))
-    (should (equal (nth 6 cr) "amd64"))))
+    (should (equal (nth 4 cr)
+                   (deb-packaging-config--effective-architecture)))))
 
 ;;; Refresh after delete (via the run-privileged sentinel)
 
@@ -514,7 +529,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
               (insert "Some header\n  ppa:me/new\n"))
             (deb-packaging-test-run--wait proc)
             (funcall (deb-packaging-infra--ppa-list-sentinel
-                      (current-buffer) temp-buf)
+                      (current-buffer) temp-buf nil "/tmp/team-config.yaml")
                      proc "finished\n")
             (should (equal
                      (plist-get
@@ -647,6 +662,16 @@ in flight)."
 
 ;;; PPA candidate cache: non-blocking list, background warm
 
+(ert-deftest deb-packaging-test-infra/ppa-record-parser-keeps-team-provenance ()
+  (should (equal (deb-packaging-infra--parse-ppa-records
+                  (concat "__DEB_PACKAGING_PPA_CONFIG__=\nppa:me/one\n"
+                          "__DEB_PACKAGING_PPA_CONFIG__=/tmp/team.yml\n"
+                          "ppa:team/two\n"))
+                 '((:address "ppa:me/one" :owner "me" :name "one"
+                    :config-file nil)
+                   (:address "ppa:team/two" :owner "team" :name "two"
+                     :config-file "/tmp/team.yml")))))
+
 (ert-deftest deb-packaging-test-infra/list-ppas-fresh-cache-no-warm ()
   (let ((deb-packaging-infra--ppa-cache
          (cons '((:address "ppa:me/x" :owner "me" :name "x"))
@@ -665,16 +690,6 @@ while the background refresh warms the next prompt."
         (deb-packaging-infra--ppa-warm-proc nil)
         (warmed 0))
     (cl-letf (((symbol-function 'deb-packaging-infra--warm-ppa-cache-async)
-(ert-deftest deb-packaging-test-infra/ppa-record-parser-keeps-team-provenance ()
-  (should (equal (deb-packaging-infra--parse-ppa-records
-                  (concat "__DEB_PACKAGING_PPA_CONFIG__=\nppa:me/one\n"
-                          "__DEB_PACKAGING_PPA_CONFIG__=/tmp/team.yml\n"
-                          "ppa:team/two\n"))
-                 '((:address "ppa:me/one" :owner "me" :name "one"
-                    :config-file nil)
-                   (:address "ppa:team/two" :owner "team" :name "two"
-                     :config-file "/tmp/team.yml")))))
-
                (lambda () (cl-incf warmed))))
       (should (equal (deb-packaging-infra--list-ppas) '("ppa:me/old")))
       (should (= warmed 1)))))
@@ -804,21 +819,6 @@ OUTPUT is the string the mock `ppa list' prints.  Returns the process."
 
 ;;; Empty PPA name
 
-(ert-deftest deb-packaging-test-infra/create-ppa-empty-name-errors ()
-  (cl-letf (((symbol-function 'read-string) (lambda (&rest _) ""))
-            ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-    (should-error (deb-packaging-infra-create-ppa) :type 'user-error)))
-
-(ert-deftest deb-packaging-test-infra/delete-ppa-empty-name-errors ()
-  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa-record)
-             (lambda (&rest _) ""))
-            ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-    (should-error (call-interactively #'deb-packaging-infra-delete-ppa)
-                  :type 'user-error)))
-
-(ert-deftest deb-packaging-test-infra/show-ppa-empty-name-errors ()
-  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa-record)
-             (lambda (&rest _) "")))
 (ert-deftest deb-packaging-test-infra/set-ppa-config-sets-architectures-in-team-context ()
   (let (command)
     (cl-letf (((symbol-function 'transient-scope)
@@ -847,6 +847,21 @@ OUTPUT is the string the mock `ppa list' prints.  Returns the process."
     (should (eq prefix 'deb-packaging-infra-ppa-config-transient))
     (should (equal (plist-get params :scope) record))))
 
+(ert-deftest deb-packaging-test-infra/create-ppa-empty-name-errors ()
+  (cl-letf (((symbol-function 'read-string) (lambda (&rest _) ""))
+            ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+    (should-error (deb-packaging-infra-create-ppa) :type 'user-error)))
+
+(ert-deftest deb-packaging-test-infra/delete-ppa-empty-name-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa-record)
+             (lambda (&rest _) ""))
+            ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+    (should-error (call-interactively #'deb-packaging-infra-delete-ppa)
+                  :type 'user-error)))
+
+(ert-deftest deb-packaging-test-infra/show-ppa-empty-name-errors ()
+  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa-record)
+             (lambda (&rest _) "")))
     (should-error (call-interactively #'deb-packaging-infra-show-ppa)
                   :type 'user-error)))
 

@@ -357,18 +357,19 @@ PPA being unset must not gate the phase."
             (setq default-directory pkg-dir)
             (deb-packaging-status--render)
             (let ((text (buffer-string)))
-              (dolist (label '("Build" "Verify" "Publish" "Workspace"
+             (dolist (label '("Build" "Verify" "Publish" "Workspace"
                                "Local autopkgtest" "PPA autopkgtest"
-                               "gbp buildpackage"
-                               "Upload submitted"))
+                               "Local binary build" "PPA builds"
+                              "gbp buildpackage"
+                              "Upload submitted"))
                 (should (string-match-p (regexp-quote label) text))))))))))
 
-(ert-deftest deb-packaging-test-status/open-output-uses-nearest-run-section ()
 (ert-deftest deb-packaging-test-status/ppa-build-row-opens-package-view ()
   (should (eq (alist-get 'deb-packaging-ppa-builds
                          deb-packaging-status--section-actions)
               'deb-packaging-infra-show-ppa-package)))
 
+(ert-deftest deb-packaging-test-status/open-output-uses-nearest-run-section ()
   (deb-packaging-test--with-package-tree
       '(:name "foo" :version "1.2-3" :distro "noble")
     (let ((deb-packaging-commands--run-history nil)
@@ -391,9 +392,10 @@ PPA being unset must not gate the phase."
                 (with-temp-buffer
                   (deb-packaging-status-mode)
                   (setq default-directory pkg-dir)
-                  (deb-packaging-status--render)
-                  (goto-char (point-min))
-                  (search-forward "Binary build")
+                   (deb-packaging-status--render)
+                   (goto-char (point-min))
+                   (let ((case-fold-search nil))
+                     (search-forward "Binary build"))
                   (should (eq (deb-packaging-status--run-key-at-point) 'sbuild))
                   (deb-packaging-status-open-output)
                    (should (eq displayed output))))))
@@ -633,7 +635,7 @@ phase transient.  Source-build failed so the section renders expanded."
       (unwind-protect
           (with-current-buffer displayed
             (goto-char (point-min))
-            (search-forward "✗ autopkgtest/ubuntu/noble/amd64")
+            (search-forward "missing: autopkgtest/ubuntu/noble/amd64")
             ;; Point sits just past the match; the last matched char
             ;; carries the face.
             (should (eq (get-text-property (1- (point)) 'font-lock-face)

@@ -145,6 +145,9 @@
       (let ((text (buffer-string)))
         (should (string-match-p "PPA tests: ppa:me/x" text))
         (should (string-match-p "llvm-toolchain-19 on noble for amd64" text))
+        (should (string-match-p "failed.*llvm-toolchain-19 on noble for amd64" text))
+        (should (string-match-p "passed.*llvm-toolchain-19 on noble for armhf" text))
+        (should (string-match-p "bad.*llvm-toolchain-19 on noble for riscv64" text))
         (should (string-match-p "command1" text))
         (should (string-match-p "t: trigger basic" text))
         (should (string-match-p "Log:" text)))
@@ -319,9 +322,6 @@ package's named status faces, not raw success/error."
                    '("ppa" "tests" "-L" "ppa:me/x" "-p" "mypkg"
                      "-r" "noble")))))
 
-(ert-deftest deb-packaging-test-ppa-tests/fetch-done-failure-raw-dump ()
-  "A failed fetch dumps the raw output and records :status 'failure."
-  (let ((deb-packaging-commands--run-history nil)
 (ert-deftest deb-packaging-test-ppa-tests/fetch-command-keeps-team-config ()
   (let (captured)
     (cl-letf (((symbol-function 'make-process)
@@ -332,6 +332,9 @@ package's named status faces, not raw success/error."
                    '("ppa" "-C" "/tmp/team.yml" "tests" "-L"
                      "ppa:team/x" "-p" "mypkg" "-r" "noble")))))
 
+(ert-deftest deb-packaging-test-ppa-tests/fetch-done-failure-raw-dump ()
+  "A failed fetch dumps the raw output and records :status 'failure."
+  (let ((deb-packaging-commands--run-history nil)
         (proc (make-symbol "proc")))
     (cl-letf (((symbol-function 'process-status) (lambda (_) 'exit))
               ((symbol-function 'process-exit-status) (lambda (_) 1)))

@@ -30,8 +30,10 @@
 ;; which chroot/image a build or test uses.  There is deliberately no
 ;; override surface; declare another series in the changelog instead.
 
-(defvar deb-packaging-config-default-distro "noble"
-  "Distro used outside any package tree (no changelog to read).")
+(defcustom deb-packaging-config-default-distro "noble"
+  "Distro used outside any package tree (no changelog to read)."
+  :type 'string
+  :group 'deb-packaging)
 
 (defun deb-packaging-config--effective-distro ()
   "Return the changelog distro of the package in `default-directory'.
@@ -44,6 +46,11 @@ Falls back to `deb-packaging-config-default-distro' outside a tree."
 (defcustom deb-packaging-config-default-architecture nil
   "Default target architecture, or nil to use the host architecture."
   :type '(choice (const :tag "Host architecture" nil) string)
+  :group 'deb-packaging)
+
+(defcustom deb-packaging-config-qemu-dir "/var/lib/adt-images/"
+  "Directory where autopkgtest QEMU images are stored."
+  :type 'directory
   :group 'deb-packaging)
 
 (defun deb-packaging-config--architecture-valid-p (architecture)
@@ -97,24 +104,30 @@ Falls back to `deb-packaging-config-default-distro' outside a tree."
 
 ;;; Propagation
 
-(defvar deb-packaging-config-propagate-salsa-user nil
+(defcustom deb-packaging-config-propagate-salsa-user nil
   "Your salsa.debian.org username, used to build the personal remote.
-When nil, prepared clones get no `personal' remote.")
+When nil, prepared clones get no `personal' remote."
+  :type '(choice (const :tag "Not configured" nil) string)
+  :group 'deb-packaging)
 
-(defvar deb-packaging-config-propagate-cache-dir
+(defcustom deb-packaging-config-propagate-cache-dir
   (expand-file-name "deb-packaging/propagate"
                     (deb-packaging-detect--cache-dir))
   "Directory for prepared propagate clones.
-Under $XDG_CACHE_HOME/deb-packaging/propagate (or ~/.cache).")
+Under $XDG_CACHE_HOME/deb-packaging/propagate (or ~/.cache)."
+  :type 'directory
+  :group 'deb-packaging)
 
 ;;; Extra PPA candidates
 
-(defvar deb-packaging-config-extra-ppas nil
+(defcustom deb-packaging-config-extra-ppas nil
   "List of ppa:owner/name strings for binary-build completion candidates.
 Merged into the --extra-repository completion list alongside owned PPAs
 and sbuild variants.  Defaults to nil; per-package persistence handles
 remembering across sessions.  Set in your init file if you want certain
-dependency PPAs always available as candidates.")
+dependency PPAs always available as candidates."
+  :type '(repeat string)
+  :group 'deb-packaging)
 
 (provide 'deb-packaging-config)
 ;;; deb-packaging-config.el ends here

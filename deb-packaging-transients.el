@@ -42,19 +42,11 @@
   "Drop into a chroot shell when the sbuild build fails."
   :argument deb-packaging-transients-sbuild-shell-flag)
 
-(defconst deb-packaging-transients-display-action
-  '(deb-packaging-display--transient-window (inhibit-same-window . t))
-  "Display action for this package's transients.
-The menu replaces a visible build-output or shell window instead of
-adding a split; with none visible it opens below the invoking window.
-Side windows are avoided so the menu never shares the bottom side area
-with user `display-buffer-alist' rules (e.g. comint buffers).")
-
 (defun deb-packaging-transients--env (fn)
   "Run FN with the package's transient display action bound.
 Used as :environment for the prefixes in this package."
   (let ((transient-display-buffer-action
-         deb-packaging-transients-display-action))
+         deb-packaging-display-transient-action))
     (funcall fn)))
 
 (defun deb-packaging-transients--context ()
@@ -92,6 +84,10 @@ Used as :environment for the prefixes in this package."
 (declare-function deb-packaging-commands-gbp-export-orig "deb-packaging-commands")
 (declare-function deb-packaging-commands-export-orig "deb-packaging-commands")
 (declare-function deb-packaging-commands-sbuild "deb-packaging-commands")
+(declare-function deb-packaging-commands-build-binary "deb-packaging-commands")
+(declare-function deb-packaging-infra-create-schroot "deb-packaging-infra")
+(declare-function deb-packaging-infra-create-lxd "deb-packaging-infra")
+(declare-function deb-packaging-infra-create-qemu "deb-packaging-infra")
 (declare-function deb-packaging-commands-lintian-source "deb-packaging-commands")
 (declare-function deb-packaging-commands-lintian-binary "deb-packaging-commands")
 (declare-function deb-packaging-commands-lintian-binary-one "deb-packaging-commands")
@@ -112,12 +108,22 @@ Used as :environment for the prefixes in this package."
 
 ;;; 1. Source build (dpkg-buildpackage)
 
+(defcustom deb-packaging-transients-source-default-args
+  '("-S" "-d" "-nc" "-sa" "-I" "-i")
+  "Initial dpkg-buildpackage flags for a source build."
+  :type '(repeat string)
+  :group 'deb-packaging)
+
+(defun deb-packaging-transients--source-default-value ()
+  "Return the configured initial source-build arguments."
+  deb-packaging-transients-source-default-args)
+
 ;;;###autoload(autoload 'deb-packaging-commands-source-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-commands-source-build-transient ()
   "Build a Debian source package, or fetch its orig tarball.
 dpkg-buildpackage arguments apply only to \"Build source\" (the
 lint-transient pattern)."
-  :value '("-S" "-d" "-nc" "-sa" "-I" "-i")
+  :value #'deb-packaging-transients--source-default-value
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-transients--context-header]
   ["dpkg-buildpackage arguments"
@@ -309,9 +315,11 @@ The distro comes from the changelog."
      :class deb-packaging-transients--extra-package-argument
      :multi-value repeat
      :description "Local .deb to install in chroot")]
-  ["Build"
-   ("b" "Build binary" deb-packaging-commands-sbuild)
-   ("q" "Quit" transient-quit-one)])
+   ["Build"
+    ("b" "Build binary" deb-packaging-commands-sbuild)
+    ("d" "Build working-tree binaries" deb-packaging-commands-build-binary)
+    ("c" "Create target chroot" deb-packaging-infra-create-schroot)
+    ("q" "Quit" transient-quit-one)])
 
 ;;; git-buildpackage
 
@@ -386,6 +394,15 @@ Each action reads only its own flags."
   (append (deb-packaging-transients--saved-ppa-arg)
           (list "--apt-upgrade" "--runner=lxd")))
 
+(defun deb-packaging-transients--create-test-image ()
+  "Create the image selected in the autopkgtest transient."
+  (interactive)
+  (if (equal (transient-arg-value "--runner="
+                                  (transient-args 'deb-packaging-test-transient))
+             "qemu")
+      (deb-packaging-infra-create-qemu)
+    (deb-packaging-infra-create-lxd)))
+
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()
   "Run autopkgtest locally, or view PPA test results.
@@ -410,8 +427,11 @@ distro comes from the changelog."
      "--ppa="
      :class transient-option
      :prompt "PPA (e.g. ppa:user/name): "
-     :reader deb-packaging-transients--read-ppa
-     :always-read t)]
+      :reader deb-packaging-transients--read-ppa
+      :always-read t)]
+   ["Image"
+    ("i" "Create selected test image"
+     deb-packaging-transients--create-test-image)]
   ["Run"
    ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)
    ("p" "PPA test report" deb-packaging-ppa-tests-show)

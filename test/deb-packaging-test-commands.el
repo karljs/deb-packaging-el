@@ -426,6 +426,26 @@ and re-emit without doubling the argument."
       (should (member "--purge-session=always" captured-args))
       (should (member "--purge-build=never" captured-args)))))
 
+(ert-deftest deb-packaging-test-commands/build-binary-uses-working-tree-without-dsc ()
+  (deb-packaging-test--with-package-tree
+      '(:name "foo" :version "1.2-3" :distro "noble")
+    (let (args dir)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name command command-dir &rest _)
+                   (setq args command dir command-dir))))
+        (deb-packaging-commands-build-binary)
+        (should (equal args '("dpkg-buildpackage" "-b")))
+        (should (equal dir pkg-dir))))))
+
+(ert-deftest deb-packaging-test-commands/build-binary-rejects-cross-architecture ()
+  (cl-letf (((symbol-function 'deb-packaging-detect--find-package-dir)
+             (lambda (&rest _) "/tmp/package"))
+            ((symbol-function 'deb-packaging-commands--package-context)
+             (lambda (&rest _) '(:target-arch "arm64" :host-arch "amd64")))
+            ((symbol-function 'deb-packaging-commands--run-command)
+             (lambda (&rest _) (error "must not run"))))
+    (should-error (deb-packaging-commands-build-binary) :type 'user-error)))
+
 (ert-deftest deb-packaging-test-commands/sbuild-buffer-dir-is-pkg-dir ()
   "sbuild runs in the parent dir but its log buffer keeps the package dir."
   (deb-packaging-test--with-package-tree
@@ -555,7 +575,7 @@ default would duplicate them (or break Debian builds)."
 
 (ert-deftest deb-packaging-test-commands/test-image-info-lxd-exists ()
   (deb-packaging-test--with-mocked-process '(("lxc" . 0))
-    (let ((info (deb-packaging-commands--test-image-info "lxd" "noble")))
+    (let ((info (deb-packaging-commands--test-image-info "lxd" "noble" "amd64")))
       (should (equal (plist-get info :runner) "lxd"))
       (should (string= (plist-get info :image)
                        "autopkgtest/ubuntu/noble/amd64"))
@@ -563,14 +583,14 @@ default would duplicate them (or break Debian builds)."
 
 (ert-deftest deb-packaging-test-commands/test-image-info-lxd-missing ()
   (deb-packaging-test--with-mocked-process '(("lxc" . 1))
-    (let ((info (deb-packaging-commands--test-image-info "lxd" "noble")))
+    (let ((info (deb-packaging-commands--test-image-info "lxd" "noble" "amd64")))
       (should (equal (plist-get info :runner) "lxd"))
       (should (string= (plist-get info :image)
                        "autopkgtest/ubuntu/noble/amd64"))
       (should (null (plist-get info :exists))))))
 
 (ert-deftest deb-packaging-test-commands/test-image-info-qemu ()
-  (let ((info (deb-packaging-commands--test-image-info "qemu" "noble")))
+  (let ((info (deb-packaging-commands--test-image-info "qemu" "noble" "amd64")))
     (should (equal (plist-get info :runner) "qemu"))
     (should (string= (plist-get info :image)
                      "/var/lib/adt-images/autopkgtest-noble-amd64.img"))
@@ -579,15 +599,29 @@ default would duplicate them (or break Debian builds)."
 ;;; deb-packaging-commands--test-image-build-hint
 
 (ert-deftest deb-packaging-test-commands/test-image-build-hint-lxd ()
-  (should (string= (deb-packaging-commands--test-image-build-hint "lxd" "noble")
-                   "autopkgtest-build-lxd ubuntu-daily:noble")))
+  (should (string= (deb-packaging-commands--test-image-build-hint
+                    "lxd" "noble" "amd64")
+                   "autopkgtest-build-lxd ubuntu-daily:noble/amd64")))
 
 (ert-deftest deb-packaging-test-commands/test-image-build-hint-qemu ()
-  (should (string= (deb-packaging-commands--test-image-build-hint "qemu" "noble")
-                   "autopkgtest-buildvm-ubuntu-cloud -r noble")))
+  (should (string= (deb-packaging-commands--test-image-build-hint
+                    "qemu" "noble" "amd64")
+                   "autopkgtest-buildvm-ubuntu-cloud -r noble -a amd64")))
 
 (ert-deftest deb-packaging-test-commands/test-image-build-hint-unknown ()
   (should (null (deb-packaging-commands--test-image-build-hint "docker" "noble"))))
+
+(ert-deftest deb-packaging-test-commands/test-image-paths-use-target-architecture ()
+  (should (equal (plist-get
+                  (deb-packaging-commands--test-image-info
+                   "lxd" "noble" "arm64")
+                  :image)
+                 "autopkgtest/ubuntu/noble/arm64"))
+  (should (equal (plist-get
+                  (deb-packaging-commands--test-image-info
+                   "qemu" "noble" "arm64")
+                  :image)
+                 "/var/lib/adt-images/autopkgtest-noble-arm64.img")))
 
 ;;; deb-packaging-commands--ubuntu-lint-context-args
 
@@ -730,7 +764,7 @@ default would duplicate them (or break Debian builds)."
                 ("mypkg_1.0-1_amd64.deb" . "")))
     (let (captured-args)
       (cl-letf (((symbol-function 'deb-packaging-commands--test-image-info)
-                 (lambda (&optional _runner _distro)
+                  (lambda (&optional _runner _distro _architecture)
                    (list :runner "lxd"
                          :image "autopkgtest/ubuntu/noble/amd64"
                          :exists t)))

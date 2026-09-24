@@ -67,14 +67,15 @@ Return a plist, or nil outside a Debian package tree."
 
 (defconst deb-packaging-status--section-actions
   '((deb-packaging-source         . deb-packaging-commands-source-build-transient)
+    (deb-packaging-local-binary   . deb-packaging-commands-build-binary)
     (deb-packaging-gbp-build      . deb-packaging-gbp-build-transient)
     (deb-packaging-gbp-orig       . deb-packaging-commands-gbp-export-orig)
     (deb-packaging-binary         . deb-packaging-binary-build-transient)
     (deb-packaging-check          . deb-packaging-lint-transient)
     (deb-packaging-test           . deb-packaging-test-transient)
     (deb-packaging-ppa-test       . deb-packaging-ppa-tests-show)
-    (deb-packaging-upload         . deb-packaging-upload-transient)
     (deb-packaging-ppa-builds     . deb-packaging-infra-show-ppa-package)
+    (deb-packaging-upload         . deb-packaging-upload-transient)
     (deb-packaging-stale          . deb-packaging-commands-clean-transient)
     (deb-packaging-dev            . deb-packaging-dev-transient)
     (deb-packaging-pq             . deb-packaging-pq-transient))
@@ -236,9 +237,7 @@ context, which must not block."
   "Face for the `running' status word.")
 
 (defface deb-packaging-status-ready
-  '((((class color) (background light)) :foreground "DodgerBlue4" :weight bold)
-    (((class color) (background dark))  :foreground "DeepSkyBlue1" :weight bold)
-    (t :weight bold))
+  '((t :inherit success :weight bold))
   "Face for the `ready' status word.")
 
 (defface deb-packaging-status-blocked
@@ -290,9 +289,8 @@ carrying PATH, so RET can open them."
 
 (defun deb-packaging-status--insert-state-row (pairs)
   "Insert a state row from PAIRS, a list of (label . value) cells.
-Renders each as \"Label: value\".  A value that already carries its own
-font-lock-face (e.g. the ✓/✗ image cells) keeps it; only plain values
-get the default face."
+Renders each as \"Label: value\". A value that already carries its own
+font-lock-face keeps it; only plain values get the default face."
   (when pairs
     (let ((parts (mapcar
                   (lambda (pair)
@@ -343,7 +341,7 @@ get the default face."
                       "not a git repository"))
             "\n")
     (when stale
-      (insert (propertize (format "⚠ %d stale" (length stale))
+      (insert (propertize (format "Stale artifacts: %d" (length stale))
                           'font-lock-face 'warning)
               "\n"))
     (insert "\n")))
@@ -382,9 +380,10 @@ last-run time, DETAIL is an optional dimmed fragment."
                   (cons "Output" (abbreviate-file-name parent-dir)))
                 (cons "Orig tarball"
                       (if orig-tarball
-                          (propertize (concat "✓ "
-                                  (file-name-nondirectory orig-tarball))
-                                      'font-lock-face 'deb-packaging-status-done)
+                          (propertize
+                           (concat "present: "
+                                   (file-name-nondirectory orig-tarball))
+                           'font-lock-face 'deb-packaging-status-done)
                         (propertize "none" 'font-lock-face 'shadow)))
                 (when source-format
                   (cons "Format" source-format)))))
@@ -426,9 +425,9 @@ last-run time, DETAIL is an optional dimmed fragment."
                (list
                 (cons "Schroot"
                       (if schroot
-                          (propertize (concat "✓ " schroot)
+                          (propertize schroot
                                       'font-lock-face 'deb-packaging-status-done)
-                        (propertize "none" 'font-lock-face 'shadow)))
+                        (propertize "missing" 'font-lock-face 'shadow)))
                 (when arch (cons "Arch" arch))
                 (cons "Extra repos"
                       (if repos
@@ -436,7 +435,7 @@ last-run time, DETAIL is an optional dimmed fragment."
                         (propertize "none" 'font-lock-face 'shadow)))
                 (cons "Dsc"
                       (if dsc
-                          (propertize "✓ ready" 'font-lock-face
+                          (propertize "available" 'font-lock-face
                                       'deb-packaging-status-done)
                         (propertize "none" 'font-lock-face 'shadow))))))
         (cond
@@ -452,8 +451,39 @@ last-run time, DETAIL is an optional dimmed fragment."
                         (transient-args 'deb-packaging-binary-build-transient)))
           (deb-packaging-status--insert-note
            "Drops into a chroot shell on build failure"))
-        (when-let ((note (deb-packaging-status--kept-session-note)))
-          (deb-packaging-status--insert-note note))))))
+         (when-let ((note (deb-packaging-status--kept-session-note)))
+           (deb-packaging-status--insert-note note))))))
+
+(defun deb-packaging-status--insert-local-binary (ctx)
+  "Insert the optional working-tree dpkg-buildpackage binary action."
+  (let* ((arts (plist-get ctx :artifacts))
+         (changes (alist-get 'binary-changes arts))
+         (debs (alist-get 'debs arts))
+         (native-arch-p (equal (plist-get ctx :target-arch)
+                               (plist-get ctx :host-arch)))
+         (ready (and native-arch-p
+                     (plist-get ctx :pkg-dir)
+                     (executable-find "dpkg-buildpackage")))
+         (state (deb-packaging-status--phase-state
+                 'dpkg-buildpackage-binary (and changes debs) ready))
+         (collapsed (not (memq state '(ready running failed)))))
+    (magit-insert-section (deb-packaging-local-binary nil collapsed)
+      (magit-insert-heading
+        (deb-packaging-status--phase-heading
+         state "Local binary build" 'dpkg-buildpackage-binary))
+      (magit-insert-section-body
+        (deb-packaging-status--insert-state-row
+         (list (cons "Command" "dpkg-buildpackage -b")
+               (cons "Target" (or (plist-get ctx :target-arch) "unknown"))))
+        (unless ready
+          (deb-packaging-status--insert-note
+           (if native-arch-p
+               "dpkg-buildpackage is not installed"
+             "Use sbuild for cross-architecture builds")))
+        (when changes
+          (deb-packaging-status--insert-file-line changes))
+        (dolist (deb debs)
+          (deb-packaging-status--insert-file-line deb))))))
 
 (defun deb-packaging-status--insert-lintian-child (section-type key label artifacts &optional note)
   "Insert one Lint child section of SECTION-TYPE for run key KEY.
@@ -533,8 +563,8 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
       (magit-insert-section-body
         (if (not debs)
             (deb-packaging-status--insert-note "waiting on binary build")
-           (let* ((info (deb-packaging-commands--test-image-info
-                         nil (plist-get ctx :distro)))
+            (let* ((info (deb-packaging-commands--test-image-info
+                          nil (plist-get ctx :distro) arch))
                  (runner (plist-get info :runner))
                  (image (plist-get info :image))
                  (exists (plist-get info :exists)))
@@ -546,15 +576,15 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                     (when image
                       (cons "Image"
                             (if exists
-                                (propertize (concat "✓ " image)
+                                (propertize (concat "available: " image)
                                             'font-lock-face
                                             'deb-packaging-status-done)
-                               (propertize (concat "✗ " image)
+                               (propertize (concat "missing: " image)
                                            'font-lock-face
                                            'deb-packaging-status-failed)))))))
             (when (and image (not exists))
               (when-let ((hint (deb-packaging-commands--test-image-build-hint
-                                  runner (plist-get ctx :distro))))
+                                runner (plist-get ctx :distro) arch)))
                 (deb-packaging-status--insert-note
                  (format "Build it with: %s" hint))))
             (dolist (d debs)
@@ -831,8 +861,9 @@ Point ends on the first phase heading."
           (magit-insert-section (deb-packaging-build nil nil)
             (magit-insert-heading "Build")
             (magit-insert-section-body
-              (deb-packaging-status--insert-source
-               ctx (funcall hide 'source-build))
+             (deb-packaging-status--insert-source
+                ctx (funcall hide 'source-build))
+               (deb-packaging-status--insert-local-binary ctx)
               (deb-packaging-status--insert-gbp-build ctx)
               (deb-packaging-status--insert-gbp-orig ctx)
               (deb-packaging-status--insert-binary
@@ -920,7 +951,8 @@ filesystem each time."
 ;;; Actions
 
 (defconst deb-packaging-status--section-run-keys
-  '((deb-packaging-source . source-build)
+   '((deb-packaging-source . source-build)
+     (deb-packaging-local-binary . dpkg-buildpackage-binary)
     (deb-packaging-gbp-build . gbp-build)
     (deb-packaging-gbp-orig . gbp-export-orig)
     (deb-packaging-binary . sbuild)
@@ -984,6 +1016,7 @@ Navigation and folding come from `magit-section-mode'."
   "RET" #'deb-packaging-status-visit
   "o"   #'deb-packaging-status-open-output
   "s"   #'deb-packaging-commands-source-build-transient
+  "D"   #'deb-packaging-commands-build-binary
   "b"   #'deb-packaging-binary-build-transient
   "l"   #'deb-packaging-lint-transient
   "t"   #'deb-packaging-test-transient

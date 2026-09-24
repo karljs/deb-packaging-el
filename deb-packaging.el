@@ -60,8 +60,9 @@ The target distro comes from the changelog; other transients inherit it."
   :environment #'deb-packaging-transients--env
   [:description deb-packaging--dispatch-header]
   ["Build"
-   ("s" "Source build..."  deb-packaging-commands-source-build-transient)
-   ("b" "sbuild binary build..."  deb-packaging-binary-build-transient)
+    ("s" "Source build..."  deb-packaging-commands-source-build-transient)
+    ("d" "Working-tree binary build" deb-packaging-commands-build-binary)
+    ("b" "sbuild binary build..."  deb-packaging-binary-build-transient)
    ("G" "gbp buildpackage..." deb-packaging-gbp-build-transient)]
   ["Check & Test"
    ("l" "Lint..."           deb-packaging-lint-transient)
@@ -98,6 +99,27 @@ context the transient's commands run in."
             (user-error nil))
     (deb-packaging-status))
   (deb-packaging-dispatch-transient))
+
+(defconst deb-packaging--optional-tools
+  '("autopkgtest" "dput" "gbp" "git-ubuntu" "lintian" "lxc"
+    "mk-sbuild" "ppa" "sbuild" "ubuntu-lint")
+  "Optional external tools used by some workflows.")
+
+;;;###autoload
+(defun deb-packaging-doctor ()
+  "Show optional tool availability and open Customize for deb-packaging."
+  (interactive)
+  (let ((buf (get-buffer-create "*deb-packaging setup*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "Optional tools\n\n")
+        (dolist (tool deb-packaging--optional-tools)
+          (insert (format "%-16s %s\n"
+                          tool (if (executable-find tool) "available" "missing"))))
+        (special-mode)))
+    (deb-packaging-display-buffer buf 'report))
+  (customize-group 'deb-packaging))
 
 (provide 'deb-packaging)
 ;;; deb-packaging.el ends here

@@ -34,11 +34,15 @@
 
 ;;; Variables
 
-(defvar deb-packaging-dev-image-remote "ubuntu-daily"
-  "LXD remote for the source image.")
+(defcustom deb-packaging-dev-image-remote "ubuntu-daily"
+  "LXD remote for the source image."
+  :type 'string
+  :group 'deb-packaging)
 
-(defvar deb-packaging-dev-mount-point "/root/work"
-  "Base mount path inside the container. Package name is appended.")
+(defcustom deb-packaging-dev-mount-point "/root/work"
+  "Base mount path inside the container. Package name is appended."
+  :type 'directory
+  :group 'deb-packaging)
 
 (defvar deb-packaging-dev-language-profiles
   '((c/c++  "C/C++"  :apt ("clangd" "bear") :server "clangd")
@@ -54,9 +58,11 @@ works).  :SERVER is the binary the LSP client needs; the langs layer
 verifies it after install and writes no marker on failure.  Add entries
 to extend language support.")
 
-(defvar deb-packaging-dev-extra-packages '("git" "gdb" "strace")
+(defcustom deb-packaging-dev-extra-packages '("git" "gdb" "strace")
   "Extra apt packages for dev containers. Not build-deps, not language servers.
-Best-effort install.")
+Best-effort install."
+  :type '(repeat string)
+  :group 'deb-packaging)
 
 ;;; TRAMP method
 

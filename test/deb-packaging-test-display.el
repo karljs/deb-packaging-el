@@ -144,7 +144,20 @@ CATEGORY.  Buffers are killed afterwards."
         (deb-packaging-display-buffer buf 'output)
         (let ((win (get-buffer-window buf)))
           (should win)
-          (should-not (window-parameter win 'window-side)))))))
+           (should-not (window-parameter win 'window-side)))))))
+
+(ert-deftest deb-packaging-test-display/honors-user-display-buffer-alist-when-configured ()
+  (save-window-excursion
+    (let ((deb-packaging-display-override-user-rules nil)
+          (display-buffer-alist
+           '(("\\*dp-test-honored\\*"
+              (display-buffer-same-window)))))
+      (let ((buf (get-buffer-create "*dp-test-honored*")))
+        (unwind-protect
+            (progn
+              (deb-packaging-display-buffer buf 'report)
+              (should (eq (window-buffer (selected-window)) buf)))
+          (kill-buffer buf))))))
 
 ;;; Transient display action
 
@@ -160,7 +173,7 @@ CATEGORY.  Buffers are killed afterwards."
               (let ((log-win (split-window (selected-window) nil 'below)))
                 (set-window-buffer log-win log-buf)
                 (select-window (get-buffer-window status-buf))
-                (display-buffer menu-buf deb-packaging-transients-display-action)
+                 (display-buffer menu-buf deb-packaging-display-transient-action)
                 (should (eq (get-buffer-window menu-buf) log-win))
                 (should (= (length (window-list)) 2))
                 ;; Transient exit kills the menu buffer; the log returns.
@@ -176,7 +189,7 @@ CATEGORY.  Buffers are killed afterwards."
           (start (selected-window)))
       (unwind-protect
           (progn
-            (display-buffer menu-buf deb-packaging-transients-display-action)
+            (display-buffer menu-buf deb-packaging-display-transient-action)
             (let ((win (get-buffer-window menu-buf)))
               (should win)
               (should-not (eq win start))
