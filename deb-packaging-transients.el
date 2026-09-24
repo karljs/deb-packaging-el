@@ -331,9 +331,10 @@ distro comes from the changelog."
   :value #'deb-packaging-transients--test-default-value
   :environment #'deb-packaging-transients--env
   ["Local autopkgtest"
-   ("-u"  "Upgrade packages before test"  "--apt-upgrade")
-   ("-f"  "Drop to shell on failure"      "--shell-fail")
-     ("-r"  "Test runner"
+   ("-u"  "Upgrade packages before test"   "--apt-upgrade")
+   ("-P"  "Use dependencies from proposed" "--apt-pocket=proposed")
+   ("-f"  "Drop to shell on failure"       "--shell-fail")
+   ("-r"  "Test runner"
       "--runner="
       :class transient-option
       :choices deb-packaging-commands--runner-choices

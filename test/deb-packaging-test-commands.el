@@ -619,8 +619,8 @@ default would duplicate them (or break Debian builds)."
 
 ;;; autopkgtest --ppa= filtering
 
-(ert-deftest deb-packaging-test-commands/autopkgtest-filters-ppa-arg ()
-  "autopkgtest never receives the transient's --ppa= arg."
+(ert-deftest deb-packaging-test-commands/autopkgtest-filters-control-args ()
+  "autopkgtest receives local options but not transient control arguments."
   (deb-packaging-test--with-package-tree
       '(:name "mypkg" :version "1.0-1" :distro "noble"
               :artifacts
@@ -637,10 +637,15 @@ default would duplicate them (or break Debian builds)."
                  (lambda (_name args &optional _dir _key)
                    (setq captured-args args))))
         (deb-packaging-commands-autopkgtest
-         '("--apt-upgrade" "--runner=lxd" "--ppa=ppa:me/x")))
+         '("--apt-upgrade" "--apt-pocket=proposed"
+           "--runner=lxd" "--ppa=ppa:me/x")))
       (should-not (cl-some (lambda (a) (string-prefix-p "--ppa=" a))
                            captured-args))
-      (should (member "--apt-upgrade" captured-args)))))
+      (should-not (cl-some (lambda (a) (string-prefix-p "--runner=" a))
+                           captured-args))
+      (should (equal (cl-subseq captured-args 0 3)
+                     '("autopkgtest" "--apt-upgrade"
+                       "--apt-pocket=proposed"))))))
 
 ;;; git ubuntu export-orig
 

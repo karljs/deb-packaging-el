@@ -94,6 +94,14 @@ the learned key dead."
                  'deb-packaging-dispatch-transient)))
     (should (string-match-p
              ":key \"C\".*:command deb-packaging-clone-git-ubuntu"
+              layout))))
+
+(ert-deftest deb-packaging-test-dispatch/autopkgtest-binds-proposed ()
+  "The local autopkgtest transient exposes the proposed pocket."
+  (let ((layout (deb-packaging-test-dispatch--layout
+                 'deb-packaging-test-transient)))
+    (should (string-match-p
+             ":key \"-P\"[^)]*:argument \"--apt-pocket=proposed\""
              layout))))
 
 (provide 'deb-packaging-test-dispatch)
