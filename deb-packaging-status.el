@@ -33,6 +33,7 @@
 ;; Cross-file references not pulled in by require (avoids load cycles).
 (declare-function deb-packaging-dispatch "deb-packaging")
 (declare-function deb-packaging-infra-dispatch "deb-packaging-infra")
+(declare-function deb-packaging-infra-show-ppa-package "deb-packaging-infra")
 (declare-function deb-packaging-dev--list-containers "deb-packaging-dev")
 (declare-function deb-packaging-propagate-transient "deb-packaging-propagate")
 (declare-function deb-packaging-pq-transient "deb-packaging-pq")
@@ -73,6 +74,7 @@ Return a plist, or nil outside a Debian package tree."
     (deb-packaging-test           . deb-packaging-test-transient)
     (deb-packaging-ppa-test       . deb-packaging-ppa-tests-show)
     (deb-packaging-upload         . deb-packaging-upload-transient)
+    (deb-packaging-ppa-builds     . deb-packaging-infra-show-ppa-package)
     (deb-packaging-stale          . deb-packaging-commands-clean-transient)
     (deb-packaging-dev            . deb-packaging-dev-transient)
     (deb-packaging-pq             . deb-packaging-pq-transient))
@@ -630,8 +632,31 @@ reach done and ubuntu-lint is always ready, so Lint is never blocked."
                           (file-name-nondirectory changes)
                         (propertize "waiting on source build"
                                     'font-lock-face 'shadow))))))
-        (when changes
-          (deb-packaging-status--insert-file-line changes))))))
+         (when changes
+           (deb-packaging-status--insert-file-line changes))))))
+
+(defun deb-packaging-status--insert-ppa-builds (ctx)
+  "Insert the actionable PPA build view for CTX."
+  (let ((ppa (plist-get ctx :default-ppa)))
+    (magit-insert-section (deb-packaging-ppa-builds nil t)
+      (magit-insert-heading
+        (concat
+         (propertize (deb-packaging-status--pad
+                      "PPA builds" deb-packaging-status--label-width)
+                     'font-lock-face 'magit-section-heading)
+         (if ppa
+             (propertize "view" 'font-lock-face 'deb-packaging-status-ready)
+           (propertize "choose PPA" 'font-lock-face 'shadow))))
+      (magit-insert-section-body
+        (deb-packaging-status--insert-state-row
+         (list (cons "PPA" (or ppa "not set"))
+               (cons "Package" (or (plist-get ctx :name) "unknown"))
+               (cons "Target"
+                     (format "%s/%s"
+                             (or (plist-get ctx :distro) "unknown")
+                             (or (plist-get ctx :target-arch) "unknown")))))
+        (deb-packaging-status--insert-note
+         "RET to inspect Launchpad acceptance and per-architecture builds")))))
 
 (defun deb-packaging-status--group-stale-by-version (stale-files)
   "Group STALE-FILES by version, returning an alist of (version . files).
@@ -822,9 +847,10 @@ Point ends on the first phase heading."
               (deb-packaging-status--insert-ppa-tests ctx t)))
           (magit-insert-section (deb-packaging-publish nil nil)
             (magit-insert-heading "Publish")
-            (magit-insert-section-body
-              (deb-packaging-status--insert-upload
-               ctx (funcall hide 'dput))))
+             (magit-insert-section-body
+               (deb-packaging-status--insert-upload
+                ctx (funcall hide 'dput))
+               (deb-packaging-status--insert-ppa-builds ctx)))
           (magit-insert-section (deb-packaging-workspace nil t)
             (magit-insert-heading "Workspace")
             (magit-insert-section-body

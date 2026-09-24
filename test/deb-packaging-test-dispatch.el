@@ -94,8 +94,9 @@ the learned key dead."
                     deb-packaging-pq-transient
                     deb-packaging-propagate-transient
                     deb-packaging-update-transient
-                    deb-packaging-infra-dispatch
-                    deb-packaging-infra-schroots-dispatch
+                     deb-packaging-infra-dispatch
+                     deb-packaging-infra-ppa-config-transient
+                     deb-packaging-infra-schroots-dispatch
                     deb-packaging-infra-lxd-dispatch
                     deb-packaging-infra-qemu-dispatch
                     deb-packaging-infra-ppas-dispatch

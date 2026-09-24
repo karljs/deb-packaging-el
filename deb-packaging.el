@@ -74,7 +74,8 @@ The target distro comes from the changelog; other transients inherit it."
    ("B" "Backport upstream patch..." deb-packaging-backport-patch)
    ("P" "Propagate..."       deb-packaging-propagate-transient)]
   ["Publish"
-   ("U" "PPA upload..."   deb-packaging-upload-transient)]
+   ("U" "PPA upload..."   deb-packaging-upload-transient)
+   ("p" "PPA workspace..." deb-packaging-infra-ppas)]
   ["Cleanup"
    ("c" "Clean artifacts..." deb-packaging-commands-clean-transient)
    ("K" "Kill build-output buffers" deb-packaging-commands-kill-output-buffers)

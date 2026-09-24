@@ -13,6 +13,11 @@
 (require 'deb-packaging-test-run)
 (require 'deb-packaging-infra)
 
+(defun deb-packaging-test-infra--find-ppa-entry (address)
+  (cl-find-if (lambda (entry)
+                (equal (plist-get (car entry) :address) address))
+              tabulated-list-entries))
+
 ;;; Privileged commands run via the comint runner (pty for authd prompts)
 
 (ert-deftest deb-packaging-test-infra/delete-qemu-plain-rm-when-writable ()
@@ -112,6 +117,56 @@ Return the report buffer once its sentinel has fired."
 
 (ert-deftest deb-packaging-test-infra/update-schroots-no-schroots-errors ()
   (cl-letf (((symbol-function 'deb-packaging-infra--list-schroots)
+(ert-deftest deb-packaging-test-infra/show-ppa-uses-team-config ()
+  (let ((real-make-process (symbol-function 'make-process))
+        (proc nil)
+        command)
+    (cl-letf (((symbol-function 'make-process)
+              (lambda (&rest props)
+                (setq command (plist-get props :command)
+                      proc (apply real-make-process
+                                  (plist-put props :command '("true"))))))
+              ((symbol-function 'deb-packaging-display-buffer) #'ignore))
+      (deb-packaging-infra-show-ppa
+       '(:address "ppa:team/pkg" :owner "team" :name "pkg"
+         :config-file "/tmp/team-config.yaml"))
+      (unwind-protect
+          (progn
+            (deb-packaging-test-run--wait proc)
+            (should (equal command
+                           '("ppa" "-C" "/tmp/team-config.yaml" "show"
+                             "ppa:team/pkg"))))
+        (kill-buffer "*deb-ppa: ppa:team/pkg*")))))
+
+(ert-deftest deb-packaging-test-infra/show-ppa-package-filters-by-context ()
+  (let ((real-make-process (symbol-function 'make-process))
+        (proc nil)
+        command)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest props)
+                 (setq command (plist-get props :command)
+                       proc (apply real-make-process
+                                   (plist-put props :command '("true"))))))
+              ((symbol-function 'deb-packaging-display-buffer) #'ignore)
+              ((symbol-function 'deb-packaging-commands--package-context)
+               (lambda (&rest _) '(:name "foo" :distro "noble"
+                                   :target-arch "arm64"
+                                   :default-ppa "ppa:team/foo")))
+              ((symbol-function 'deb-packaging-infra--list-ppa-records)
+               (lambda () '((:address "ppa:team/foo"
+                             :config-file "/tmp/team.yml"))))
+              ((symbol-function 'read-string)
+               (lambda (_prompt &optional _initial _history default) default)))
+      (deb-packaging-infra-show-ppa-package)
+      (unwind-protect
+          (progn
+            (deb-packaging-test-run--wait proc)
+            (should (equal command
+                           '("ppa" "-C" "/tmp/team.yml" "show"
+                             "--packages" "foo" "--releases" "noble"
+                             "--architectures" "arm64" "ppa:team/foo"))))
+        (kill-buffer "*deb-ppa: ppa:team/foo foo noble/arm64*")))))
+
              (lambda () nil))
             ((symbol-function 'deb-packaging-infra--chroot-targets)
              (lambda () nil))
@@ -285,7 +340,15 @@ Return the report buffer once its sentinel has fired."
       (cl-letf (((symbol-function 'deb-packaging-infra-show-ppa)
                  (lambda (name &rest _) (setq shown name))))
         (deb-packaging-infra-visit-ppa)
-        (should (equal shown "ppa:me/one"))))))
+        (should (equal (plist-get shown :address) "ppa:me/one"))))))
+
+(ert-deftest deb-packaging-test-infra/open-ppa-uses-launchpad-archive-url ()
+  (let (opened)
+    (cl-letf (((symbol-function 'browse-url)
+               (lambda (url &rest _) (setq opened url))))
+      (deb-packaging-infra-open-ppa
+       '(:address "ppa:team/pkg" :owner "team" :name "pkg")))
+    (should (equal opened "https://launchpad.net/~team/+archive/ubuntu/pkg"))))
 
 ;;; Real defaults in create prompts
 
@@ -414,7 +477,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
     (setq tabulated-list-entries
           (list (deb-packaging-infra--make-ppa-entry "ppa:me/old")))
     (deb-packaging-infra--show-ppas-loading-message)
-    (should (assoc "ppa:me/old" tabulated-list-entries))))
+    (should (deb-packaging-test-infra--find-ppa-entry "ppa:me/old"))))
 
 (ert-deftest deb-packaging-test-infra/ppa-list-failure-keeps-list-and-messages ()
   (let ((messages nil))
@@ -433,7 +496,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
                 (funcall (deb-packaging-infra--ppa-list-sentinel
                           (current-buffer) temp-buf)
                          proc "exited abnormally with code 1\n"))
-              (should (assoc "ppa:me/old" tabulated-list-entries))
+              (should (deb-packaging-test-infra--find-ppa-entry "ppa:me/old"))
               (should (string-match-p "showing cached results" (buffer-string)))
               (should (cl-some (lambda (m) (string-match-p "failed" m))
                                messages)))
@@ -453,7 +516,11 @@ The sentinel fires during the wait, while the mode buffer is alive."
             (funcall (deb-packaging-infra--ppa-list-sentinel
                       (current-buffer) temp-buf)
                      proc "finished\n")
-            (should (assoc "ppa:me/new" tabulated-list-entries)))
+            (should (equal
+                     (plist-get
+                      (car (deb-packaging-test-infra--find-ppa-entry "ppa:me/new"))
+                      :config-file)
+                     "/tmp/team-config.yaml")))
         (when (buffer-live-p temp-buf)
           (kill-buffer temp-buf))))))
 
@@ -473,7 +540,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
               (funcall (deb-packaging-infra--ppa-list-sentinel
                         (current-buffer) temp-buf)
                        proc "finished\n"))
-            (should (assoc "ppa:me/old" tabulated-list-entries))
+            (should (deb-packaging-test-infra--find-ppa-entry "ppa:me/old"))
             (should (string-match-p "showing cached results" (buffer-string))))
         (when (buffer-live-p temp-buf)
           (kill-buffer temp-buf))))))
@@ -491,7 +558,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
             (funcall (deb-packaging-infra--ppa-list-sentinel
                       (current-buffer) temp-buf)
                      proc "killed\n")
-            (should (assoc "ppa:me/old" tabulated-list-entries))
+            (should (deb-packaging-test-infra--find-ppa-entry "ppa:me/old"))
             (should (string-match-p "showing cached results" (buffer-string))))
         (when (buffer-live-p temp-buf)
           (kill-buffer temp-buf))))))
@@ -510,7 +577,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
             (funcall (deb-packaging-infra--ppa-list-sentinel
                       (current-buffer) temp-buf old-generation)
                      proc "finished\n")
-            (should-not (assoc "ppa:me/stale" tabulated-list-entries)))
+            (should-not (deb-packaging-test-infra--find-ppa-entry "ppa:me/stale")))
         (when (buffer-live-p temp-buf)
           (kill-buffer temp-buf))))))
 
@@ -581,7 +648,9 @@ in flight)."
 ;;; PPA candidate cache: non-blocking list, background warm
 
 (ert-deftest deb-packaging-test-infra/list-ppas-fresh-cache-no-warm ()
-  (let ((deb-packaging-infra--ppa-cache (cons '("ppa:me/x") (float-time)))
+  (let ((deb-packaging-infra--ppa-cache
+         (cons '((:address "ppa:me/x" :owner "me" :name "x"))
+               (float-time)))
         (deb-packaging-infra--ppa-warm-proc nil))
     (cl-letf (((symbol-function 'deb-packaging-infra--warm-ppa-cache-async)
                (lambda () (error "must not warm"))))
@@ -591,10 +660,21 @@ in flight)."
   "A stale cache returns the old list immediately (no blocking fetch)
 while the background refresh warms the next prompt."
   (let ((deb-packaging-infra--ppa-cache
-         (cons '("ppa:me/old") (- (float-time) 1000)))
+         (cons '((:address "ppa:me/old" :owner "me" :name "old"))
+               (- (float-time) 1000)))
         (deb-packaging-infra--ppa-warm-proc nil)
         (warmed 0))
     (cl-letf (((symbol-function 'deb-packaging-infra--warm-ppa-cache-async)
+(ert-deftest deb-packaging-test-infra/ppa-record-parser-keeps-team-provenance ()
+  (should (equal (deb-packaging-infra--parse-ppa-records
+                  (concat "__DEB_PACKAGING_PPA_CONFIG__=\nppa:me/one\n"
+                          "__DEB_PACKAGING_PPA_CONFIG__=/tmp/team.yml\n"
+                          "ppa:team/two\n"))
+                 '((:address "ppa:me/one" :owner "me" :name "one"
+                    :config-file nil)
+                   (:address "ppa:team/two" :owner "team" :name "two"
+                     :config-file "/tmp/team.yml")))))
+
                (lambda () (cl-incf warmed))))
       (should (equal (deb-packaging-infra--list-ppas) '("ppa:me/old")))
       (should (= warmed 1)))))
@@ -670,7 +750,9 @@ OUTPUT is the string the mock `ppa list' prints.  Returns the process."
         (unwind-protect
             (progn
               (deb-packaging-test-run--wait proc)
-              (should (equal (car deb-packaging-infra--ppa-cache)
+              (should (equal (mapcar (lambda (record)
+                                       (plist-get record :address))
+                                     (car deb-packaging-infra--ppa-cache))
                              '("ppa:me/one" "ppa:me/two")))
               (should (cdr deb-packaging-infra--ppa-cache)))
           (when (process-live-p proc) (delete-process proc)))))))
@@ -728,15 +810,43 @@ OUTPUT is the string the mock `ppa list' prints.  Returns the process."
     (should-error (deb-packaging-infra-create-ppa) :type 'user-error)))
 
 (ert-deftest deb-packaging-test-infra/delete-ppa-empty-name-errors ()
-  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa)
+  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa-record)
              (lambda (&rest _) ""))
             ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
     (should-error (call-interactively #'deb-packaging-infra-delete-ppa)
                   :type 'user-error)))
 
 (ert-deftest deb-packaging-test-infra/show-ppa-empty-name-errors ()
-  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa)
+  (cl-letf (((symbol-function 'deb-packaging-infra--read-ppa-record)
              (lambda (&rest _) "")))
+(ert-deftest deb-packaging-test-infra/set-ppa-config-sets-architectures-in-team-context ()
+  (let (command)
+    (cl-letf (((symbol-function 'transient-scope)
+               (lambda (&rest _) '(:address "ppa:team/pkg"
+                                   :config-file "/tmp/team-config.yaml")))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'deb-packaging-infra--compile-then-refresh)
+               (lambda (cmd &rest _) (setq command cmd))))
+      (deb-packaging-infra--apply-ppa-config
+       '("--displayname=Title" "--description=Details"
+         "--architectures=amd64,arm64"))
+      (should (equal command
+                     (concat "ppa -C /tmp/team-config.yaml set ppa\\:team/pkg"
+                             " --displayname Title --description Details"
+                             " --architectures amd64\\,arm64")))))
+
+)
+
+(ert-deftest deb-packaging-test-infra/set-ppa-config-opens-transient-with-record ()
+  (let ((record '(:address "ppa:team/pkg" :config-file "/tmp/team.yml"))
+        prefix params)
+    (cl-letf (((symbol-function 'transient-setup)
+               (lambda (name &optional _layout _edit &rest arguments)
+                 (setq prefix name params arguments))))
+      (deb-packaging-infra-set-ppa-config record))
+    (should (eq prefix 'deb-packaging-infra-ppa-config-transient))
+    (should (equal (plist-get params :scope) record))))
+
     (should-error (call-interactively #'deb-packaging-infra-show-ppa)
                   :type 'user-error)))
 

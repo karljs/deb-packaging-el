@@ -160,6 +160,8 @@ Return a plist with :triggers, :results, :running, :waiting."
   "Release filter of the current report buffer.")
 
 (defun deb-packaging-ppa-tests--buffer-name (ppa name distro)
+(defvar-local deb-packaging-ppa-tests--config-file nil)
+
   "Return the report buffer name for PPA/NAME/DISTRO.
 All three parameters key the buffer: a fetch is parameterized by them,
 so keying only on the PPA would clobber reports across packages."
@@ -392,7 +394,7 @@ trigger row there is no log; RET triggers the basic test instead."
 (defvar-local deb-packaging-ppa-tests--process nil
   "In-flight `ppa tests' process for this report buffer, or nil.")
 
-(defun deb-packaging-ppa-tests--fetch (ppa name distro)
+(defun deb-packaging-ppa-tests--fetch (ppa name distro &optional config-file)
   "Run `ppa tests' for PPA/NAME/DISTRO; render the report when done.
 A fetch already in flight for the report buffer is killed first, so two
 fetches cannot race to render."
@@ -406,9 +408,10 @@ fetches cannot race to render."
         (deb-packaging-ppa-tests-mode))
       (when (process-live-p deb-packaging-ppa-tests--process)
         (delete-process deb-packaging-ppa-tests--process))
-      (setq deb-packaging-ppa-tests--ppa ppa
-            deb-packaging-ppa-tests--package name
-            deb-packaging-ppa-tests--distro distro)
+       (setq deb-packaging-ppa-tests--ppa ppa
+             deb-packaging-ppa-tests--package name
+             deb-packaging-ppa-tests--distro distro
+             deb-packaging-ppa-tests--config-file config-file)
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (propertize (format "Fetching tests for %s...\n" ppa)
@@ -420,7 +423,10 @@ fetches cannot race to render."
         (let ((proc (make-process
                      :name "deb-ppa-tests"
                      :buffer out-buf
-                     :command (append (list "ppa" "tests" "-L" ppa)
+                     :command (append (list "ppa")
+                                      (when config-file
+                                        (list "-C" config-file))
+                                      (list "tests" "-L" ppa)
                                       (when name (list "-p" name))
                                       (list "-r" distro))
                      :sentinel
@@ -476,7 +482,8 @@ A killed process (a newer fetch replaced it) is ignored entirely."
   (deb-packaging-ppa-tests--fetch
    deb-packaging-ppa-tests--ppa
    deb-packaging-ppa-tests--package
-   deb-packaging-ppa-tests--distro))
+   deb-packaging-ppa-tests--distro
+   deb-packaging-ppa-tests--config-file))
 
 ;;;###autoload
 (defun deb-packaging-ppa-tests-show (&optional args)
@@ -492,8 +499,13 @@ one-off check must not clobber the per-package+distro default."
            (ppa (deb-packaging-commands--resolve-ppa effective-args))
            (distro (or (transient-arg-value "--dist=" effective-args)
                        (deb-packaging-config--effective-distro)))
-           (name (deb-packaging-detect--package-name pkg-dir)))
-      (deb-packaging-ppa-tests--fetch ppa name distro)
+            (name (deb-packaging-detect--package-name pkg-dir))
+            (config-file
+             (when (fboundp 'deb-packaging-infra--ppa-record-for-address)
+               (plist-get
+                (deb-packaging-infra--ppa-record-for-address ppa)
+                :config-file))))
+      (deb-packaging-ppa-tests--fetch ppa name distro config-file)
       (deb-packaging-display-buffer
        (deb-packaging-ppa-tests--buffer-name ppa name distro) 'report))))
 

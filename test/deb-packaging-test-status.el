@@ -364,6 +364,11 @@ PPA being unset must not gate the phase."
                 (should (string-match-p (regexp-quote label) text))))))))))
 
 (ert-deftest deb-packaging-test-status/open-output-uses-nearest-run-section ()
+(ert-deftest deb-packaging-test-status/ppa-build-row-opens-package-view ()
+  (should (eq (alist-get 'deb-packaging-ppa-builds
+                         deb-packaging-status--section-actions)
+              'deb-packaging-infra-show-ppa-package)))
+
   (deb-packaging-test--with-package-tree
       '(:name "foo" :version "1.2-3" :distro "noble")
     (let ((deb-packaging-commands--run-history nil)

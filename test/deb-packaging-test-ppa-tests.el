@@ -322,6 +322,16 @@ package's named status faces, not raw success/error."
 (ert-deftest deb-packaging-test-ppa-tests/fetch-done-failure-raw-dump ()
   "A failed fetch dumps the raw output and records :status 'failure."
   (let ((deb-packaging-commands--run-history nil)
+(ert-deftest deb-packaging-test-ppa-tests/fetch-command-keeps-team-config ()
+  (let (captured)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest props) (setq captured props) nil)))
+      (deb-packaging-ppa-tests--fetch
+       "ppa:team/x" "mypkg" "noble" "/tmp/team.yml"))
+    (should (equal (plist-get captured :command)
+                   '("ppa" "-C" "/tmp/team.yml" "tests" "-L"
+                     "ppa:team/x" "-p" "mypkg" "-r" "noble")))))
+
         (proc (make-symbol "proc")))
     (cl-letf (((symbol-function 'process-status) (lambda (_) 'exit))
               ((symbol-function 'process-exit-status) (lambda (_) 1)))
