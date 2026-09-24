@@ -16,6 +16,10 @@
 
 ;;; Code:
 
+(defgroup deb-packaging nil
+  "Debian and Ubuntu packaging workflows."
+  :group 'tools)
+
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)

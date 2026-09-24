@@ -19,10 +19,6 @@
 (require 'subr-x)
 (require 'deb-packaging-detect)
 
-(defgroup deb-packaging nil
-  "Debian and Ubuntu packaging workflows."
-  :group 'tools)
-
 ;;; Target distribution
 
 ;; One distro, from the changelog: it decides where an upload lands
