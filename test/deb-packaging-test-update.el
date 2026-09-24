@@ -223,10 +223,11 @@
       '(:name "foo" :version "1.0-1")
     (deb-packaging-test-update--init-repo pkg-dir)
     (deb-packaging-test-update--git pkg-dir "branch" "pristine-tar")
-    (should (string-match-p
-             (regexp-quote
-              "foo 1.0-1 (noble)\nDefault method: gbp (pristine-tar branch)")
-             (deb-packaging-update--transient-header)))))
+    (let ((header (deb-packaging-update--transient-header)))
+      (should (string-match-p "foo 1.0-1 | noble" header))
+      (should (string-match-p
+               (regexp-quote "Default method: gbp (pristine-tar branch)")
+               header)))))
 
 (provide 'deb-packaging-test-update)
 ;;; deb-packaging-test-update.el ends here

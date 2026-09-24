@@ -56,6 +56,31 @@ Used as :environment for the prefixes in this package."
          deb-packaging-transients-display-action))
     (funcall fn)))
 
+(defun deb-packaging-transients--context ()
+  "Return the current workspace context with its saved default PPA."
+  (when-let ((ctx (deb-packaging-detect--scan-context)))
+    (plist-put ctx :default-ppa
+               (deb-packaging-ppa-load
+                (plist-get ctx :name) (plist-get ctx :distro)))))
+
+(defun deb-packaging-transients--context-header ()
+  "Return a compact header for package operation transients."
+  (if-let ((ctx (deb-packaging-transients--context)))
+      (concat
+       (format "%s %s | %s | %s | %s"
+               (plist-get ctx :name)
+               (plist-get ctx :version)
+               (plist-get ctx :distro)
+               (or (plist-get ctx :host-arch) "unknown arch")
+               (if (plist-get ctx :git-p)
+                   (format "git: %s%s"
+                           (or (plist-get ctx :branch) "detached")
+                           (if (plist-get ctx :dirty-p) " (modified)" ""))
+                 "not a git repository"))
+       (when-let ((ppa (plist-get ctx :default-ppa)))
+         (format "\nPPA: %s" ppa)))
+    "No package context"))
+
 ;; Forward-declare command functions.
 (declare-function deb-packaging-commands-source-build "deb-packaging-commands")
 (declare-function deb-packaging-commands-export-orig "deb-packaging-commands")
@@ -87,6 +112,7 @@ dpkg-buildpackage arguments apply only to \"Build source\" (the
 lint-transient pattern)."
   :value '("-S" "-d" "-nc" "-sa" "-I" "-i")
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["dpkg-buildpackage arguments"
    ("-S" "Source build"            "-S")
    ("-d" "Skip build-dep check"    "-d")
@@ -237,6 +263,7 @@ Returns absolute paths, or nil when empty."
 The distro comes from the changelog."
   :value #'deb-packaging-transients--binary-default-value
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["Arguments"
    ("-A" "Build arch-all packages"  "-A")
    ("-v" "Verbose"                  "-v")
@@ -274,6 +301,7 @@ lintian inspects built artifacts; ubuntu-lint checks Ubuntu policy.
 Each action reads only its own flags."
   :value '("-i" "--tag-display-limit=0" "--context=changes" "--all=warn")
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["Lintian arguments"
    ("-i"  "Show informational tags"   "-i")
    ("-I"  "Pedantic (info+)"          "-I")
@@ -330,6 +358,7 @@ to \"PPA test report\" (the lint-transient pattern).  The test image's
 distro comes from the changelog."
   :value #'deb-packaging-transients--test-default-value
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["Local autopkgtest"
    ("-u"  "Upgrade packages before test"   "--apt-upgrade")
    ("-P"  "Use dependencies from proposed" "--apt-pocket=proposed")
@@ -368,6 +397,7 @@ distro comes from the changelog."
   "Upload to a Launchpad PPA with dput."
   :value #'deb-packaging-transients--upload-default-value
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["PPA"
    ("-p"  "PPA (required)"
     "--ppa="
@@ -387,6 +417,7 @@ distro comes from the changelog."
   "Remove build artifacts from the output directory."
   :value '("--stale")
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["What to remove"
    ("-a" "Current-version artifacts" "--artifacts")
    ("-S" "Stale artifacts (other versions)" "--stale")]
@@ -401,6 +432,7 @@ distro comes from the changelog."
   "Reset the source tree to a pristine state."
   :value '("--quilt" "--pc" "--files")
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["Reset source tree"
    ("-q" "Pop quilt patches"     "--quilt")
    ("-p" "Remove .pc/ directory" "--pc")
@@ -415,6 +447,7 @@ distro comes from the changelog."
 (transient-define-prefix deb-packaging-dev-transient ()
   "Develop upstream source in an LXD container with LSP."
   :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
   ["Dev shell"
    ("e" "Dev shell (C-u=reprovision)" deb-packaging-dev-shell)
    ("o" "Open existing container (dired)" deb-packaging-dev-open)

@@ -250,8 +250,8 @@ method chosen at the prompt (default detected from the tree):
             (info (deb-packaging-detect--parse-changelog pkg-dir)))
       (let* ((signal (deb-packaging-update--gbp-signal pkg-dir))
              (method (if signal "gbp" "uupdate")))
-        (format "New upstream version\n%s %s (%s)\nDefault method: %s%s"
-                (nth 0 info) (nth 1 info) (nth 2 info) method
+        (format "%s\n\nNew upstream version\nDefault method: %s%s"
+                (deb-packaging-transients--context-header) method
                 (if signal (format " (%s)" signal) "")))
     "New upstream version"))
 

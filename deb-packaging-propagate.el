@@ -688,11 +688,16 @@ last step of this workflow."
 
 ;;; Transient
 
+(defun deb-packaging-propagate--transient-header ()
+  "Return the propagate transient header."
+  (format "%s\n\nPropagate fixes across distros"
+          (deb-packaging-transients--context-header)))
+
 ;;;###autoload(autoload 'deb-packaging-propagate-transient "deb-packaging-propagate" nil t)
 (transient-define-prefix deb-packaging-propagate-transient ()
   "Propagate fixes to Debian and upstream."
   :environment #'deb-packaging-transients--env
-  [:description "Propagate fixes across distros"]
+  [:description deb-packaging-propagate--transient-header]
   ["Actions"
    ("e" "Export .patch (upstream)..."   deb-packaging-propagate-export-patch)
    ("d" "Prepare Debian clone (salsa)..." deb-packaging-propagate-clone)

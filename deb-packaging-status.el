@@ -56,10 +56,7 @@ Keys: :name :version :distro :pkg-dir :parent-dir :artifacts :stale
 (defun deb-packaging-status--collect-context ()
   "Gather fresh package context from `default-directory'.
 Return a plist, or nil outside a Debian package tree."
-  (when-let ((ctx (deb-packaging-detect--scan-context)))
-    (plist-put ctx :default-ppa
-               (deb-packaging-ppa-load
-                (plist-get ctx :name) (plist-get ctx :distro)))))
+  (deb-packaging-transients--context))
 
 ;;; Section -> action dispatch
 ;;

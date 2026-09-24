@@ -141,7 +141,8 @@ on the branch that were never exported are lost."
          (branch (plist-get state :branch))
          (on-pq (plist-get state :on-pq-p))
          (exists (plist-get state :exists-p)))
-    (format "gbp pq: patch queue\n%s"
+    (format "%s\n\ngbp pq: patch queue\n%s"
+            (deb-packaging-transients--context-header)
             (cond
              (on-pq
               (format "On patch-queue branch: %s\nExport when ready."

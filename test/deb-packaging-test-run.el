@@ -107,6 +107,13 @@ per record, not the first run's time forever."
                              :status)
                   'success)))))
 
+(ert-deftest deb-packaging-test-run/explicit-unscoped-key-ignores-ambient-package ()
+  (deb-packaging-test--with-package-tree
+      '(:name "foo" :version "1.0-1")
+    (should (eq (deb-packaging-commands--scoped-run-key
+                 'external deb-packaging-commands--unscoped)
+                'external))))
+
 (ert-deftest deb-packaging-test-run/older-run-cannot-overwrite-newer-run ()
   (let ((deb-packaging-commands--run-history nil)
         (old-id (make-symbol "old"))

@@ -220,8 +220,14 @@ runs in DIR, so package detection works from the buffer."
                                                    (get-buffer buf-name))
                                pkg-dir))
                 (should (equal (with-current-buffer buf-name
-                                 (deb-packaging-detect--find-package-dir))
-                               pkg-dir)))
+                                  (deb-packaging-detect--find-package-dir))
+                                pkg-dir))
+                (should (equal
+                         (plist-get
+                          (buffer-local-value 'deb-packaging-commands--context
+                                              (get-buffer buf-name))
+                          :name)
+                         "mypkg")))
             (kill-buffer buf-name)))))))
 
 (ert-deftest deb-packaging-test-display/run-command-buffer-dir-defaults-to-dir ()

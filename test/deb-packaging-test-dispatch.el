@@ -48,6 +48,16 @@
       (should (string-match-p "foo 1.2-3 | noble | arm64" header))
       (should (string-match-p "git: ubuntu/noble (modified)" header)))))
 
+(ert-deftest deb-packaging-test-dispatch/operation-header-shows-context-and-ppa ()
+  (cl-letf (((symbol-function 'deb-packaging-transients--context)
+             (lambda ()
+               '(:name "foo" :version "1.2-3" :distro "noble"
+                 :host-arch "arm64" :git-p t :branch "ubuntu/noble"
+                 :default-ppa "ppa:me/foo"))))
+    (let ((header (deb-packaging-transients--context-header)))
+      (should (string-match-p "foo 1.2-3 | noble | arm64" header))
+      (should (string-match-p "PPA: ppa:me/foo" header)))))
+
 ;;; Mnemonic consistency
 
 (defun deb-packaging-test-dispatch--layout (prefix)

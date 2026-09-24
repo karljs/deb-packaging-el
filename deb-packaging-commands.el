@@ -47,17 +47,26 @@
 Keys: :status (`running'/`success'/`failure'), :time, :buffer, :summary.
 Session-only.")
 
-(defun deb-packaging-commands--run-scope (&optional dir)
+(defvar-local deb-packaging-commands--context nil
+  "Workspace context captured when this operation started.")
+
+(defconst deb-packaging-commands--unscoped 'unscoped)
+
+(defun deb-packaging-commands--run-scope (&optional dir context)
   "Return the package and distro scope containing DIR, or nil."
-  (when-let ((pkg-dir (deb-packaging-detect--find-package-dir dir)))
-    (list (file-truename pkg-dir)
-          (nth 2 (deb-packaging-detect--parse-changelog pkg-dir)))))
+  (if context
+      (list (plist-get context :pkg-dir) (plist-get context :distro))
+    (when-let ((pkg-dir (deb-packaging-detect--find-package-dir dir)))
+      (list (file-truename pkg-dir)
+            (nth 2 (deb-packaging-detect--parse-changelog pkg-dir))))))
 
 (defun deb-packaging-commands--scoped-run-key (key &optional scope)
   "Return KEY namespaced to package SCOPE when available."
-  (if-let ((pkg-dir (or scope (deb-packaging-commands--run-scope))))
-      (cons pkg-dir key)
-    key))
+  (if (eq scope deb-packaging-commands--unscoped)
+      key
+    (if-let ((pkg-dir (or scope (deb-packaging-commands--run-scope))))
+        (cons pkg-dir key)
+      key)))
 
 (defun deb-packaging-commands--record-run (key status buf-name &optional summary scope run-id)
   "Store a run record for KEY with STATUS, BUF-NAME, and optional SUMMARY.
@@ -197,7 +206,10 @@ the package tree when the process itself must run in the parent build dir."
   (let* ((timestamp (format-time-string "%H:%M:%S"))
          (buf-name (generate-new-buffer-name
                     (format "*deb-%s-%s*" name timestamp)))
-         (scope (deb-packaging-commands--run-scope (or buffer-dir dir)))
+         (context (deb-packaging-detect--scan-context (or buffer-dir dir)))
+         (scope (if context
+                    (deb-packaging-commands--run-scope nil context)
+                  deb-packaging-commands--unscoped))
          (run-id (make-symbol "deb-run"))
          (cmd (mapconcat #'shell-quote-argument args " ")))
     ;; Bind `default-directory' only around `make-comint-in-buffer'.  A leaked
@@ -209,7 +221,8 @@ the package tree when the process itself must run in the parent build dir."
     (with-current-buffer buf-name
       (when-let ((buf-dir (or buffer-dir dir)))
         (setq default-directory buf-dir))
-      (setq deb-packaging-display-category 'output)
+      (setq deb-packaging-display-category 'output
+            deb-packaging-commands--context context)
       (add-hook 'comint-preoutput-filter-functions
                 #'deb-packaging-commands--filter-osc-sequences nil t)
       (add-hook 'comint-output-filter-functions
@@ -218,6 +231,7 @@ the package tree when the process itself must run in the parent build dir."
       (deb-packaging-commands--record-run
        key 'running buf-name nil scope run-id)
       (when-let* ((proc (get-buffer-process buf-name)))
+        (process-put proc 'deb-packaging-context context)
         (deb-packaging-commands--attach-run-sentinel
          proc key buf-name scope run-id))
       (deb-packaging-commands--notify-status-refresh))
@@ -259,7 +273,8 @@ runs neither, so the affected row may need a manual refresh."
 No save-buffer prompts, each run gets a separate buffer, and the window
 follows the package display policy.  Returns the compilation buffer
 (nil under mocks)."
-  (let ((compilation-ask-about-save nil)
+  (let ((context (deb-packaging-detect--scan-context))
+        (compilation-ask-about-save nil)
         (compilation-always-kill nil)
         (compilation-buffer-name-function
          (lambda (_mode)
@@ -269,7 +284,10 @@ follows the package display policy.  Returns the compilation buffer
     (let ((buf (compile cmd)))
       (when (buffer-live-p buf)
         (with-current-buffer buf
-          (setq deb-packaging-display-category 'output)))
+          (setq deb-packaging-display-category 'output
+                deb-packaging-commands--context context)
+          (when-let ((proc (get-buffer-process buf)))
+            (process-put proc 'deb-packaging-context context))))
       buf)))
 
 (defun deb-packaging-commands-kill-output-buffers ()

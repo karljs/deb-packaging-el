@@ -697,6 +697,19 @@ default would duplicate them (or break Debian builds)."
   (cl-letf (((symbol-function 'compile) (lambda (&rest _) nil)))
     (should (null (deb-packaging-commands--compile "make foo")))))
 
+(ert-deftest deb-packaging-test-commands/compile-wrapper-captures-context ()
+  (let ((context '(:name "foo" :distro "noble")))
+    (cl-letf (((symbol-function 'deb-packaging-detect--scan-context)
+               (lambda (&rest _) context))
+              ((symbol-function 'compile)
+               (lambda (&rest _) (get-buffer-create "*deb-context-compile*"))))
+      (let ((buf (deb-packaging-commands--compile "make foo")))
+        (unwind-protect
+            (should (eq
+                     (buffer-local-value 'deb-packaging-commands--context buf)
+                     context))
+          (kill-buffer buf))))))
+
 (ert-deftest deb-packaging-test-commands/compile-wrapper-uses-unique-buffers ()
   (let (buffers)
     (unwind-protect
