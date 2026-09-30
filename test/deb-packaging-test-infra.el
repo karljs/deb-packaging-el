@@ -150,13 +150,14 @@ Return the report buffer once its sentinel has fired."
               ((symbol-function 'deb-packaging-display-buffer) #'ignore)
               ((symbol-function 'deb-packaging-commands--package-context)
                (lambda (&rest _) '(:name "foo" :distro "noble"
-                                   :target-arch "arm64"
-                                   :default-ppa "ppa:team/foo")))
+                                   :target-arch "arm64")))
+              ((symbol-function 'deb-packaging-ppa-load)
+               (lambda (&rest _) "ppa:team/foo"))
               ((symbol-function 'deb-packaging-infra--list-ppa-records)
                (lambda () '((:address "ppa:team/foo"
                              :config-file "/tmp/team.yml"))))
               ((symbol-function 'read-string)
-               (lambda (_prompt &optional _initial _history default) default)))
+               (lambda (&rest _) (error "must not prompt"))))
       (deb-packaging-infra-show-ppa-package)
       (unwind-protect
           (progn

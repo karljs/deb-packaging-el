@@ -43,8 +43,8 @@ display behavior, and dev-container settings.
 
 Visit a source tree containing `debian/changelog`, then run
 `M-x deb-packaging-status`. The status buffer shows the package name, changelog
-distribution, target architecture, repository branch, and available build,
-verification, publish, and workspace actions.
+distribution, target architecture, repository branch, and local and Launchpad
+actions.
 
 Common keys:
 
@@ -58,14 +58,25 @@ The main command hub is `M-x deb-packaging-dispatch`.
 
 ## Build and verify
 
-- Source packages: `Source build...` in the command hub.
-- Native working-tree binaries: `Working-tree binary build` runs
-  `dpkg-buildpackage -b` without first creating a source package.
-- Chroot builds: `sbuild binary build...`. The target architecture is saved
-  per package and distribution. Use sbuild for cross-architecture builds.
-- Local tests: `Autopkgtest...`. LXD and QEMU images are selected by
-  distribution and target architecture.
-- Lint: `Lint...` runs Lintian and Ubuntu policy checks.
+The status buffer has two groups. **Local**: Source package (`s`), Binaries
+(`b`), Lint (`l`), Autopkgtest (`t`). **Launchpad**: Upload (`U`), Builds
+(`B`), Tests (`T`). The header shows the PPA, plus stale files, patch queue,
+and dev container when relevant.
+
+- Source package: `--builder=` picks `dpkg-buildpackage` (default) or `gbp`
+  (`gbp buildpackage -S`). Orig tarball actions (git-ubuntu, gbp) live in the
+  same menu for non-native packages.
+- Binaries: `--builder=` picks `sbuild` (default), `dpkg-buildpackage -b`, or
+  `gbp buildpackage -b`. Only sbuild builds for a non-host architecture. The
+  target architecture is saved per package and distribution. Save a builder
+  choice with `C-x s` in the menu.
+- Autopkgtest: LXD and QEMU images are selected by distribution and target
+  architecture.
+- Lint: `lintian` checks the source package and binaries against Debian
+  policy; `ubuntu-lint` checks Ubuntu upload rules (changelog, maintainer, bug
+  references). `RET` on a Lint row opens that tool's menu; `l` opens both.
+- Menu actions whose inputs or tools are missing are greyed out with the
+  reason, matching the status buffer's `blocked` rows.
 
 Artifacts and operation output are available from the status buffer. The `o`
 key reopens the latest output for tracked operations.
@@ -76,8 +87,8 @@ Typical source-to-PPA flow:
 2. Build a source package, then build binaries with sbuild.
 3. Run lint and autopkgtest.
 4. Press `U`, select a PPA, and upload the source `.changes` file.
-5. Open `PPA builds` from status to inspect Launchpad acceptance and builds.
-6. Open the PPA test report to view logs or trigger another test run.
+5. Open Launchpad `Builds` from status to inspect acceptance and builds.
+6. Open Launchpad `Tests` to view logs or trigger another test run.
 
 ## Git workflows
 

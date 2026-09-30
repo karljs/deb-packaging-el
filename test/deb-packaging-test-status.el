@@ -24,6 +24,12 @@
 
 ;;; Phase state
 
+(defmacro deb-packaging-test-status--with-tools (&rest body)
+  "Run BODY as if every external tool were installed."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'executable-find) (lambda (&rest _) t)))
+     ,@body))
+
 (ert-deftest deb-packaging-test-status/phase-state-running-wins-over-done-and-ready ()
   (let ((deb-packaging-commands--run-history nil))
     (deb-packaging-commands--record-run 'source-build 'running nil)
@@ -32,9 +38,9 @@
 
 (ert-deftest deb-packaging-test-status/phase-state-failure-wins-over-done-and-ready ()
   (let ((deb-packaging-commands--run-history nil))
-    (deb-packaging-commands--record-run 'sbuild 'failure nil)
-    (should (eq (deb-packaging-status--phase-state 'sbuild t t) 'failed))
-    (should (eq (deb-packaging-status--phase-state 'sbuild t nil) 'failed))))
+    (deb-packaging-commands--record-run 'binary-build 'failure nil)
+    (should (eq (deb-packaging-status--phase-state 'binary-build t t) 'failed))
+    (should (eq (deb-packaging-status--phase-state 'binary-build t nil) 'failed))))
 
 (ert-deftest deb-packaging-test-status/phase-state-done-via-artifacts ()
   (let ((deb-packaging-commands--run-history nil))
@@ -49,11 +55,11 @@
 (ert-deftest deb-packaging-test-status/phase-state-ready-when-not-done ()
   (let ((deb-packaging-commands--run-history nil))
     (should (eq (deb-packaging-status--phase-state 'dput nil t) 'ready))
-    (should (eq (deb-packaging-status--phase-state 'sbuild nil t) 'ready))))
+    (should (eq (deb-packaging-status--phase-state 'binary-build nil t) 'ready))))
 
 (ert-deftest deb-packaging-test-status/phase-state-blocked-when-not-ready ()
   (let ((deb-packaging-commands--run-history nil))
-    (should (eq (deb-packaging-status--phase-state 'sbuild nil nil) 'blocked))
+    (should (eq (deb-packaging-status--phase-state 'binary-build nil nil) 'blocked))
     (should (eq (deb-packaging-status--phase-state 'autopkgtest nil nil) 'blocked))))
 
 (ert-deftest deb-packaging-test-status/phase-state-keep-ready-preserves-ready-after-success ()
@@ -65,19 +71,19 @@
 ;;; Hide phase decision
 
 (ert-deftest deb-packaging-test-status/hide-phase-failed-expand ()
-  (should-not (deb-packaging-status--hide-phase-p 'failed 'sbuild 'source-build)))
+  (should-not (deb-packaging-status--hide-phase-p 'failed 'binary-build 'source-build)))
 
 (ert-deftest deb-packaging-test-status/hide-phase-running-expand ()
-  (should-not (deb-packaging-status--hide-phase-p 'running 'sbuild 'source-build)))
+  (should-not (deb-packaging-status--hide-phase-p 'running 'binary-build 'source-build)))
 
 (ert-deftest deb-packaging-test-status/hide-phase-next-actionable-expand ()
-  (should-not (deb-packaging-status--hide-phase-p 'ready 'sbuild 'sbuild))
+  (should-not (deb-packaging-status--hide-phase-p 'ready 'binary-build 'binary-build))
   (should-not (deb-packaging-status--hide-phase-p 'blocked 'source-build 'source-build)))
 
 (ert-deftest deb-packaging-test-status/hide-phase-others-collapse ()
-  (should (deb-packaging-status--hide-phase-p 'ready 'source-build 'sbuild))
-  (should (deb-packaging-status--hide-phase-p 'done 'source-build 'sbuild))
-  (should (deb-packaging-status--hide-phase-p 'blocked 'sbuild 'autopkgtest)))
+  (should (deb-packaging-status--hide-phase-p 'ready 'source-build 'binary-build))
+  (should (deb-packaging-status--hide-phase-p 'done 'source-build 'binary-build))
+  (should (deb-packaging-status--hide-phase-p 'blocked 'binary-build 'autopkgtest)))
 
 ;;; Next actionable key
 
@@ -98,140 +104,169 @@
   (should (deb-packaging-status--source-ready-p (list :artifacts nil))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-source-build-ready ()
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . nil) (source-changes . nil)
-                (binary-changes . nil) (debs . nil)))))
-    (should (eq (deb-packaging-status--next-actionable-key ctx) 'source-build))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . nil) (source-changes . nil)
+                  (binary-changes . nil) (debs . nil)))))
+      (should (eq (deb-packaging-status--next-actionable-key ctx) 'source-build)))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-sbuild-ready ()
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . "foo_1.2-3.dsc")
-                (source-changes . "foo_1.2-3_source.changes")
-                (binary-changes . nil) (debs . nil)))))
-    (should (eq (deb-packaging-status--next-actionable-key ctx) 'sbuild))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . "foo_1.2-3.dsc")
+                  (source-changes . "foo_1.2-3_source.changes")
+                  (binary-changes . nil) (debs . nil)))))
+      (should (eq (deb-packaging-status--next-actionable-key ctx) 'binary-build)))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-autopkgtest-ready ()
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . "foo_1.2-3.dsc")
-                (source-changes . "foo_1.2-3_source.changes")
-                (binary-changes . "foo_1.2-3_amd64.changes")
-                (debs . ("foo_1.2-3_amd64.deb"))))))
-    (should (eq (deb-packaging-status--next-actionable-key ctx) 'autopkgtest))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . "foo_1.2-3.dsc")
+                  (source-changes . "foo_1.2-3_source.changes")
+                  (binary-changes . "foo_1.2-3_amd64.changes")
+                  (debs . ("foo_1.2-3_amd64.deb"))))))
+      (should (eq (deb-packaging-status--next-actionable-key ctx) 'autopkgtest)))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-dput-when-all-done ()
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . "foo_1.2-3.dsc")
-                (source-changes . "foo_1.2-3_source.changes")
-                (binary-changes . "foo_1.2-3_amd64.changes")
-                (debs . ("foo_1.2-3_amd64.deb"))))))
-    ;; Mark autopkgtest complete so dput becomes the first ready phase.
-    (deb-packaging-commands--record-run 'autopkgtest 'success nil)
-    (should (eq (deb-packaging-status--next-actionable-key ctx) 'dput))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . "foo_1.2-3.dsc")
+                  (source-changes . "foo_1.2-3_source.changes")
+                  (binary-changes . "foo_1.2-3_amd64.changes")
+                  (debs . ("foo_1.2-3_amd64.deb"))))))
+      ;; Mark autopkgtest complete so dput becomes the first ready phase.
+      (deb-packaging-commands--record-run 'autopkgtest 'success nil)
+      (should (eq (deb-packaging-status--next-actionable-key ctx) 'dput)))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-nil-when-all-done ()
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . "foo_1.2-3.dsc")
-                (source-changes . "foo_1.2-3_source.changes")
-                (binary-changes . "foo_1.2-3_amd64.changes")
-                (debs . ("foo_1.2-3_amd64.deb"))))))
-    (deb-packaging-commands--record-run 'autopkgtest 'success nil)
-    (deb-packaging-commands--record-run 'dput 'success nil)
-    (should-not (deb-packaging-status--next-actionable-key ctx))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . "foo_1.2-3.dsc")
+                  (source-changes . "foo_1.2-3_source.changes")
+                  (binary-changes . "foo_1.2-3_amd64.changes")
+                  (debs . ("foo_1.2-3_amd64.deb"))))))
+      (deb-packaging-commands--record-run 'autopkgtest 'success nil)
+      (deb-packaging-commands--record-run 'dput 'success nil)
+      (should-not (deb-packaging-status--next-actionable-key ctx)))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-source-blocked-missing-orig ()
-  ;; Non-native with no orig tarball: source is blocked, and with no
-  ;; artifacts at all dput is blocked too (nothing to upload), so no
-  ;; phase is actionable.
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (append (deb-packaging-test-status--ctx
-                      '((dsc . nil) (source-changes . nil)
-                        (binary-changes . nil) (debs . nil)))
-                     (list :version "1.2-3" :orig-tarball nil))))
-    (should-not (deb-packaging-status--next-actionable-key ctx))))
+  (deb-packaging-test-status--with-tools
+    ;; Non-native with no orig tarball: source is blocked, and with no
+    ;; artifacts at all dput is blocked too (nothing to upload), so no
+    ;; phase is actionable.
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (append (deb-packaging-test-status--ctx
+                        '((dsc . nil) (source-changes . nil)
+                          (binary-changes . nil) (debs . nil)))
+                       (list :version "1.2-3" :orig-tarball nil))))
+      (should-not (deb-packaging-status--next-actionable-key ctx)))))
 
 (ert-deftest deb-packaging-test-status/next-actionable-key-running-not-ready ()
-  ;; source-build is running and nothing else is ready: dput stays
-  ;; blocked until a source .changes exists.
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . nil) (source-changes . nil)
-                (binary-changes . nil) (debs . nil)))))
-    (deb-packaging-commands--record-run 'source-build 'running nil)
-    (should-not (deb-packaging-status--next-actionable-key ctx))))
+  (deb-packaging-test-status--with-tools
+    ;; source-build is running and nothing else is ready: dput stays
+    ;; blocked until a source .changes exists.
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . nil) (source-changes . nil)
+                  (binary-changes . nil) (debs . nil)))))
+      (deb-packaging-commands--record-run 'source-build 'running nil)
+      (should-not (deb-packaging-status--next-actionable-key ctx)))))
 
 (ert-deftest deb-packaging-test-status/upload-ready-only-with-source-changes ()
-  "dput is blocked without a source .changes and ready with one; the
-PPA being unset must not gate the phase."
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . "foo_1.2-3.dsc")
-                (source-changes . "foo_1.2-3_source.changes")
-                (binary-changes . nil) (debs . nil)))))
-    (should (eq (alist-get 'dput (deb-packaging-status--phase-states ctx))
-                'ready)))
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . nil) (source-changes . nil)
-                (binary-changes . nil) (debs . nil)))))
-    (should (eq (alist-get 'dput (deb-packaging-status--phase-states ctx))
-                'blocked))))
+  (deb-packaging-test-status--with-tools
+    "dput is blocked without a source .changes and ready with one; the
+  PPA being unset must not gate the phase."
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . "foo_1.2-3.dsc")
+                  (source-changes . "foo_1.2-3_source.changes")
+                  (binary-changes . nil) (debs . nil)))))
+      (should (eq (alist-get 'dput (deb-packaging-status--phase-states ctx))
+                  'ready)))
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . nil) (source-changes . nil)
+                  (binary-changes . nil) (debs . nil)))))
+      (should (eq (alist-get 'dput (deb-packaging-status--phase-states ctx))
+                  'blocked)))))
 
 ;;; Lint rollup state
 
 (ert-deftest deb-packaging-test-status/lint-rollup-failed-wins ()
-  (let ((deb-packaging-commands--run-history nil))
-    (deb-packaging-commands--record-run 'lintian-source 'failure nil)
-    (let ((ctx (deb-packaging-test-status--ctx
-                '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
-      (should (eq (deb-packaging-status--lint-rollup-state ctx) 'failed)))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil))
+      (deb-packaging-commands--record-run 'lintian-source 'failure nil)
+      (let ((ctx (deb-packaging-test-status--ctx
+                  '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
+        (should (eq (deb-packaging-status--lint-rollup-state ctx) 'failed))))))
 
 (ert-deftest deb-packaging-test-status/lint-rollup-running-when-no-failed ()
-  (let ((deb-packaging-commands--run-history nil))
-    (deb-packaging-commands--record-run 'lintian-binary 'running nil)
-    (let ((ctx (deb-packaging-test-status--ctx
-                '((dsc . nil) (debs . ("foo_1.2-3_amd64.deb"))))))
-      (should (eq (deb-packaging-status--lint-rollup-state ctx) 'running)))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil))
+      (deb-packaging-commands--record-run 'lintian-binary 'running nil)
+      (let ((ctx (deb-packaging-test-status--ctx
+                  '((dsc . nil) (debs . ("foo_1.2-3_amd64.deb"))))))
+        (should (eq (deb-packaging-status--lint-rollup-state ctx) 'running))))))
 
 (ert-deftest deb-packaging-test-status/lint-rollup-ready-by-default ()
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . nil) (debs . nil)))))
-    ;; ubuntu-lint is always ready, so rollup is ready, not blocked.
-    (should (eq (deb-packaging-status--lint-rollup-state ctx) 'ready))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . nil) (debs . nil)))))
+      ;; ubuntu-lint needs no artifacts, so rollup is ready, not blocked.
+      (should (eq (deb-packaging-status--lint-rollup-state ctx) 'ready)))))
+
+(ert-deftest deb-packaging-test-status/lint-rollup-blocked-without-tools ()
+  (cl-letf (((symbol-function 'executable-find) #'ignore))
+    (let ((deb-packaging-commands--run-history nil))
+      (should (eq (deb-packaging-status--lint-rollup-state
+                   (deb-packaging-test-status--ctx '((dsc . "foo.dsc"))))
+                  'blocked)))))
+
+(ert-deftest deb-packaging-test-status/blockers-name-missing-tool ()
+  (cl-letf (((symbol-function 'executable-find) #'ignore))
+    (let ((blockers (deb-packaging-status--blockers
+                     (deb-packaging-test-status--ctx '((dsc . "foo.dsc"))))))
+      (should (equal (alist-get 'binary-build blockers) "sbuild is not installed"))
+      (should (equal (alist-get 'dput blockers) "dput is not installed")))))
 
 (ert-deftest deb-packaging-test-status/lint-rollup-ready-with-success-on-source ()
-  (let ((deb-packaging-commands--run-history nil))
-    (deb-packaging-commands--record-run 'lintian-source 'success nil)
-    (let ((ctx (deb-packaging-test-status--ctx
-                '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
-      (should (eq (deb-packaging-status--lint-rollup-state ctx) 'ready)))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil))
+      (deb-packaging-commands--record-run 'lintian-source 'success nil)
+      (let ((ctx (deb-packaging-test-status--ctx
+                  '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
+        (should (eq (deb-packaging-status--lint-rollup-state ctx) 'ready))))))
 
 ;;; Lint hide decision
 
 (ert-deftest deb-packaging-test-status/lint-hide-failed-expand ()
-  (let ((deb-packaging-commands--run-history nil))
-    (deb-packaging-commands--record-run 'lintian-source 'failure nil)
-    (let ((ctx (deb-packaging-test-status--ctx
-                '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
-      (should-not (deb-packaging-status--lint-hide-p ctx)))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil))
+      (deb-packaging-commands--record-run 'lintian-source 'failure nil)
+      (let ((ctx (deb-packaging-test-status--ctx
+                  '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
+        (should-not (deb-packaging-status--lint-hide-p ctx))))))
 
 (ert-deftest deb-packaging-test-status/lint-hide-running-expand ()
-  (let ((deb-packaging-commands--run-history nil))
-    (deb-packaging-commands--record-run 'ubuntu-lint 'running nil)
-    (let ((ctx (deb-packaging-test-status--ctx
-                '((dsc . nil) (debs . nil)))))
-      (should-not (deb-packaging-status--lint-hide-p ctx)))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil))
+      (deb-packaging-commands--record-run 'ubuntu-lint 'running nil)
+      (let ((ctx (deb-packaging-test-status--ctx
+                  '((dsc . nil) (debs . nil)))))
+        (should-not (deb-packaging-status--lint-hide-p ctx))))))
 
 (ert-deftest deb-packaging-test-status/lint-hide-ready-collapse ()
-  (let ((deb-packaging-commands--run-history nil)
-        (ctx (deb-packaging-test-status--ctx
-              '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
-    (should (deb-packaging-status--lint-hide-p ctx))))
+  (deb-packaging-test-status--with-tools
+    (let ((deb-packaging-commands--run-history nil)
+          (ctx (deb-packaging-test-status--ctx
+                '((dsc . "foo_1.2-3.dsc") (debs . nil)))))
+      (should (deb-packaging-status--lint-hide-p ctx)))))
 
 ;;; Stale artifact grouping
 
@@ -310,7 +345,7 @@ PPA being unset must not gate the phase."
   (let ((deb-packaging-commands--run-history nil))
     (should (null (deb-packaging-status--kept-session-note)))
     (deb-packaging-commands--record-run
-     'sbuild 'failure "*buf*" '(:kept-session "sess-1"))
+     'binary-build 'failure "*buf*" '(:kept-session "sess-1"))
     (should (string-match-p
              "sess-1" (deb-packaging-status--kept-session-note)))))
 
@@ -330,7 +365,7 @@ PPA being unset must not gate the phase."
 (ert-deftest deb-packaging-test-status/ppa-tests-summary-note ()
   "Counts from the last ppa-tests run summary, empty without one."
   (let ((deb-packaging-commands--run-history nil))
-    (should (equal (deb-packaging-status--ppa-tests-summary-note) ""))
+    (should-not (deb-packaging-status--ppa-tests-summary-note))
     (deb-packaging-commands--record-run
      'ppa-tests 'success nil (list :pass 3 :fail 1 :bad 0))
     (should (string-match-p "3 passed" (deb-packaging-status--ppa-tests-summary-note)))
@@ -357,12 +392,46 @@ PPA being unset must not gate the phase."
             (setq default-directory pkg-dir)
             (deb-packaging-status--render)
             (let ((text (buffer-string)))
-             (dolist (label '("Build" "Verify" "Publish" "Workspace"
-                               "Local autopkgtest" "PPA autopkgtest"
-                               "Local binary build" "PPA builds"
-                              "gbp buildpackage"
-                              "Upload submitted"))
-                (should (string-match-p (regexp-quote label) text))))))))))
+              (dolist (label '("Local" "Launchpad" "Source package" "Binaries"
+                               "Lint" "Autopkgtest" "Upload" "Builds" "Tests"
+                               "submitted"))
+                (should (string-match-p (regexp-quote label) text)))
+              (dolist (label '("Verify" "Publish" "Workspace" "gbp buildpackage"
+                               "Local binary build"))
+                (should-not (string-match-p (regexp-quote label) text))))))))))
+
+(ert-deftest deb-packaging-test-status/row-labels-never-touch-status-words ()
+  "regression: labels longer than the column ran into the status word."
+  (let ((heading (deb-packaging-status--row-heading
+                  (make-string 40 ?x) 'ready 'nope nil 4)))
+    (should (string-match-p "x  ready" (substring-no-properties heading)))))
+
+(ert-deftest deb-packaging-test-status/rendered-rows-align ()
+  (deb-packaging-test--with-package-tree
+      '(:name "foo" :version "1.2-3" :distro "noble")
+    (deb-packaging-test--with-mocked-process
+        '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
+      (cl-letf (((symbol-function 'deb-packaging-dev--list-containers)
+                 (lambda (&rest _) nil)))
+        (with-temp-buffer
+          (deb-packaging-status-mode)
+          (setq default-directory pkg-dir)
+          (deb-packaging-status--render)
+          (goto-char (point-min))
+          (let (columns)
+            (while (re-search-forward
+                    "^ +[A-Z][A-Za-z ]+?  +\\(ready\\|blocked\\|done\\|failed\\|running\\|submitted\\)"
+                    nil t)
+              (push (- (match-beginning 1) (line-beginning-position)) columns))
+            (should (> (length columns) 6))
+            (should (= (length (delete-dups columns)) 1))))))))
+
+(ert-deftest deb-packaging-test-status/lint-rows-open-their-own-tool-menu ()
+  (dolist (pair '((deb-packaging-commands-lintian-source . deb-packaging-lintian-transient)
+                  (deb-packaging-commands-lintian-binary . deb-packaging-lintian-transient)
+                  (deb-packaging-commands-ubuntu-lint . deb-packaging-ubuntu-lint-transient)))
+    (should (eq (alist-get (car pair) deb-packaging-status--section-actions)
+                (cdr pair)))))
 
 (ert-deftest deb-packaging-test-status/ppa-build-row-opens-package-view ()
   (should (eq (alist-get 'deb-packaging-ppa-builds
@@ -380,7 +449,7 @@ PPA being unset must not gate the phase."
             (with-current-buffer output
               (setq deb-packaging-display-category 'output))
             (deb-packaging-commands--record-run
-             'sbuild 'success (buffer-name output))
+             'binary-build 'success (buffer-name output))
             (deb-packaging-test--with-mocked-process
                 '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
               (cl-letf (((symbol-function 'deb-packaging-dev--list-containers)
@@ -395,8 +464,8 @@ PPA being unset must not gate the phase."
                    (deb-packaging-status--render)
                    (goto-char (point-min))
                    (let ((case-fold-search nil))
-                     (search-forward "Binary build"))
-                  (should (eq (deb-packaging-status--run-key-at-point) 'sbuild))
+                     (search-forward "Binaries"))
+                  (should (eq (deb-packaging-status--run-key-at-point) 'binary-build))
                   (deb-packaging-status-open-output)
                    (should (eq displayed output))))))
         (when (buffer-live-p output) (kill-buffer output))))))
@@ -421,7 +490,7 @@ PPA being unset must not gate the phase."
      '(:name "foo" :version "1.2-3" :distro "noble"
        :pkg-dir "/tmp/foo/" :repo-dir "/tmp/foo/" :branch "main"
        :dirty-p t :host-arch "arm64" :target-arch "arm64"))
-    (should (string-match-p "noble | arm64 | git | main | modified"
+    (should (string-match-p "noble | arm64 | main (modified)"
                             (buffer-string)))))
 
 (ert-deftest deb-packaging-test-status/status-prompts-outside-package ()
@@ -501,7 +570,7 @@ PPA being unset must not gate the phase."
       (unwind-protect
           (with-current-buffer displayed
             (goto-char (point-min))
-            (should (search-forward "Source build" nil t))
+            (should (search-forward "Source package" nil t))
             ;; Arch row absent (nil arch), not a crash.
             (should (string= (plist-get deb-packaging-status--context :name)
                              "foo")))
@@ -531,7 +600,7 @@ next actionable phase and renders expanded."
                 (deb-packaging-status)))
             (with-current-buffer displayed
               (goto-char (point-min))
-              (should (search-forward "Extra repos: none" nil t)))
+              (should (re-search-forward "Extra repos: +none" nil t)))
             ;; Saved entries replace the default in the row.
             (deb-packaging-repos-save "foo" "noble" '("ppa:me/x"))
             (deb-packaging-test--with-mocked-process
@@ -543,8 +612,8 @@ next actionable phase and renders expanded."
                 (deb-packaging-status)))
             (with-current-buffer displayed
               (goto-char (point-min))
-              (should (search-forward "Extra repos: ppa:me/x" nil t))
-              (should-not (search-forward "Extra repos: none" nil t))))
+              (should (re-search-forward "Extra repos: +ppa:me/x" nil t))
+              (should-not (re-search-forward "Extra repos: +none" nil t))))
         (when (buffer-live-p displayed) (kill-buffer displayed))
         (delete-directory tmp t)))))
 
@@ -606,7 +675,7 @@ phase transient.  Source-build failed so the section renders expanded."
       (unwind-protect
           (with-current-buffer displayed
             (goto-char (point-min))
-            (search-forward "Source build")
+            (search-forward "Source package")
             (cl-letf (((symbol-function 'call-interactively)
                        (lambda (cmd &rest _) (setq called cmd))))
               (deb-packaging-status-visit))
@@ -635,7 +704,7 @@ phase transient.  Source-build failed so the section renders expanded."
       (unwind-protect
           (with-current-buffer displayed
             (goto-char (point-min))
-            (search-forward "missing: autopkgtest/ubuntu/noble/amd64")
+            (search-forward "autopkgtest/ubuntu/noble/amd64 missing")
             ;; Point sits just past the match; the last matched char
             ;; carries the face.
             (should (eq (get-text-property (1- (point)) 'font-lock-face)

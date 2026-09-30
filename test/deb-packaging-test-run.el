@@ -157,7 +157,7 @@ per record, not the first run's time forever."
   (should (null (deb-packaging-commands--run-summary-parser 'source-build))))
 
 (ert-deftest deb-packaging-test-run/run-summary-parser-sbuild ()
-  (should (eq (deb-packaging-commands--run-summary-parser 'sbuild)
+  (should (eq (deb-packaging-commands--run-summary-parser 'binary-build)
               #'deb-packaging-commands--parse-sbuild-summary)))
 
 (ert-deftest deb-packaging-test-run/wrap-sentinel-runs-action-on-exit ()

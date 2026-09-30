@@ -16,10 +16,21 @@
 (require 'deb-packaging-transients)
 (require 'deb-packaging-repos)
 (require 'deb-packaging-ppa)
+(require 'deb-packaging-ppa-tests)
 
-;;; deb-packaging-commands--filter-args
+;;; Builders
 
-(ert-deftest deb-packaging-test-commands/gbp-build-uses-repo-and-configured-export-dir ()
+(ert-deftest deb-packaging-test-commands/source-build-dpkg-drops-gbp-flags ()
+  (deb-packaging-test--with-package-tree
+      '(:name "foo" :version "1.0" :distro "noble")
+    (let (args)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name command &rest _) (setq args command) nil)))
+        (deb-packaging-commands-source-build
+         '("--builder=dpkg-buildpackage" "-d" "--git-ignore-new")))
+      (should (equal args '("dpkg-buildpackage" "-S" "-d"))))))
+
+(ert-deftest deb-packaging-test-commands/gbp-source-build-uses-repo-and-configured-export-dir ()
   (deb-packaging-test--with-temp-git-repo
     (deb-packaging-test--build-tree
      repo-dir (file-name-directory (directory-file-name repo-dir))
@@ -46,12 +57,11 @@
                    "*gbp-test*"))
                 ((symbol-function 'deb-packaging-commands--set-run-artifact-dir)
                  (lambda (_key _buffer path) (setq artifact-dir path))))
-        (deb-packaging-commands-gbp-build
-         '("--git-ignore-new" "--git-builder=sbuild")))
-      (should (equal args '("gbp" "buildpackage" "--git-ignore-new"
-                            "--git-builder=sbuild")))
+        (deb-packaging-commands-source-build
+         '("--builder=gbp" "-d" "--git-ignore-new")))
+      (should (equal args '("gbp" "buildpackage" "--git-ignore-new" "-S" "-d")))
       (should (equal (car captured) repo-dir))
-      (should (eq (cadr captured) 'gbp-build))
+      (should (eq (cadr captured) 'source-build))
       (should (equal (caddr captured) repo-dir))
       (should (equal artifact-dir (expand-file-name "build-area" repo-dir))))))
 
@@ -100,11 +110,13 @@
   (should (equal (deb-packaging-commands--filter-args
                   '("-i" "-I" "--foo")
                   deb-packaging-commands--lintian-arg-prefixes)
-                 '("-i" "-I"))))(ert-deftest deb-packaging-test-commands/filter-keeps-prefix-flag-with-value ()
+                 '("-i" "-I"))))
+
+(ert-deftest deb-packaging-test-commands/filter-keeps-prefix-flag-with-value ()
   (should (equal (deb-packaging-commands--filter-args
-                  '("--color=auto" "--tag-display-limit=5" "--foo")
+                  '("--tag-display-limit=5" "--foo")
                   deb-packaging-commands--lintian-arg-prefixes)
-                 '("--color=auto" "--tag-display-limit=5"))))
+                 '("--tag-display-limit=5"))))
 
 (ert-deftest deb-packaging-test-commands/filter-drops-non-matching ()
   (should (null (deb-packaging-commands--filter-args
@@ -116,12 +128,11 @@
   (should (null (deb-packaging-commands--filter-args '() deb-packaging-commands--ubuntu-lint-arg-prefixes))))
 
 (ert-deftest deb-packaging-test-commands/filter-separates-lintian-and-ubuntu-prefixes ()
-  (let ((lintian-args '("-i" "--pedantic" "--color=auto" "--verbose" "--json"))
-        (ubuntu-args '("--verbose" "--json" "--context=ctx" "--all=yes" "-i" "--color=auto")))
-    (should (equal (deb-packaging-commands--filter-args lintian-args deb-packaging-commands--lintian-arg-prefixes)
-                   '("-i" "--pedantic" "--color=auto")))
-    (should (equal (deb-packaging-commands--filter-args ubuntu-args deb-packaging-commands--ubuntu-lint-arg-prefixes)
-                   '("--verbose" "--json" "--all=yes")))))
+  (let ((args '("-i" "--pedantic" "--verbose" "--context=ctx" "--all=yes")))
+    (should (equal (deb-packaging-commands--filter-args args deb-packaging-commands--lintian-arg-prefixes)
+                   '("-i" "--pedantic")))
+    (should (equal (deb-packaging-commands--filter-args args deb-packaging-commands--ubuntu-lint-arg-prefixes)
+                   '("--verbose" "--all=yes")))))
 
 ;;; deb-packaging-commands--parse-lint-summary
 
@@ -349,7 +360,7 @@ and re-emit without doubling the argument."
            "none"
            (transient-format-value (deb-packaging-test-commands--repo-obj)))))
 
-;;; deb-packaging-commands-sbuild multi-value
+;;; deb-packaging-commands-binary-build multi-value
 
 (ert-deftest deb-packaging-test-commands/sbuild-target-architecture ()
   (deb-packaging-test--with-package-tree
@@ -363,7 +374,7 @@ and re-emit without doubling the argument."
                 ((symbol-function 'deb-packaging-config-save-architecture)
                  (lambda (package distro arch)
                    (setq captured-save (list package distro arch)))))
-        (deb-packaging-commands-sbuild '("--arch=arm64")))
+        (deb-packaging-commands-binary-build '("--arch=arm64")))
       (should (member "--arch=arm64" captured-args))
       (should (equal captured-save '("mypkg" "noble" "arm64"))))))
 
@@ -381,7 +392,7 @@ and re-emit without doubling the argument."
                    (setq captured-save (list pkg distro entries)))))
         (deb-packaging-test--with-mocked-process
             '(("dpkg" . "amd64") ("curl" . "200"))
-          (deb-packaging-commands-sbuild
+          (deb-packaging-commands-binary-build
            (deb-packaging-test-commands--sbuild-args
             '("ppa:me/x" "proposed"
               "deb http://example.com/ubuntu noble main")))))
@@ -407,7 +418,7 @@ and re-emit without doubling the argument."
                  ((symbol-function 'deb-packaging-repos-save)
                   (lambda (pkg distro entries)
                     (setq captured-save (list pkg distro entries)))))
-        (deb-packaging-commands-sbuild nil))
+        (deb-packaging-commands-binary-build nil))
       (should (equal captured-save '("mypkg" "noble" nil))))))
 
 (ert-deftest deb-packaging-test-commands/sbuild-purge-flags-pass-through ()
@@ -420,7 +431,7 @@ and re-emit without doubling the argument."
                  (lambda (_name args &optional _dir _key _buffer-dir)
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-repos-save) #'ignore))
-        (deb-packaging-commands-sbuild
+        (deb-packaging-commands-binary-build
          '("--purge-session=always" "--purge-build=never")))
       (should (member "--dist=noble" captured-args))
       (should (member "--purge-session=always" captured-args))
@@ -433,7 +444,7 @@ and re-emit without doubling the argument."
       (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
                  (lambda (_name command command-dir &rest _)
                    (setq args command dir command-dir))))
-        (deb-packaging-commands-build-binary)
+        (deb-packaging-commands-binary-build '("--builder=dpkg-buildpackage"))
         (should (equal args '("dpkg-buildpackage" "-b")))
         (should (equal dir pkg-dir))))))
 
@@ -444,7 +455,10 @@ and re-emit without doubling the argument."
              (lambda (&rest _) '(:target-arch "arm64" :host-arch "amd64")))
             ((symbol-function 'deb-packaging-commands--run-command)
              (lambda (&rest _) (error "must not run"))))
-    (should-error (deb-packaging-commands-build-binary) :type 'user-error)))
+    (should-error (deb-packaging-commands-binary-build '("--builder=dpkg-buildpackage"))
+                  :type 'user-error)
+    (should-error (deb-packaging-commands-binary-build '("--builder=gbp"))
+                  :type 'user-error)))
 
 (ert-deftest deb-packaging-test-commands/sbuild-buffer-dir-is-pkg-dir ()
   "sbuild runs in the parent dir but its log buffer keeps the package dir."
@@ -457,7 +471,7 @@ and re-emit without doubling the argument."
                    (setq captured-dir dir
                          captured-buffer-dir buffer-dir)))
                  ((symbol-function 'deb-packaging-repos-save) #'ignore))
-        (deb-packaging-commands-sbuild nil))
+        (deb-packaging-commands-binary-build nil))
       (should (equal captured-dir pkg-parent-dir))
       (should (equal captured-buffer-dir pkg-dir)))))
 
@@ -492,8 +506,11 @@ args: the chroot's own sources.list provides the distro's pockets."
                                       process-environment)))
       (unwind-protect
           (let ((default (deb-packaging-transients--binary-default-value)))
-            (should (equal (car default) "-A"))
-            (should (string-prefix-p "--arch=" (cadr default))))
+            (should (equal (seq-take default 2) '("--builder=sbuild" "-A")))
+            (should (string-prefix-p "--arch=" (nth 2 default)))
+            (should-not (cl-some (lambda (a)
+                                   (string-prefix-p "--extra-repository=" a))
+                                 default)))
         (delete-directory tmp t)))))
 
 (ert-deftest deb-packaging-test-commands/binary-default-value-cleared-repos-stick ()
@@ -681,19 +698,23 @@ default would duplicate them (or break Debian builds)."
                                  default)))
         (delete-directory tmp t)))))
 
-(ert-deftest deb-packaging-test-commands/test-default-value-seeds-ppa ()
-  "The test default value includes the saved PPA."
+(ert-deftest deb-packaging-test-commands/ppa-tests-show-uses-saved-ppa ()
   (deb-packaging-test--with-package-tree
       '(:name "mypkg" :version "1.0-1" :distro "noble")
     (let* ((tmp (make-temp-file "deb-ppa-test-" t))
            (process-environment (cons (format "XDG_CACHE_HOME=%s" tmp)
-                                      process-environment)))
+                                      process-environment))
+           fetched)
       (unwind-protect
           (progn
             (deb-packaging-ppa-save "mypkg" "noble" "ppa:me/x")
-            (let ((default (deb-packaging-transients--test-default-value)))
-              (should (member "--ppa=ppa:me/x" default))
-              (should (member "--runner=lxd" default))))
+            (cl-letf (((symbol-function 'deb-packaging-ppa-tests--fetch)
+                       (lambda (ppa &rest _) (setq fetched ppa)))
+                      ((symbol-function 'deb-packaging-display-buffer) #'ignore)
+                      ((symbol-function 'completing-read)
+                       (lambda (&rest _) (error "must not prompt"))))
+              (deb-packaging-ppa-tests-show))
+            (should (equal fetched "ppa:me/x")))
         (delete-directory tmp t)))))
 
 ;;; dput PPA save + auto-prompt
@@ -905,7 +926,7 @@ before sbuild runs."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
         '(("dpkg" . "amd64") ("curl" . "403"))
-      (should-error (deb-packaging-commands-sbuild
+      (should-error (deb-packaging-commands-binary-build
                      (deb-packaging-test-commands--sbuild-args
                       '("ppa:karljs/empty")))
                     :type 'user-error)
@@ -915,7 +936,7 @@ before sbuild runs."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
         '(("dpkg" . "amd64") ("curl" . "404"))
-      (should-error (deb-packaging-commands-sbuild
+      (should-error (deb-packaging-commands-binary-build
                      (deb-packaging-test-commands--sbuild-args
                       '("ppa:karljs/only-noble")))
                     :type 'user-error)
@@ -925,7 +946,7 @@ before sbuild runs."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
         '(("dpkg" . "amd64") ("curl" . "200"))
-      (deb-packaging-commands-sbuild
+      (deb-packaging-commands-binary-build
        (deb-packaging-test-commands--sbuild-args '("ppa:karljs/good")))
       (should (cl-some (lambda (a) (string-prefix-p
                                     "--extra-repository=deb [trusted=yes]"
@@ -938,7 +959,7 @@ the build."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
         '(("dpkg" . "amd64") ("curl" . "000"))
-      (deb-packaging-commands-sbuild
+      (deb-packaging-commands-binary-build
        (deb-packaging-test-commands--sbuild-args '("ppa:karljs/flaky")))
       (should captured-args))))
 
@@ -947,7 +968,7 @@ the build."
   (deb-packaging-test-commands--with-sbuild-tree
     (deb-packaging-test--with-mocked-process
         '(("dpkg" . "amd64") ("curl" . (error . "must not probe")))
-      (deb-packaging-commands-sbuild
+      (deb-packaging-commands-binary-build
        (deb-packaging-test-commands--sbuild-args
         '("proposed" "deb http://example.com/ubuntu noble main")))
       (should (cl-some (lambda (a) (string-prefix-p

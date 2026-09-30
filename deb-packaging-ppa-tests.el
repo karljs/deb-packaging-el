@@ -30,9 +30,8 @@
 
 (defvar url-http-response-status)
 
-;; Loaded after this file in the full package; only referenced by name
-;; in the mode map and transients.
-(declare-function deb-packaging-test-transient "deb-packaging-transients")
+;; Loaded after this file in the full package.
+(declare-function deb-packaging-transients--saved-ppa-arg "deb-packaging-transients")
 (declare-function deb-packaging-transients--env "deb-packaging-transients")
 (declare-function deb-packaging-infra--ppa-record-for-address "deb-packaging-infra")
 
@@ -493,14 +492,14 @@ A killed process (a newer fetch replaced it) is ignored entirely."
 ;;;###autoload
 (defun deb-packaging-ppa-tests-show (&optional args)
   "Show the parsed autopkgtest report for a PPA.
-ARGS comes from `deb-packaging-test-transient'.  Prompts when no PPA is
-set.  Does not touch the saved default PPA: a report is a lookup, and a
+ARGS may carry --ppa=; otherwise the saved PPA is used, else prompt.
+Does not touch the saved default PPA: a report is a lookup, and a
 one-off check must not clobber the per-package+distro default."
-  (interactive (list (transient-args 'deb-packaging-test-transient)))
+  (interactive)
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
-    (let* ((effective-args (or args '()))
+    (let* ((effective-args (or args (deb-packaging-transients--saved-ppa-arg)))
            (ppa (deb-packaging-commands--resolve-ppa effective-args))
            (distro (or (transient-arg-value "--dist=" effective-args)
                        (deb-packaging-config--effective-distro)))

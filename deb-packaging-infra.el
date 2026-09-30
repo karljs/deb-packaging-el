@@ -1111,29 +1111,36 @@ the text and send RET to bogus locations."
      (deb-packaging-display-buffer buf 'report)))
 
 (defun deb-packaging-infra-show-ppa-package (&optional ppa)
-  "Show PPA builds for the current package and target architecture."
+  "Show PPA builds for the current package and target architecture.
+With a prefix argument, prompt for the package, release, and architecture."
   (interactive)
   (let* ((context (ignore-errors
                     (deb-packaging-commands--package-context)))
+         (ask (or current-prefix-arg (null (plist-get context :name))))
          (selected (and (derived-mode-p 'deb-packaging-infra-ppas-mode)
                         (tabulated-list-get-id)))
-         (default-ppa (plist-get context :default-ppa))
+         (default-ppa (and context
+                           (deb-packaging-ppa-load (plist-get context :name)
+                                                   (plist-get context :distro))))
          (record (or (deb-packaging-infra--ppa-record ppa)
                      selected
                       (and default-ppa
                            (deb-packaging-infra--ppa-record-for-address
                             default-ppa))
                      (deb-packaging-infra--read-ppa-record "PPA: ")))
-         (package (read-string "Source package: " nil nil
-                               (plist-get context :name)))
-         (release (read-string "Ubuntu release: " nil nil
-                               (or (plist-get context :distro)
-                                   (deb-packaging-config--effective-distro))))
+         (package (let ((default (plist-get context :name)))
+                    (if ask (read-string "Source package: " nil nil default)
+                      default)))
+         (release (let ((default (or (plist-get context :distro)
+                                     (deb-packaging-config--effective-distro))))
+                    (if ask (read-string "Ubuntu release: " nil nil default)
+                      default)))
          (architecture
-          (let ((value (read-string
-                        "Processor architecture: " nil nil
-                         (or (plist-get context :target-arch)
-                             (deb-packaging-config--effective-architecture)))))
+          (let* ((default (or (plist-get context :target-arch)
+                              (deb-packaging-config--effective-architecture)))
+                 (value (if ask
+                            (read-string "Processor architecture: " nil nil default)
+                          default)))
             (unless (deb-packaging-config--architecture-valid-p value)
               (user-error "Invalid Debian architecture: %s" value))
             value))

@@ -80,11 +80,9 @@ Used as :environment for the prefixes in this package."
 
 ;; Forward-declare command functions.
 (declare-function deb-packaging-commands-source-build "deb-packaging-commands")
-(declare-function deb-packaging-commands-gbp-build "deb-packaging-commands")
 (declare-function deb-packaging-commands-gbp-export-orig "deb-packaging-commands")
 (declare-function deb-packaging-commands-export-orig "deb-packaging-commands")
-(declare-function deb-packaging-commands-sbuild "deb-packaging-commands")
-(declare-function deb-packaging-commands-build-binary "deb-packaging-commands")
+(declare-function deb-packaging-commands-binary-build "deb-packaging-commands")
 (declare-function deb-packaging-infra-create-schroot "deb-packaging-infra")
 (declare-function deb-packaging-infra-create-lxd "deb-packaging-infra")
 (declare-function deb-packaging-infra-create-qemu "deb-packaging-infra")
@@ -94,7 +92,6 @@ Used as :environment for the prefixes in this package."
 (declare-function deb-packaging-commands-ubuntu-lint "deb-packaging-commands")
 (declare-function deb-packaging-commands-autopkgtest "deb-packaging-commands")
 (declare-function deb-packaging-commands-dput-upload "deb-packaging-commands")
-(declare-function deb-packaging-ppa-tests-show "deb-packaging-ppa-tests")
 (declare-function deb-packaging-commands-clean "deb-packaging-commands")
 (declare-function deb-packaging-commands-reset "deb-packaging-commands")
 (declare-function deb-packaging-infra--list-ppas "deb-packaging-infra")
@@ -109,7 +106,7 @@ Used as :environment for the prefixes in this package."
 ;;; 1. Source build (dpkg-buildpackage)
 
 (defcustom deb-packaging-transients-source-default-args
-  '("-S" "-d" "-nc" "-sa" "-I" "-i")
+  '("--builder=dpkg-buildpackage" "-d" "-nc" "-sa" "-I" "-i")
   "Initial dpkg-buildpackage flags for a source build."
   :type '(repeat string)
   :group 'deb-packaging)
@@ -120,24 +117,36 @@ Used as :environment for the prefixes in this package."
 
 ;;;###autoload(autoload 'deb-packaging-commands-source-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-commands-source-build-transient ()
-  "Build a Debian source package, or fetch its orig tarball.
-dpkg-buildpackage arguments apply only to \"Build source\" (the
-lint-transient pattern)."
+  "Build the Debian source package, or fetch its orig tarball."
   :value #'deb-packaging-transients--source-default-value
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-transients--context-header]
-  ["dpkg-buildpackage arguments"
-   ("-S" "Source build"            "-S")
-   ("-d" "Skip build-dep check"    "-d")
-   ("-nc" "No pre-clean"           "-nc")
-   ("-sa" "Include orig tarball"   "-sa")
-   ("-I"  "Tar ignore pattern"     "-I")
-   ("-i"  "Diff ignore pattern"    "-i")]
-  ["Run"
-   ("s" "Build source" deb-packaging-commands-source-build)
-   ("e" "Export orig (git ubuntu)" deb-packaging-commands-export-orig)
-   ("g" "Create orig tarball (gbp)" deb-packaging-commands-gbp-export-orig)
-   ("q" "Quit" transient-quit-one)])
+  ["Builder"
+   ("-b" "Builder" "--builder="
+    :class transient-option
+    :choices ("dpkg-buildpackage" "gbp")
+    :always-read t
+    :allow-empty nil)]
+  [["dpkg-buildpackage options"
+    ("-d" "Skip build-dep check"    "-d")
+    ("-nc" "No pre-clean"           "-nc")
+    ("-sa" "Include orig tarball"   "-sa")
+    ("-I"  "Tar ignore pattern"     "-I")
+    ("-i"  "Diff ignore pattern"    "-i")]
+   ["gbp options"
+    ("-g" "Ignore uncommitted changes" "--git-ignore-new")]]
+  [["Build"
+    ("s" "Build source package" deb-packaging-commands-source-build)
+    ("q" "Quit" transient-quit-one)]
+   ["Get orig tarball"
+    :if-not deb-packaging-transients--native-p
+    ("e" "git ubuntu export-orig" deb-packaging-commands-export-orig)
+    ("g" "gbp (pristine-tar)" deb-packaging-commands-gbp-export-orig)]])
+
+(defun deb-packaging-transients--native-p ()
+  "Return non-nil when the current package has a native version."
+  (when-let ((version (ignore-errors (deb-packaging-detect--package-version))))
+    (deb-packaging-detect--native-version-p version)))
 
 ;;; 2. Binary build (sbuild)
 
@@ -160,7 +169,7 @@ proposed can add the `proposed' candidate in the -e menu."
 Restores the saved extra-repository set for the current package and
 changelog distro; nothing extra when no set was saved (the chroot's own
 sources.list provides the distro's pockets)."
-  (append (list "-A" (concat "--arch="
+  (append (list "--builder=sbuild" "-A" (concat "--arch="
                               (deb-packaging-config--effective-architecture)))
           (mapcar (lambda (r) (concat "--extra-repository=" r))
                   (deb-packaging-transients--effective-repos))))
@@ -280,12 +289,19 @@ Returns absolute paths, or nil when empty."
 
 ;;;###autoload(autoload 'deb-packaging-binary-build-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-binary-build-transient ()
-  "Build a Debian binary package with sbuild.
-The distro comes from the changelog."
+  "Build Debian binary packages.
+sbuild builds the .dsc in a chroot; dpkg-buildpackage and gbp build the
+working tree on the host."
   :value #'deb-packaging-transients--binary-default-value
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-transients--context-header]
-  ["Arguments"
+  ["Builder"
+   ("-b" "Builder" "--builder="
+    :class transient-option
+    :choices ("sbuild" "dpkg-buildpackage" "gbp")
+    :always-read t
+    :allow-empty nil)]
+  [["sbuild options"
     ("-a" "Target architecture"
      "--arch="
      :class transient-option
@@ -293,8 +309,8 @@ The distro comes from the changelog."
      :always-read t
      :allow-empty nil)
     ("-A" "Build arch-all packages"  "-A")
-   ("-v" "Verbose"                  "-v")
-   ("-u" "apt upgrade"              "--apt-upgrade")
+    ("-v" "Verbose"                  "-v")
+    ("-u" "apt upgrade"              "--apt-upgrade")
     ("-S" "Purge session"
      "--purge-session="
      :class transient-option
@@ -303,8 +319,8 @@ The distro comes from the changelog."
      "--purge-build="
      :class transient-option
      :choices ("always" "successful" "never"))
-     ("-F" "Shell on build failure"
-      deb-packaging-transients--sbuild-shell)
+    ("-F" "Shell on build failure"
+     deb-packaging-transients--sbuild-shell)
     ("-e" "Extra repository"
      "--extra-repository="
      :class deb-packaging-transients--extra-repo-argument
@@ -315,70 +331,155 @@ The distro comes from the changelog."
      :class deb-packaging-transients--extra-package-argument
      :multi-value repeat
      :description "Local .deb to install in chroot")]
-   ["Build"
-    ("b" "Build binary" deb-packaging-commands-sbuild)
-    ("d" "Build working-tree binaries" deb-packaging-commands-build-binary)
-    ("c" "Create target chroot" deb-packaging-infra-create-schroot)
-    ("q" "Quit" transient-quit-one)])
+   ["gbp options"
+    ("-g" "Ignore uncommitted changes" "--git-ignore-new")]]
+  [["Build"
+    ("b" "Build binaries" deb-packaging-commands-binary-build)
+    ("q" "Quit" transient-quit-one)]
+   ["Setup"
+    ("c" "Create sbuild chroot" deb-packaging-infra-create-schroot)]])
 
-;;; git-buildpackage
+;;; Suffix availability
+;;
+;; Actions whose inputs are missing render inapt with the reason in their
+;; label, matching the status buffer's `blocked' rows.
 
-(declare-function deb-packaging-commands-gbp-build "deb-packaging-commands")
+(defconst deb-packaging-transients--artifact-needs
+  '((dsc . "needs a source package")
+    (source-changes . "needs a source package")
+    (debs . "needs binaries"))
+  "Why an action is unavailable when an artifact kind is missing.")
 
-(transient-define-prefix deb-packaging-gbp-build-transient ()
-  "Build this repository with git-buildpackage."
+(defun deb-packaging-transients--why-not (needs)
+  "Return why NEEDS are unmet, or nil.
+NEEDS lists tool names (strings) and artifact kinds (symbols)."
+  (let ((arts (plist-get (ignore-errors (deb-packaging-commands--package-context))
+                         :artifacts)))
+    (cl-loop for need in needs
+             thereis (if (stringp need)
+                         (unless (executable-find need)
+                           (format "%s not installed" need))
+                       (unless (alist-get need arts)
+                         (alist-get need deb-packaging-transients--artifact-needs))))))
+
+(defun deb-packaging-transients--label (text needs)
+  "Return TEXT, suffixed with why NEEDS are unmet."
+  (if-let ((why (deb-packaging-transients--why-not needs)))
+      (format "%s (%s)" text why)
+    text))
+
+;;; 3. Lint: lintian (Debian policy) and ubuntu-lint (Ubuntu upload rules)
+
+(transient-define-infix deb-packaging-transients--lintian-info ()
+  :description "Explain each tag"
+  :argument "-i")
+
+(transient-define-infix deb-packaging-transients--lintian-display-info ()
+  :description "Show info (I:) tags"
+  :argument "-I")
+
+(transient-define-infix deb-packaging-transients--lintian-pedantic ()
+  :description "Show pedantic (P:) tags"
+  :argument "--pedantic")
+
+(transient-define-infix deb-packaging-transients--lintian-limit ()
+  :description "Tags shown per package"
+  :class 'transient-option
+  :argument "--tag-display-limit="
+  :prompt "Limit (0 = unlimited): ")
+
+(transient-define-infix deb-packaging-transients--ubuntu-lint-verbose ()
+  :description "Verbose"
+  :argument "--verbose")
+
+(transient-define-infix deb-packaging-transients--ubuntu-lint-context ()
+  :description "Check against"
+  :class 'transient-option
+  :argument "--context="
+  :choices '("changes" "source-dir" "changelog")
+  :always-read t
+  :allow-empty nil)
+
+(transient-define-infix deb-packaging-transients--ubuntu-lint-level ()
+  :description "Level for all checks"
+  :class 'transient-option
+  :argument "--all="
+  :choices '("auto" "off" "warn" "fail"))
+
+(defconst deb-packaging-transients--lint-default-args
+  '("--tag-display-limit=0" "--context=changes" "--all=warn")
+  "Initial value shared by the lint menus.")
+
+;;;###autoload(autoload 'deb-packaging-lintian-transient "deb-packaging-transients" nil t)
+(transient-define-prefix deb-packaging-lintian-transient ()
+  "Check the built packages against Debian policy with lintian."
+  :value deb-packaging-transients--lint-default-args
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-transients--context-header]
-  ["Options"
-   ("-i" "Ignore uncommitted changes and branch mismatch" "--git-ignore-new")
-   ("-s" "Use sbuild as builder" "--git-builder=sbuild")]
-  ["Run"
-   ("b" "Build with gbp buildpackage" deb-packaging-commands-gbp-build)
+  ["lintian options"
+   ("-i" deb-packaging-transients--lintian-info)
+   ("-I" deb-packaging-transients--lintian-display-info)
+   ("-P" deb-packaging-transients--lintian-pedantic)
+   ("-t" deb-packaging-transients--lintian-limit)]
+  ["Check"
+   ("s" deb-packaging-commands-lintian-source
+    :description (lambda () (deb-packaging-transients--label "Source package (.dsc)" '("lintian" dsc)))
+    :inapt-if (lambda () (deb-packaging-transients--why-not '("lintian" dsc))))
+   ("b" deb-packaging-commands-lintian-binary
+    :description (lambda () (deb-packaging-transients--label "All binaries (.deb)" '("lintian" debs)))
+    :inapt-if (lambda () (deb-packaging-transients--why-not '("lintian" debs))))
+   ("o" deb-packaging-commands-lintian-binary-one
+    :description (lambda () (deb-packaging-transients--label "One binary..." '("lintian" debs)))
+    :inapt-if (lambda () (deb-packaging-transients--why-not '("lintian" debs))))
    ("q" "Quit" transient-quit-one)])
 
-;;; 3. Lint (lintian + ubuntu-lint)
+;;;###autoload(autoload 'deb-packaging-ubuntu-lint-transient "deb-packaging-transients" nil t)
+(transient-define-prefix deb-packaging-ubuntu-lint-transient ()
+  "Check Ubuntu upload rules (changelog, maintainer, bug refs) with ubuntu-lint."
+  :value deb-packaging-transients--lint-default-args
+  :environment #'deb-packaging-transients--env
+  [:description deb-packaging-transients--context-header]
+  ["ubuntu-lint options"
+   ("-v" deb-packaging-transients--ubuntu-lint-verbose)
+   ("-C" deb-packaging-transients--ubuntu-lint-context)
+   ("-a" deb-packaging-transients--ubuntu-lint-level)]
+  ["Check"
+   ("u" deb-packaging-commands-ubuntu-lint
+    :description (lambda () (deb-packaging-transients--label "Ubuntu upload rules" '("ubuntu-lint")))
+    :inapt-if (lambda () (deb-packaging-transients--why-not '("ubuntu-lint"))))
+   ("q" "Quit" transient-quit-one)])
 
 ;;;###autoload(autoload 'deb-packaging-lint-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-lint-transient ()
-  "Run a linter against the current package.
-lintian inspects built artifacts; ubuntu-lint checks Ubuntu policy.
-Each action reads only its own flags."
-  :value '("-i" "--tag-display-limit=0" "--context=changes" "--all=warn")
+  "Run lintian (Debian policy) or ubuntu-lint (Ubuntu upload rules).
+Each check reads only its own tool's options."
+  :value deb-packaging-transients--lint-default-args
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-transients--context-header]
-  ["Lintian arguments"
-   ("-i"  "Show informational tags"   "-i")
-   ("-I"  "Pedantic (info+)"          "-I")
-   ("-P"  "--pedantic"                "--pedantic")
-   ("-t"  "Tag display limit"
-    "--tag-display-limit="
-    :class transient-option
-    :prompt "Limit (0=unlimited): ")
-   ("-c"  "Color output"
-    "--color="
-    :class transient-option
-    :choices ("auto" "never" "always" "html")
-    :always-read t)]
-  ["Ubuntu-lint arguments"
-   ("-v"  "Verbose"                "--verbose")
-   ("-j"  "JSON output"            "--json")
-   ("-C"  "Context source"
-    "--context="
-    :class transient-option
-    :choices ("changes" "source-dir" "changelog")
-    :always-read t
-    :allow-empty nil)
-   ("-a"  "Set level for all checks"
-    "--all="
-    :class transient-option
-    :choices ("auto" "off" "warn" "fail")
-    :prompt "Level for all checks: ")]
-  ["Run"
-   ("l" "Lintian source"        deb-packaging-commands-lintian-source)
-   ("L" "Lintian binary (all)"  deb-packaging-commands-lintian-binary)
-   ("o" "Lintian one binary..." deb-packaging-commands-lintian-binary-one)
-   ("u" "Ubuntu-lint"           deb-packaging-commands-ubuntu-lint)
-   ("q" "Quit"                  transient-quit-one)])
+  [["lintian options"
+    ("-i" deb-packaging-transients--lintian-info)
+    ("-I" deb-packaging-transients--lintian-display-info)
+    ("-P" deb-packaging-transients--lintian-pedantic)
+    ("-t" deb-packaging-transients--lintian-limit)]
+   ["ubuntu-lint options"
+    ("-v" deb-packaging-transients--ubuntu-lint-verbose)
+    ("-C" deb-packaging-transients--ubuntu-lint-context)
+    ("-a" deb-packaging-transients--ubuntu-lint-level)]]
+  [["lintian (Debian policy)"
+    ("s" deb-packaging-commands-lintian-source
+     :description (lambda () (deb-packaging-transients--label "Source package (.dsc)" '("lintian" dsc)))
+     :inapt-if (lambda () (deb-packaging-transients--why-not '("lintian" dsc))))
+    ("b" deb-packaging-commands-lintian-binary
+     :description (lambda () (deb-packaging-transients--label "All binaries (.deb)" '("lintian" debs)))
+     :inapt-if (lambda () (deb-packaging-transients--why-not '("lintian" debs))))
+    ("o" deb-packaging-commands-lintian-binary-one
+     :description (lambda () (deb-packaging-transients--label "One binary..." '("lintian" debs)))
+     :inapt-if (lambda () (deb-packaging-transients--why-not '("lintian" debs))))]
+   ["ubuntu-lint"
+    ("u" deb-packaging-commands-ubuntu-lint
+     :description (lambda () (deb-packaging-transients--label "Ubuntu upload rules" '("ubuntu-lint")))
+     :inapt-if (lambda () (deb-packaging-transients--why-not '("ubuntu-lint"))))
+    ("q" "Quit" transient-quit-one)]])
 
 ;;; 4. Autopkgtest
 
@@ -391,8 +492,7 @@ Each action reads only its own flags."
 
 (defun deb-packaging-transients--test-default-value ()
   "Dynamic default for the test transient."
-  (append (deb-packaging-transients--saved-ppa-arg)
-          (list "--apt-upgrade" "--runner=lxd")))
+  (list "--apt-upgrade" "--runner=lxd"))
 
 (defun deb-packaging-transients--create-test-image ()
   "Create the image selected in the autopkgtest transient."
@@ -405,14 +505,12 @@ Each action reads only its own flags."
 
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()
-  "Run autopkgtest locally, or view PPA test results.
-Local flags apply only to \"Run autopkgtest\"; the PPA group applies only
-to \"PPA test report\" (the lint-transient pattern).  The test image's
-distro comes from the changelog."
+  "Run autopkgtest locally.
+The test image's distro comes from the changelog."
   :value #'deb-packaging-transients--test-default-value
   :environment #'deb-packaging-transients--env
   [:description deb-packaging-transients--context-header]
-  ["Local autopkgtest"
+  ["Options"
    ("-u"  "Upgrade packages before test"   "--apt-upgrade")
    ("-P"  "Use dependencies from proposed" "--apt-pocket=proposed")
    ("-f"  "Drop to shell on failure"       "--shell-fail")
@@ -422,20 +520,13 @@ distro comes from the changelog."
       :choices deb-packaging-commands--runner-choices
       :always-read t
       :allow-empty nil)]
-   ["PPA tests"
-    ("-p" "PPA"
-     "--ppa="
-     :class transient-option
-     :prompt "PPA (e.g. ppa:user/name): "
-      :reader deb-packaging-transients--read-ppa
-      :always-read t)]
-   ["Image"
-    ("i" "Create selected test image"
-     deb-packaging-transients--create-test-image)]
-  ["Run"
-   ("t" "Run autopkgtest" deb-packaging-commands-autopkgtest)
-   ("p" "PPA test report" deb-packaging-ppa-tests-show)
-   ("q" "Quit" transient-quit-one)])
+  [["Run"
+    ("t" deb-packaging-commands-autopkgtest
+     :description (lambda () (deb-packaging-transients--label "Run autopkgtest" '("autopkgtest" debs)))
+     :inapt-if (lambda () (deb-packaging-transients--why-not '("autopkgtest" debs))))
+    ("q" "Quit" transient-quit-one)]
+   ["Setup"
+    ("i" "Create test image" deb-packaging-transients--create-test-image)]])
 
 ;;; 5. Upload / PPA
 
@@ -463,7 +554,9 @@ distro comes from the changelog."
     :always-read t
     :allow-empty nil)]
   ["Upload"
-   ("p" "Upload with dput" deb-packaging-commands-dput-upload)
+   ("p" deb-packaging-commands-dput-upload
+    :description (lambda () (deb-packaging-transients--label "Upload with dput" '("dput" source-changes)))
+    :inapt-if (lambda () (deb-packaging-transients--why-not '("dput" source-changes))))
    ("q" "Quit" transient-quit-one)])
 
 ;;; 6. Clean artifacts

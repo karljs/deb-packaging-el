@@ -416,6 +416,17 @@
       (should (member "foo_1.1-1_amd64.deb" stale))
       (should-not (member "foo_1.2-3.dsc" stale)))))
 
+(ert-deftest deb-packaging-test-detect/scan-stale-artifacts-many-binaries ()
+  "regression: gcc-sized control files overflowed the prefix regexp."
+  (deb-packaging-test--with-package-tree
+      (list :name "foo" :version "1.2-3"
+            :bin-names (cons "foo" (mapcar (lambda (i) (format "libfoo-long-name-%d" i))
+                                           (number-sequence 1 3000)))
+            :artifacts '(("foo_1.1-1.dsc" . "") ("libfoo-long-name-7_1.1-1_amd64.deb" . "")))
+    (should (equal (deb-packaging-detect--scan-stale-artifacts
+                    "foo" "1.2-3" pkg-parent-dir pkg-dir)
+                   '("foo_1.1-1.dsc" "libfoo-long-name-7_1.1-1_amd64.deb")))))
+
 (ert-deftest deb-packaging-test-detect/scan-stale-artifacts-old-orig-tarball ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3" :bin-names '("foo")

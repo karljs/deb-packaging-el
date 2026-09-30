@@ -63,33 +63,31 @@
 The target distro comes from the changelog; other transients inherit it."
   :environment #'deb-packaging-transients--env
   [:description deb-packaging--dispatch-header]
-  ["Build"
-    ("s" "Source build..."  deb-packaging-commands-source-build-transient)
-    ("d" "Working-tree binary build" deb-packaging-commands-build-binary)
-    ("b" "sbuild binary build..."  deb-packaging-binary-build-transient)
-   ("G" "gbp buildpackage..." deb-packaging-gbp-build-transient)]
-  ["Check & Test"
-   ("l" "Lint..."           deb-packaging-lint-transient)
-   ("t" "Autopkgtest..."   deb-packaging-test-transient)]
-  ["Develop & Propagate"
-   ("e" "Dev shell..."       deb-packaging-dev-transient)
-   ("g" "Regenerate templated files" deb-packaging-commands-regenerate)
-   ("u" "Patch queue (gbp pq)..." deb-packaging-pq-transient)
-   ("n" "New upstream version..." deb-packaging-update-transient)
-   ("B" "Backport upstream patch..." deb-packaging-backport-patch)
-   ("P" "Propagate..."       deb-packaging-propagate-transient)]
-  ["Publish"
-   ("U" "PPA upload..."   deb-packaging-upload-transient)
-   ("p" "PPA workspace..." deb-packaging-infra-ppas)]
-  ["Cleanup"
-   ("c" "Clean artifacts..." deb-packaging-commands-clean-transient)
-   ("K" "Kill build-output buffers" deb-packaging-commands-kill-output-buffers)
-   ("r" "Reset source tree..." deb-packaging-commands-reset-transient)]
-     ["Other"
-      ("C" "Clone source package (git-ubuntu)..." deb-packaging-clone-git-ubuntu)
-      ("L" "Clone packaging repository (gbp)..." deb-packaging-clone-gbp)
-     ("i" "Infrastructure..."  deb-packaging-infra-dispatch)
-     ("q" "Quit"             transient-quit-one)])
+  [["Local"
+    ("s" "Source package..." deb-packaging-commands-source-build-transient)
+    ("b" "Binaries..."       deb-packaging-binary-build-transient)
+    ("l" "Lint..."           deb-packaging-lint-transient)
+    ("t" "Autopkgtest..."    deb-packaging-test-transient)]
+   ["Launchpad"
+    ("U" "Upload..."         deb-packaging-upload-transient)
+    ("p" "PPAs"              deb-packaging-infra-ppas)
+    ("T" "PPA tests"         deb-packaging-ppa-tests-show)]]
+  [["Develop"
+    ("e" "Dev shell..."               deb-packaging-dev-transient)
+    ("g" "Regenerate templated files" deb-packaging-commands-regenerate)
+    ("u" "Patch queue (gbp pq)..."    deb-packaging-pq-transient)
+    ("n" "New upstream version..."    deb-packaging-update-transient)
+    ("B" "Backport upstream patch..." deb-packaging-backport-patch)
+    ("P" "Propagate..."               deb-packaging-propagate-transient)]
+   ["Cleanup"
+    ("c" "Clean artifacts..."        deb-packaging-commands-clean-transient)
+    ("K" "Kill build-output buffers" deb-packaging-commands-kill-output-buffers)
+    ("r" "Reset source tree..."      deb-packaging-commands-reset-transient)]
+   ["Other"
+    ("C" "Clone with git-ubuntu..." deb-packaging-clone-git-ubuntu)
+    ("L" "Clone with gbp..."        deb-packaging-clone-gbp)
+    ("i" "Infrastructure..."        deb-packaging-infra-dispatch)
+    ("q" "Quit"                     transient-quit-one)]])
 
 ;;;###autoload
 (defun deb-packaging-dispatch ()

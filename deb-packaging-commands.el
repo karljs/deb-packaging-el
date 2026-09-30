@@ -121,10 +121,13 @@ SCOPE overrides package detection when supplied."
       (setq ctx (plist-put ctx :target-arch
                            (deb-packaging-config--effective-architecture ctx)))
       (let* ((scope (deb-packaging-commands--run-scope nil ctx))
-             (record (or (deb-packaging-commands-run-record 'gbp-build scope)
-                         (deb-packaging-commands-run-record
-                          'gbp-export-orig scope)))
-             (artifact-dir (plist-get record :artifact-dir)))
+             ;; ponytail: one artifact dir per package; gbp binaries from a
+             ;; non-gbp source land outside it.
+             (artifact-dir
+              (cl-some (lambda (key)
+                        (plist-get (deb-packaging-commands-run-record key scope)
+                                   :artifact-dir))
+                       '(source-build gbp-export-orig))))
         (setq ctx (plist-put ctx :artifact-dir
                              (or (and artifact-dir (file-directory-p artifact-dir)
                                       artifact-dir)
@@ -162,7 +165,7 @@ SCOPE overrides package detection when supplied."
 
 (defun deb-packaging-commands--set-run-artifact-dir (key buffer artifact-dir)
   "Attach ARTIFACT-DIR to the tracked run KEY in BUFFER."
-  (setq buffer (if (bufferp buffer) buffer (get-buffer buffer)))
+  (setq buffer (if (bufferp buffer) buffer (and buffer (get-buffer buffer))))
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq deb-packaging-commands--context
@@ -234,7 +237,7 @@ Return plist (:kept-session NAME), or nil when the session was ended."
   (pcase key
     ((or 'lintian-source 'lintian-binary) #'deb-packaging-commands--parse-lint-summary)
     ('ubuntu-lint #'deb-packaging-commands--parse-ubuntu-lint-summary)
-    ('sbuild #'deb-packaging-commands--parse-sbuild-summary)
+    ('binary-build #'deb-packaging-commands--parse-sbuild-summary)
     (_ nil)))
 
 (defun deb-packaging-commands--wrap-sentinel (proc action)
@@ -399,22 +402,25 @@ Any processes still writing into the buffers are stopped."
                  (length bufs)
                  (if (= (length bufs) 1) "" "s"))))))
 
-;;; dpkg-buildpackage
+;;; Builders
 
-(defun deb-packaging-commands-source-build (&optional args)
-  "Run dpkg-buildpackage with ARGS from the source-build transient."
-  (interactive (list (transient-args 'deb-packaging-commands-source-build-transient)))
-  (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
-    (unless pkg-dir
-      (user-error "Not in a Debian package directory"))
-    (deb-packaging-commands--run-command "source-build"
-                                 (cons "dpkg-buildpackage" args)
-                                 pkg-dir
-                                  'source-build)))
+(defconst deb-packaging-commands--gbp-arg-prefixes '("--git-ignore-new")
+  "gbp-only flags; other builders never see them.")
 
-(defun deb-packaging-commands-gbp-build (&optional args)
-  "Run `gbp buildpackage' with ARGS from the gbp-build transient."
-  (interactive (list (transient-args 'deb-packaging-gbp-build-transient)))
+(defun deb-packaging-commands--split-builder-args (args)
+  "Return (BUILDER GBP-ARGS . REST) from transient ARGS."
+  (let ((builder (transient-arg-value "--builder=" args))
+        (gbp (deb-packaging-commands--filter-args
+              args deb-packaging-commands--gbp-arg-prefixes)))
+    (cons builder
+          (cons gbp
+                (cl-remove-if (lambda (a)
+                                (or (member a gbp)
+                                    (string-prefix-p "--builder=" a)))
+                              args)))))
+
+(defun deb-packaging-commands--gbp-buildpackage (args key)
+  "Run `gbp buildpackage ARGS' from the repository root, tracked as KEY."
   (let* ((ctx (deb-packaging-commands--package-context
                (deb-packaging-detect--find-package-dir nil t)))
          (repo-dir (plist-get ctx :repo-dir))
@@ -422,43 +428,44 @@ Any processes still writing into the buffers are stopped."
     (unless ctx
       (user-error "Not in a Debian package directory"))
     (unless repo-dir
-      (user-error "gbp buildpackage requires a Git repository"))
+      (user-error "The gbp builder needs a Git repository"))
     (unless (executable-find "gbp")
       (user-error "gbp not found in `exec-path'"))
     (let* ((artifact-dir
             (deb-packaging-commands--gbp-export-dir
              repo-dir (plist-get ctx :parent-dir)))
            (buffer (deb-packaging-commands--run-command
-                    "gbp-build" (append '("gbp" "buildpackage") args)
-                    repo-dir 'gbp-build pkg-dir)))
-      (deb-packaging-commands--set-run-artifact-dir
-       'gbp-build buffer artifact-dir)
+                    (format "gbp-%s" key)
+                    (append '("gbp" "buildpackage") args)
+                    repo-dir key pkg-dir)))
+      (deb-packaging-commands--set-run-artifact-dir key buffer artifact-dir)
       buffer)))
+
+(defun deb-packaging-commands-source-build (&optional args)
+  "Build the source package with ARGS from the source-build transient.
+`--builder=gbp' runs `gbp buildpackage -S'; otherwise dpkg-buildpackage -S."
+  (interactive (list (transient-args 'deb-packaging-commands-source-build-transient)))
+  (pcase-let* ((`(,builder ,gbp-args . ,rest)
+                (deb-packaging-commands--split-builder-args args))
+               (dpkg-args (cons "-S" (remove "-S" rest))))
+    (if (equal builder "gbp")
+        (deb-packaging-commands--gbp-buildpackage
+         (append gbp-args dpkg-args) 'source-build)
+      (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
+        (unless pkg-dir
+          (user-error "Not in a Debian package directory"))
+        (let ((buffer (deb-packaging-commands--run-command
+                       "source-build" (cons "dpkg-buildpackage" dpkg-args)
+                       pkg-dir 'source-build)))
+          ;; A previous gbp run's export dir must not outlive a plain build.
+          (deb-packaging-commands--set-run-artifact-dir 'source-build buffer nil)
+          buffer)))))
 
 (defun deb-packaging-commands-gbp-export-orig ()
   "Create upstream tarballs through gbp's configured pristine-tar setup."
   (interactive)
-  (let* ((ctx (deb-packaging-commands--package-context
-               (deb-packaging-detect--find-package-dir nil t)))
-         (repo-dir (plist-get ctx :repo-dir))
-         (pkg-dir (plist-get ctx :pkg-dir)))
-    (unless ctx
-      (user-error "Not in a Debian package directory"))
-    (unless repo-dir
-      (user-error "gbp orig reconstruction requires a Git repository"))
-    (unless (executable-find "gbp")
-      (user-error "gbp not found in `exec-path'"))
-    (let* ((artifact-dir
-            (deb-packaging-commands--gbp-export-dir
-             repo-dir (plist-get ctx :parent-dir)))
-           (buffer (deb-packaging-commands--run-command
-                    "gbp-export-orig"
-                    '("gbp" "buildpackage" "--git-builder=/bin/true"
-                      "--git-no-hooks")
-                    repo-dir 'gbp-build pkg-dir)))
-      (deb-packaging-commands--set-run-artifact-dir
-       'gbp-build buffer artifact-dir)
-      buffer)))
+  (deb-packaging-commands--gbp-buildpackage
+   '("--git-builder=/bin/true" "--git-no-hooks") 'gbp-export-orig))
 
 ;;;###autoload
 (defun deb-packaging-commands-export-orig ()
@@ -477,12 +484,12 @@ Any processes still writing into the buffers are stopped."
 ;;; lintian
 
 (defconst deb-packaging-commands--lintian-arg-prefixes
-  '("-i" "-I" "-P" "--pedantic" "--tag-display-limit=" "--color=")
+  '("-i" "-I" "--pedantic" "--tag-display-limit=")
   "Lintian arg prefixes for `deb-packaging-commands--filter-args'.
 Entries ending in `=' match by prefix; bare entries match exactly.")
 
 (defconst deb-packaging-commands--ubuntu-lint-arg-prefixes
-  '("--verbose" "--json" "--all=")
+  '("--verbose" "--all=")
   "ubuntu-lint arg prefixes for `deb-packaging-commands--filter-args'.")
 
 (defun deb-packaging-commands--filter-args (args prefixes)
@@ -519,7 +526,8 @@ ARGS is filtered to lintian's own flags.  TARGETS may be a .dsc, some
 
 (defun deb-packaging-commands-lintian-source (&optional args)
   "Run lintian on the source .dsc file with ARGS."
-  (interactive (list (transient-args 'deb-packaging-lint-transient)))
+  (interactive (list (transient-args '(deb-packaging-lintian-transient
+                                          deb-packaging-lint-transient))))
   (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
          (ctx (deb-packaging-commands--package-context pkg-dir))
          (artifacts (plist-get ctx :artifacts))
@@ -541,13 +549,15 @@ Signal `user-error' if none exist."
 
 (defun deb-packaging-commands-lintian-binary (&optional args)
   "Run lintian on all .deb files with ARGS."
-  (interactive (list (transient-args 'deb-packaging-lint-transient)))
+  (interactive (list (transient-args '(deb-packaging-lintian-transient
+                                          deb-packaging-lint-transient))))
   (let ((debs (deb-packaging-commands--lintian-binary-artifacts)))
     (deb-packaging-commands--run-lintian debs args 'lintian-binary)))
 
 (defun deb-packaging-commands-lintian-binary-one (&optional args)
   "Run lintian on one .deb with ARGS, prompting for which."
-  (interactive (list (transient-args 'deb-packaging-lint-transient)))
+  (interactive (list (transient-args '(deb-packaging-lintian-transient
+                                          deb-packaging-lint-transient))))
   (let* ((debs (deb-packaging-commands--lintian-binary-artifacts))
          (target (completing-read "Deb to lint: " debs nil t)))
     (deb-packaging-commands--run-lintian (list target) args 'lintian-binary)))
@@ -574,7 +584,8 @@ MODE is `changes' (default), `source-dir', or `changelog'.  Default adds
   "Run ubuntu-lint with ARGS from the lint transient.
 ARGS is filtered to ubuntu-lint's own flags.  `--context=MODE' selects the
 context source (`changes' by default, or `source-dir' / `changelog')."
-  (interactive (list (transient-args 'deb-packaging-lint-transient)))
+  (interactive (list (transient-args '(deb-packaging-ubuntu-lint-transient
+                                          deb-packaging-lint-transient))))
   (let ((pkg-dir (deb-packaging-detect--find-package-dir nil t)))
     (unless pkg-dir
       (user-error "Not in a Debian package directory"))
@@ -654,10 +665,23 @@ is returned unchanged."
         (or (deb-packaging-commands--ppa-repo-line value distro) value)
       value)))
 
-(defun deb-packaging-commands-sbuild (&optional args)
-  "Run sbuild with ARGS from the binary-build transient.
-The --dist chroot selection always comes from the changelog."
+(defun deb-packaging-commands-binary-build (&optional args)
+  "Build binary packages with ARGS from the binary-build transient.
+`--builder=' picks sbuild (default), dpkg-buildpackage, or gbp."
   (interactive (list (transient-args 'deb-packaging-binary-build-transient)))
+  (pcase-let ((`(,builder ,gbp-args . ,rest)
+               (deb-packaging-commands--split-builder-args args)))
+    (pcase builder
+      ("dpkg-buildpackage" (deb-packaging-commands--dpkg-binary))
+      ("gbp"
+       (deb-packaging-commands--require-host-arch)
+       (deb-packaging-commands--gbp-buildpackage
+        (append gbp-args '("-b")) 'binary-build))
+      (_ (deb-packaging-commands--sbuild rest)))))
+
+(defun deb-packaging-commands--sbuild (args)
+  "Run sbuild on the current .dsc with ARGS.
+The --dist chroot selection always comes from the changelog."
   (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
          (ctx (deb-packaging-commands--package-context pkg-dir)))
     (unless ctx
@@ -724,25 +748,26 @@ Remove %s from the binary-build -e menu, or publish the series."
                  extra-repo-arg
                  (list dsc-file))
          parent-dir
-         'sbuild
-          pkg-dir)))))
+         'binary-build
+         pkg-dir)))))
 
-(defun deb-packaging-commands-build-binary ()
-  "Build binary packages from the current working tree with dpkg-buildpackage -b."
-  (interactive)
-  (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
-         (context (deb-packaging-commands--package-context pkg-dir)))
-    (unless context
+(defun deb-packaging-commands--require-host-arch ()
+  "Signal a `user-error' unless the target architecture is the host's."
+  (let ((ctx (deb-packaging-commands--package-context
+              (deb-packaging-detect--find-package-dir nil t))))
+    (unless ctx
       (user-error "Not in a Debian package directory"))
-    (unless (equal (plist-get context :target-arch)
-                   (plist-get context :host-arch))
-      (user-error "Local binary builds use host architecture %s; use sbuild for %s"
-                  (plist-get context :host-arch)
-                  (plist-get context :target-arch)))
+    (unless (equal (plist-get ctx :target-arch) (plist-get ctx :host-arch))
+      (user-error "Only sbuild can build for %s on a %s host"
+                  (plist-get ctx :target-arch) (plist-get ctx :host-arch)))
+    ctx))
+
+(defun deb-packaging-commands--dpkg-binary ()
+  "Build binaries from the working tree with dpkg-buildpackage -b."
+  (let ((pkg-dir (plist-get (deb-packaging-commands--require-host-arch) :pkg-dir)))
     (deb-packaging-commands--run-command
-     "dpkg-buildpackage-binary"
-     '("dpkg-buildpackage" "-b")
-     pkg-dir 'dpkg-buildpackage-binary pkg-dir)))
+     "dpkg-buildpackage-binary" '("dpkg-buildpackage" "-b")
+     pkg-dir 'binary-build pkg-dir)))
 
 ;;; autopkgtest
 

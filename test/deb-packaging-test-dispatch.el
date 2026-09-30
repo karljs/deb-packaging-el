@@ -102,9 +102,10 @@ a transient default (only C-g is); a menu without the binding leaves
 the learned key dead."
   (dolist (prefix '(deb-packaging-dispatch-transient
                     deb-packaging-commands-source-build-transient
-                    deb-packaging-gbp-build-transient
                     deb-packaging-binary-build-transient
                     deb-packaging-lint-transient
+                    deb-packaging-lintian-transient
+                    deb-packaging-ubuntu-lint-transient
                     deb-packaging-test-transient
                     deb-packaging-upload-transient
                     deb-packaging-commands-clean-transient
@@ -147,12 +148,15 @@ the learned key dead."
              ":key \"C\".*:command deb-packaging-clone-git-ubuntu"
               layout))))
 
-(ert-deftest deb-packaging-test-dispatch/dispatch-binds-gbp-build ()
-  (let ((layout (deb-packaging-test-dispatch--layout
-                 'deb-packaging-dispatch-transient)))
-    (should (string-match-p
-             ":key \"G\"[^)]*:command deb-packaging-gbp-build-transient"
-             layout))))
+(ert-deftest deb-packaging-test-dispatch/builders-are-options-not-entries ()
+  "Builders are a --builder= choice inside Source/Binaries, not hub rows."
+  (let ((hub (deb-packaging-test-dispatch--layout
+              'deb-packaging-dispatch-transient)))
+    (should-not (string-match-p "gbp-build\\|build-binary" hub)))
+  (dolist (prefix '(deb-packaging-commands-source-build-transient
+                    deb-packaging-binary-build-transient))
+    (should (string-match-p ":argument \"--builder=\""
+                            (deb-packaging-test-dispatch--layout prefix)))))
 
 (ert-deftest deb-packaging-test-dispatch/source-transient-binds-gbp-orig ()
   (let ((layout (deb-packaging-test-dispatch--layout
@@ -166,6 +170,31 @@ the learned key dead."
     (should (string-match-p
              ":key \"-P\"[^)]*:argument \"--apt-pocket=proposed\""
              layout))))
+
+(ert-deftest deb-packaging-test-dispatch/package-menus-open ()
+  "regression: a -n infix shadowed -nc and the source menu failed to open."
+  (dolist (prefix '(deb-packaging-dispatch-transient
+                    deb-packaging-commands-source-build-transient
+                    deb-packaging-binary-build-transient
+                    deb-packaging-lint-transient
+                    deb-packaging-lintian-transient
+                    deb-packaging-ubuntu-lint-transient
+                    deb-packaging-test-transient
+                    deb-packaging-upload-transient))
+    (unwind-protect
+        (transient-setup prefix)
+      (transient-quit-all))))
+
+(ert-deftest deb-packaging-test-dispatch/unavailable-actions-say-why ()
+  (cl-letf (((symbol-function 'deb-packaging-commands--package-context)
+             (lambda (&rest _) '(:artifacts ((dsc . "foo.dsc")))))
+            ((symbol-function 'executable-find)
+             (lambda (tool) (not (equal tool "ubuntu-lint")))))
+    (should-not (deb-packaging-transients--why-not '("lintian" dsc)))
+    (should (equal (deb-packaging-transients--label "All binaries" '("lintian" debs))
+                   "All binaries (needs binaries)"))
+    (should (equal (deb-packaging-transients--why-not '("ubuntu-lint"))
+                   "ubuntu-lint not installed"))))
 
 (provide 'deb-packaging-test-dispatch)
 ;;; deb-packaging-test-dispatch.el ends here

@@ -345,12 +345,11 @@ upload, tar.*, orig.tar.*)."
             "\\.\\(dsc\\|changes\\|u?deb\\|ddeb\\|buildinfo\\|upload\\)$\\|\\.tar\\.[a-z0-9]+$\\|\\.orig\\.tar\\.[a-z0-9]+$")
            (prefixes (or (deb-packaging-detect--owned-package-prefixes pkg-dir)
                          (list name)))
-           (prefix-regex
-            (mapconcat (lambda (p) (concat "^" (regexp-quote p) "_"))
-                       prefixes "\\|"))
            (stale nil))
-       (dolist (file (directory-files dir nil prefix-regex))
-         (when (string-match-p ext-pattern file)
+       ;; Not one alternation regexp: gcc-sized control files overflow it.
+       (dolist (file (directory-files dir nil "_"))
+         (when (and (member (substring file 0 (string-search "_" file)) prefixes)
+                    (string-match-p ext-pattern file))
            (if (string-match-p orig-pattern file)
                ;; Orig tarballs embed the upstream version, not the full one.
                (when (string-match "_\\([^_]+\\)\\.orig\\.tar\\." file)
