@@ -13,11 +13,28 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'magit)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-status)
 (require 'deb-packaging-display)
+
+(defvar deb-packaging-clone--last-parent nil
+  "Parent directory of the last clone, offered as the next default.")
+
+(defun deb-packaging-clone--read-parent ()
+  "Read the directory to clone into, defaulting to the last one used."
+  (setq deb-packaging-clone--last-parent
+        (read-directory-name "Clone into: "
+                             (or deb-packaging-clone--last-parent default-directory)
+                             nil t)))
+
+(defun deb-packaging-clone--url-from-kill-ring ()
+  "Return the most recent URL-looking kill, or nil."
+  (cl-find-if (lambda (k) (string-match-p "\\`\\(https?\\|git\\|ssh\\)://\\|\\`git@" k))
+              (mapcar #'substring-no-properties (seq-take kill-ring 5))))
 
 (defun deb-packaging-clone--open-status (dir)
   "Open `deb-packaging-status' with DIR as the package directory."
@@ -53,9 +70,11 @@ The clone runs asynchronously through Magit's process machinery.  On
 success `deb-packaging-status' opens in the new clone.  If PARENT/PACKAGE
 already contains a package tree, skip the clone and open status there."
   (interactive
-   (list (read-string "Source package: ")
-         (read-directory-name "Clone into parent directory: "
-                              nil default-directory t)))
+   (let ((default (thing-at-point 'symbol t)))
+     (list (read-string (if default (format "Ubuntu source package [%s]: " default)
+                          "Ubuntu source package: ")
+                        nil nil default)
+           (deb-packaging-clone--read-parent))))
   (when (string-empty-p package)
     (user-error "No package given"))
   (unless (executable-find "git-ubuntu")
@@ -91,17 +110,19 @@ already contains a package tree, skip the clone and open status there."
                                        branch (concat "origin/" branch))))
           (message "Could not switch to Vcs-Git branch %s" branch))))))
 
-(defun deb-packaging-clone--gbp-sentinel (target output)
-  "Return a sentinel that opens TARGET after a successful gbp clone."
+(defun deb-packaging-clone--gbp-sentinel (target output &optional explicit-branch)
+  "Return a sentinel that opens TARGET after a successful gbp clone.
+Without EXPLICIT-BRANCH, switch to the Vcs-Git -b branch first."
   (lambda (proc _event)
     (when (memq (process-status proc) '(exit signal))
       (unwind-protect
           (if (and (eq (process-status proc) 'exit)
                    (zerop (process-exit-status proc)))
-              (if-let ((pkg-dir (deb-packaging-detect--find-package-dir target)))
+              (if (file-exists-p (expand-file-name "debian/changelog" target))
                   (progn
-                    (deb-packaging-clone--select-vcs-branch pkg-dir)
-                    (deb-packaging-clone--open-status pkg-dir))
+                    (unless explicit-branch
+                      (deb-packaging-clone--select-vcs-branch target))
+                    (deb-packaging-clone--open-status target))
                 (message "gbp clone completed, but no debian/changelog was found"))
             (message "gbp clone failed; see %s" (buffer-name output)))
       (when (buffer-live-p output)
@@ -114,10 +135,13 @@ already contains a package tree, skip the clone and open status there."
 When DEBIAN-BRANCH is non-empty, ask gbp to track that packaging branch.
 After cloning, follow Vcs-Git -b when that remote branch exists."
   (interactive
-   (list (read-string "Git repository URL: ")
-         (read-directory-name "Clone into directory: " nil nil nil)
-         (let ((branch (read-string "Packaging branch (blank for gbp default): ")))
-           (unless (string-empty-p branch) branch))))
+   (let* ((url (read-string "Packaging repository URL: "
+                            (deb-packaging-clone--url-from-kill-ring)))
+          (name (file-name-base (directory-file-name url))))
+     (list url
+           (expand-file-name name (deb-packaging-clone--read-parent))
+           (let ((branch (read-string "Packaging branch (blank for the repo default): ")))
+             (unless (string-empty-p branch) branch)))))
   (when (string-empty-p repository)
     (user-error "No Git repository given"))
   (unless (executable-find "gbp")
@@ -138,7 +162,7 @@ After cloning, follow Vcs-Git -b when that remote branch exists."
                        :command args
                        :noquery t
                        :sentinel (deb-packaging-clone--gbp-sentinel
-                                  target output))))
+                                  target output debian-branch))))
             (process-put proc 'inhibit-refresh t)
             (deb-packaging-display-buffer output 'output)
             proc)

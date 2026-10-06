@@ -19,19 +19,19 @@
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3" :distro "noble")
     (should (equal (deb-packaging-detect--parse-changelog pkg-dir)
-                   (list "foo" "1.2-3" "noble")))))
+                   (list "foo" "1.2-3" "noble" "noble")))))
 
 (ert-deftest deb-packaging-test-detect/parse-changelog-native ()
   (deb-packaging-test--with-package-tree
       (list :name "bar" :version "2.0" :distro "unstable")
     (should (equal (deb-packaging-detect--parse-changelog pkg-dir)
-                   (list "bar" "2.0" "unstable")))))
+                   (list "bar" "2.0" "unstable" "unstable")))))
 
 (ert-deftest deb-packaging-test-detect/parse-changelog-with-epoch ()
   (deb-packaging-test--with-package-tree
       (list :name "baz" :version "1:3.4-5" :distro "jammy")
     (should (equal (deb-packaging-detect--parse-changelog pkg-dir)
-                   (list "baz" "1:3.4-5" "jammy")))))
+                   (list "baz" "1:3.4-5" "jammy" "jammy")))))
 
 (ert-deftest deb-packaging-test-detect/parse-changelog-missing-file ()
   (let ((tmp (make-temp-file "deb-pkg-test-" t)))
@@ -40,6 +40,46 @@
           (make-directory (expand-file-name "debian" tmp) t)
           (should (null (deb-packaging-detect--parse-changelog tmp))))
       (delete-directory tmp t))))
+
+(defun deb-packaging-test-detect--series (changelog &optional ubuntu)
+  "Return the series parsed from CHANGELOG text; UBUNTU fakes distro-info."
+  (let ((tmp (make-temp-file "deb-pkg-test-" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'deb-packaging-detect--call-process-string)
+                   (lambda (_program arg)
+                     (and ubuntu (if (equal arg "--devel") "stonking"
+                                   "noble resolute stonking")))))
+          (deb-packaging-test--write-file
+           (expand-file-name "debian/changelog" tmp) changelog)
+          (nth 2 (deb-packaging-detect--parse-changelog tmp)))
+      (delete-directory tmp t))))
+
+(defconst deb-packaging-test-detect--trailer
+  "\n  * x\n\n -- A <a@b.c>  Mon, 01 Jan 2024 00:00:00 +0000\n\n")
+
+(ert-deftest deb-packaging-test-detect/series-strips-pocket ()
+  (should (equal (deb-packaging-test-detect--series
+                  (concat "foo (1-1ubuntu1) noble-proposed; urgency=medium\n"
+                          deb-packaging-test-detect--trailer))
+                 "noble")))
+
+(ert-deftest deb-packaging-test-detect/series-unreleased-uses-last-release ()
+  (should (equal (deb-packaging-test-detect--series
+                  (concat "foo (1-1ubuntu0.2) UNRELEASED; urgency=medium\n"
+                          deb-packaging-test-detect--trailer
+                          "foo (1-1ubuntu0.1) noble-security; urgency=medium\n"
+                          deb-packaging-test-detect--trailer)
+                  t)
+                 "noble")))
+
+(ert-deftest deb-packaging-test-detect/series-new-ubuntu-delta-targets-devel ()
+  (should (equal (deb-packaging-test-detect--series
+                  (concat "foo (1-1ubuntu1) UNRELEASED; urgency=medium\n"
+                          deb-packaging-test-detect--trailer
+                          "foo (1-1) unstable; urgency=medium\n"
+                          deb-packaging-test-detect--trailer)
+                  t)
+                 "stonking")))
 
 ;;; Package directory detection
 

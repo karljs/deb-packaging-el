@@ -339,16 +339,6 @@
       (should (> (length note) 0))
       (should (string-match-p ":" (substring-no-properties note))))))
 
-;;; Kept session note
-
-(ert-deftest deb-packaging-test-status/kept-session-note ()
-  (let ((deb-packaging-commands--run-history nil))
-    (should (null (deb-packaging-status--kept-session-note)))
-    (deb-packaging-commands--record-run
-     'binary-build 'failure "*buf*" '(:kept-session "sess-1"))
-    (should (string-match-p
-             "sess-1" (deb-packaging-status--kept-session-note)))))
-
 ;;; Mode map
 
 (ert-deftest deb-packaging-test-status/mode-map-keeps-p-for-navigation ()
@@ -493,28 +483,28 @@
     (should (string-match-p "noble | arm64 | main (modified)"
                             (buffer-string)))))
 
-(ert-deftest deb-packaging-test-status/status-prompts-outside-package ()
+(ert-deftest deb-packaging-test-status/status-outside-package-offers-get ()
+  (let ((default-directory (make-temp-file "deb-empty-" t))
+        called)
+    (unwind-protect
+        (cl-letf (((symbol-function 'deb-packaging-get-transient)
+                   (lambda () (interactive) (setq called t))))
+          (deb-packaging-status)
+          (should called))
+      (delete-directory default-directory t))))
+
+(ert-deftest deb-packaging-test-status/open-checkout-opens-status ()
   (deb-packaging-test--with-package-tree
       (list :name "foo" :version "1.2-3")
     (let ((default-directory pkg-parent-dir)
-          (answers (list pkg-dir))
           (displayed nil))
       (deb-packaging-test--with-mocked-process
           '(("dpkg" . "amd64") ("schroot" . "") ("lxc" . ""))
-        (cl-letf (((symbol-function 'read-directory-name)
-                   (lambda (&rest _) (pop answers)))
-                  ((symbol-function 'deb-packaging-display-buffer)
+        (cl-letf (((symbol-function 'deb-packaging-display-buffer)
                    (lambda (buf _category) (setq displayed buf))))
-          (deb-packaging-status))
-        (should (null answers))
+          (deb-packaging-develop-open-checkout pkg-dir))
         (should (string= (buffer-name displayed)
                          (deb-packaging-status--buffer-name "foo" pkg-dir)))
-        (should (file-equal-p (buffer-local-value 'default-directory displayed)
-                              pkg-dir))
-        (should (equal (plist-get (buffer-local-value
-                                   'deb-packaging-status--context displayed)
-                                  :name)
-                       "foo"))
         (kill-buffer displayed)))))
 
 (ert-deftest deb-packaging-test-status/status-inside-package-does-not-prompt ()

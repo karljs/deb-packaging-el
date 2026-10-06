@@ -81,10 +81,24 @@ by the prompt immediately and never seen.  PROMPT defaults to
   "Return the full version string for PKG-DIR, or nil."
   (cadr (deb-packaging-detect--package-info pkg-dir)))
 
+(defvar deb-packaging-detect--memo nil
+  "Hash table caching `deb-packaging-detect--call-process-string', or nil.
+Bound around one status render, which asks the same questions many times.")
+
 (defun deb-packaging-detect--call-process-string (program &rest args)
   "Run PROGRAM with ARGS, returning trimmed stdout, or nil if empty.
 Also nil when PROGRAM is not installed: a missing binary must not
 crash callers like the status render, which probes dpkg, schroot, lxc."
+  (if deb-packaging-detect--memo
+      (let ((key (cons program args)))
+        (pcase (gethash key deb-packaging-detect--memo 'unset)
+          ('unset (puthash key (deb-packaging-detect--call-process-string-1 program args)
+                           deb-packaging-detect--memo))
+          (value value)))
+    (deb-packaging-detect--call-process-string-1 program args)))
+
+(defun deb-packaging-detect--call-process-string-1 (program args)
+  "Run PROGRAM with ARGS uncached; see `deb-packaging-detect--call-process-string'."
   (let ((output (with-output-to-string
                   (with-current-buffer standard-output
                     (condition-case nil
@@ -101,8 +115,37 @@ crash callers like the status render, which probes dpkg, schroot, lxc."
 
 ;;; Changelog Parsing
 
+(defconst deb-packaging-detect--entry-re
+  "^\\([^ ]+\\) (\\([^)]+\\)) \\([^;]+\\);"
+  "Changelog entry header: name, version, distribution.")
+
+(defun deb-packaging-detect--suite-series (suite)
+  "Return SUITE without its pocket (noble-proposed -> noble)."
+  (replace-regexp-in-string "-\\(proposed\\|updates\\|security\\|backports\\)\\'"
+                            "" suite))
+
+(defun deb-packaging-detect--unreleased-series (version)
+  "Return the series an UNRELEASED entry at VERSION builds for.
+Point is after the top entry header.  The last released entry's series,
+except a new Ubuntu delta on a Debian upload targets Ubuntu devel."
+  (let ((previous (save-excursion
+                    (cl-loop while (re-search-forward
+                                    deb-packaging-detect--entry-re nil t)
+                             for d = (string-trim (match-string 3))
+                             unless (equal d "UNRELEASED") return d)))
+        (ubuntu (split-string (or (deb-packaging-detect--call-process-string
+                                   "ubuntu-distro-info" "--all")
+                                  ""))))
+    (cond ((and ubuntu (string-match-p "ubuntu" version)
+                (not (member (and previous (deb-packaging-detect--suite-series previous))
+                             ubuntu)))
+           (deb-packaging-detect--call-process-string "ubuntu-distro-info" "--devel"))
+          (previous (deb-packaging-detect--suite-series previous)))))
+
 (defun deb-packaging-detect--parse-changelog (&optional dir)
-  "Parse debian/changelog in DIR. Return (name version distro)."
+  "Parse debian/changelog in DIR.  Return (name version series raw-distro).
+SERIES is the release to build for: the distribution without a pocket,
+resolved through `deb-packaging-detect--unreleased-series' when UNRELEASED."
   (let* ((pkg-dir (or dir (deb-packaging-detect--find-package-dir)))
          (changelog (when pkg-dir
                       (expand-file-name "debian/changelog" pkg-dir))))
@@ -110,10 +153,46 @@ crash callers like the status render, which probes dpkg, schroot, lxc."
       (with-temp-buffer
         (insert-file-contents changelog)
         (goto-char (point-min))
-        (when (looking-at "^\\([^ ]+\\) (\\([^)]+\\)) \\([^;]+\\);")
-          (list (match-string 1)
-                (match-string 2)
-                (string-trim (match-string 3))))))))
+        (when (looking-at deb-packaging-detect--entry-re)
+          (let ((name (match-string 1))
+                (version (match-string 2))
+                (raw (string-trim (match-string 3))))
+            (goto-char (match-end 0))
+            (list name version
+                  (if (equal raw "UNRELEASED")
+                      (or (deb-packaging-detect--unreleased-series version) raw)
+                    (deb-packaging-detect--suite-series raw))
+                  raw)))))))
+
+;;; Change in progress
+
+(defun deb-packaging-detect--changelog-top-text (&optional pkg-dir)
+  "Return the text of the top changelog entry in PKG-DIR, or nil."
+  (when-let* ((dir (or pkg-dir (deb-packaging-detect--find-package-dir)))
+              (file (expand-file-name "debian/changelog" dir))
+              ((file-readable-p file)))
+    (with-temp-buffer
+      ;; ponytail: first 64k; an entry longer than that is truncated.
+      (insert-file-contents file nil 0 65536)
+      (goto-char (point-min))
+      (buffer-substring (point-min)
+                        (if (re-search-forward "^ -- " nil t)
+                            (line-end-position)
+                          (point-max))))))
+
+(defun deb-packaging-detect--launchpad-bug (&optional pkg-dir)
+  "Return the Launchpad bug number this change is for, or nil.
+From the branch name (lp1234567, lp-1234567, bug/1234567), else the top
+changelog entry's LP: #N."
+  (let* ((default-directory (or pkg-dir default-directory))
+         (branch (ignore-errors (magit-get-current-branch)))
+         (case-fold-search t))
+    (cond ((and branch (string-match "\\(?:\\`\\|[/_-]\\)\\(?:lp\\|bug\\)[#/_-]?\\([0-9]\\{4,\\}\\)"
+                                     branch))
+           (match-string 1 branch))
+          ((when-let ((text (deb-packaging-detect--changelog-top-text pkg-dir)))
+             (and (string-match "LP: *#\\([0-9]+\\)" text)
+                  (match-string 1 text)))))))
 
 ;;; Source metadata
 
@@ -372,7 +451,8 @@ package tree.  Keys:
 
   :name          source package name
   :version       full version string
-  :distro        target distribution
+  :distro        series to build for (no pocket, UNRELEASED resolved)
+  :changelog-distro distribution as written in the top changelog entry
   :pkg-dir       canonical directory containing debian/changelog
   :parent-dir    build-output directory
   :repo-dir      canonical Git top-level, or nil
@@ -393,6 +473,7 @@ package tree.  Keys:
     (let* ((name (nth 0 info))
            (version (nth 1 info))
            (distro (nth 2 info))
+           (changelog-distro (nth 3 info))
            (parent-dir (deb-packaging-detect--parent-dir pkg-dir))
            (default-directory pkg-dir)
            (repo-dir (when-let ((root (ignore-errors (magit-toplevel))))
@@ -405,6 +486,7 @@ package tree.  Keys:
       (list :name name
             :version version
             :distro distro
+            :changelog-distro changelog-distro
             :pkg-dir pkg-dir
             :parent-dir parent-dir
             :repo-dir repo-dir

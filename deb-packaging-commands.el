@@ -26,6 +26,7 @@
 (require 'deb-packaging-ppa)
 (require 'deb-packaging-regen)
 (require 'deb-packaging-display)
+(require 'deb-packaging-resume)
 
 (declare-function deb-packaging-infra--ppa-owner "deb-packaging-infra")
 (declare-function deb-packaging-infra--ppa-name "deb-packaging-infra")
@@ -222,22 +223,24 @@ Return plist (:ok N :skip N :warn N :error N :fail N) from the final
                 (`("FAIL" ,n)  (setq fail  (string-to-number n)))))
             (list :ok ok :skip skip :warn warn :error error :fail fail)))))))
 
-(defun deb-packaging-commands--parse-sbuild-summary (buf-name)
-  "Parse a kept schroot session from sbuild buffer BUF-NAME.
-Return plist (:kept-session NAME), or nil when the session was ended."
+(defun deb-packaging-commands--parse-uscan-summary (buf-name)
+  "Parse `uscan --report-status' output in BUF-NAME.
+Return (:newest V :newer BOOL), or nil when uscan reported no version."
   (when (buffer-live-p (get-buffer buf-name))
     (with-current-buffer buf-name
       (save-excursion
         (goto-char (point-min))
-        (when (re-search-forward "^Keeping session: \\(\\S-+\\)" nil t)
-          (list :kept-session (match-string 1)))))))
+        (when (re-search-forward "Newest version of .* on remote site is \\([^ ,]+\\)"
+                                 nil t)
+          (list :newest (match-string 1)
+                :newer (and (re-search-forward "Newer package available" nil t) t)))))))
 
 (defun deb-packaging-commands--run-summary-parser (key)
   "Return the summary parser for run KEY, or nil."
   (pcase key
     ((or 'lintian-source 'lintian-binary) #'deb-packaging-commands--parse-lint-summary)
     ('ubuntu-lint #'deb-packaging-commands--parse-ubuntu-lint-summary)
-    ('binary-build #'deb-packaging-commands--parse-sbuild-summary)
+    ('upstream-check #'deb-packaging-commands--parse-uscan-summary)
     (_ nil)))
 
 (defun deb-packaging-commands--wrap-sentinel (proc action)
@@ -707,11 +710,24 @@ The --dist chroot selection always comes from the changelog."
                                  (string-remove-prefix "--extra-repository=" a)
                                  distro)))
                       repo-args))
-             (passthrough (cl-remove-if
+             (keep (member "--keep-failed" args))
+             (passthrough (append
+                           (cl-remove-if
                             (lambda (a)
                               (or (string-prefix-p "--extra-repository=" a)
-                                  (string-prefix-p "--arch=" a)))
-                            args)))
+                                  (string-prefix-p "--arch=" a)
+                                  (equal a "--keep-failed")))
+                            args)
+                           ;; A random build path: kept trees must not collide
+                           ;; in the shared /build bind mount.
+                           (when keep
+                             '("--purge-build=successful" "--purge-session=successful"
+                               "--purge-deps=successful" "--build-path=")))))
+        (setq ctx (plist-put (copy-sequence ctx) :target-arch arch))
+        (when-let ((kept (deb-packaging-resume--load ctx)))
+          (unless (y-or-n-p "A failed build is kept for resuming (r).  Discard it and start fresh? ")
+            (user-error "Kept build left alone; resume it with r in the Binaries menu"))
+          (deb-packaging-resume--discard ctx kept))
         ;; Pre-flight ppa: extra-repos: a PPA with no series for this
         ;; distro kills apt-get update minutes into the build; fail at
         ;; dispatch with the reason instead.  Only a definitive
@@ -739,17 +755,20 @@ Remove %s from the binary-build -e menu, or publish the series."
           (when arch-value
             (deb-packaging-config-save-architecture
              (nth 0 info) distro arch)))
-        (deb-packaging-commands--run-command
-         "sbuild"
-         (append (list "sbuild")
-                 (list (format "--dist=%s" distro)
-                       (format "--arch=%s" arch))
-                 passthrough
-                 extra-repo-arg
-                 (list dsc-file))
-         parent-dir
-         'binary-build
-         pkg-dir)))))
+        (let ((buffer (deb-packaging-commands--run-command
+                       "sbuild"
+                       (append (list "sbuild")
+                               (list (format "--dist=%s" distro)
+                                     (format "--arch=%s" arch))
+                               passthrough
+                               extra-repo-arg
+                               (list dsc-file))
+                       parent-dir
+                       'binary-build
+                       pkg-dir)))
+          (when keep
+            (deb-packaging-resume--watch-sbuild buffer ctx))
+          buffer)))))
 
 (defun deb-packaging-commands--require-host-arch ()
   "Signal a `user-error' unless the target architecture is the host's."

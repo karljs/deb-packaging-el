@@ -41,27 +41,52 @@ display behavior, and dev-container settings.
 
 ## First use
 
-Visit a source tree containing `debian/changelog`, then run
-`M-x deb-packaging-status`. The status buffer shows the package name, changelog
-distribution, target architecture, repository branch, and local and Launchpad
-actions.
+Run `M-x deb-packaging-status`. Inside a package checkout it opens the status
+buffer; anywhere else it offers to clone an Ubuntu package (`git ubuntu
+clone`), clone a Debian packaging repo (`gbp clone`), or open a checkout.
 
-Common keys:
+The status buffer follows the flow of a fix, top to bottom:
 
-- `RET`: open the selected action or visit a text artifact.
-- `o`: reopen output from the selected operation.
-- `g`: refresh local package state.
-- `?`: open the command hub for the current surface.
-- `q`: exit the current surface.
+| Group | Rows (key) |
+| --- | --- |
+| Develop | Branch (`f`), Patches (`a`), Changelog (`C`), Upstream (`N`), Dev shell (`e`) |
+| Local | Source package (`s`), Binaries (`b`), Lint (`l`), Autopkgtest (`t`) |
+| Launchpad | Upload (`U`), Builds (`B`), Tests (`T`) |
+| Submit | Merge proposal (`M`), Forward to Debian or upstream (`P`) |
 
-The main command hub is `M-x deb-packaging-dispatch`.
+Rows that need attention expand and say what to press, e.g. "Start a fix
+branch before committing (f, then n)". `RET` on a row opens its menu; the
+same keys work in the command hub (`?`, or `M-x deb-packaging-dispatch`).
+Menu actions that cannot run are greyed out with the reason.
+
+Other keys: `o` reopens the selected operation's output, `g` refreshes, `c`
+cleans artifacts, `r` resets the tree, `R` regenerates debian/control, `G`
+gets another package, `i` opens infrastructure (chroots, images, PPAs).
+
+## Fixing a package
+
+1. `G`, then `u`: clone the package. Status opens on `ubuntu/devel`.
+2. `f`, then `n`: start a fix branch. Give the Launchpad bug and the branch
+   defaults to `lpNNN`; it tracks `pkg/ubuntu/devel`, so Branch shows how many
+   commits the fix has.
+3. `a` for patches:
+   - `u` imports an upstream fix from a commit or pull-request URL (or a
+     file) as a DEP-3 patch with `Origin` and `Bug-Ubuntu`, and checks it
+     applies with fuzz 0, as dpkg-source requires.
+   - `e` edits the patches as git commits with `gbp pq`; `x` writes them back.
+4. `C`, then `a`: add a changelog entry. It opens a new Ubuntu version, or
+   appends while the entry is UNRELEASED, adding `(LP: #N)`. `m` updates the
+   Maintainer field for a new Ubuntu delta; `r` finalizes the release.
+5. Build and test under Local, upload to a PPA under Launchpad. Upload stays
+   blocked while the changelog is UNRELEASED.
+6. `M`, then `s`: push the branch and open a merge proposal with `git ubuntu
+   submit`. `P` forwards the fix to Debian (a salsa clone with a work branch)
+   or exports it as a `.patch` for upstream.
+
+While the changelog is UNRELEASED, builds target the last released series, or
+Ubuntu devel for a new delta on a Debian upload. The header shows both.
 
 ## Build and verify
-
-The status buffer has two groups. **Local**: Source package (`s`), Binaries
-(`b`), Lint (`l`), Autopkgtest (`t`). **Launchpad**: Upload (`U`), Builds
-(`B`), Tests (`T`). The header shows the PPA, plus stale files, patch queue,
-and dev container when relevant.
 
 - Source package: `--builder=` picks `dpkg-buildpackage` (default) or `gbp`
   (`gbp buildpackage -S`). Orig tarball actions (git-ubuntu, gbp) live in the
@@ -75,32 +100,17 @@ and dev container when relevant.
 - Lint: `lintian` checks the source package and binaries against Debian
   policy; `ubuntu-lint` checks Ubuntu upload rules (changelog, maintainer, bug
   references). `RET` on a Lint row opens that tool's menu; `l` opens both.
-- Menu actions whose inputs or tools are missing are greyed out with the
-  reason, matching the status buffer's `blocked` rows.
-
-Artifacts and operation output are available from the status buffer. The `o`
-key reopens the latest output for tracked operations.
-
-Typical source-to-PPA flow:
-
-1. Open status in the package checkout.
-2. Build a source package, then build binaries with sbuild.
-3. Run lint and autopkgtest.
-4. Press `U`, select a PPA, and upload the source `.changes` file.
-5. Open Launchpad `Builds` from status to inspect acceptance and builds.
-6. Open Launchpad `Tests` to view logs or trigger another test run.
-
-## Git workflows
-
-The package supports explicit peer workflows:
-
-- Use `gbp clone` and `gbp buildpackage` for git-buildpackage repositories.
-- Use `git ubuntu clone`, export, and update actions for git-ubuntu repositories.
-- A `Vcs-Git` branch declaration is retained when cloning. gbp configuration
-  remains the authority for branch names and export directories.
-
-Patch queues, upstream updates, backports, and propagation are available from
-the command hub and status buffer.
+- Big packages: with "Keep failed builds" (on by default) a failed sbuild
+  keeps its session, with build-deps installed, and its build tree. Fix it
+  in the checkout (a patch, debian/rules), then `b`, then `r` to resume: only
+  changed debian/ files are copied in, changed patches are re-applied, and
+  `dpkg-buildpackage -nc` continues in the same session, so make or ninja
+  rebuilds just what the fix touched. A configure-step change needs a fresh
+  build. `o` opens the tree, `x` opens a shell in the session, and `d`
+  discards it. "Skip tests" builds with the nocheck profile. Requires
+  sbuild's schroot mode.
+- Dev shell: an LXD container with the build-deps and language servers,
+  mounting the checkout, for editing upstream code with eglot over TRAMP.
 
 ## Target architecture
 

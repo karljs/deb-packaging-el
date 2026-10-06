@@ -19,10 +19,8 @@
 
 (require 'compile)
 (require 'magit)
-(require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-commands)
-(require 'deb-packaging-transients)
 
 ;;; Pre-flight checks
 
@@ -75,9 +73,10 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
     (deb-packaging-commands--after-compile
      (deb-packaging-commands--compile "gbp pq import")
      (lambda ()
+       (deb-packaging-commands--notify-status-refresh)
        (when (deb-packaging-pq--on-pq-branch-p)
          (magit-status-setup-buffer dir)
-         (message "On patch-queue branch.  Edit with Magit, then run export when ready."))))))
+         (message "Each patch is now a commit.  Edit with Magit; finish with a, then x."))))))
 
 ;;;###autoload
 (defun deb-packaging-pq-switch ()
@@ -87,6 +86,7 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
   (deb-packaging-commands--after-compile
    (deb-packaging-commands--compile "gbp pq switch")
    (lambda ()
+     (deb-packaging-commands--notify-status-refresh)
      (let ((branch (magit-get-current-branch)))
        (message "On branch: %s" (or branch "detached"))))))
 
@@ -95,7 +95,9 @@ Runs `gbp pq import' (switches to patch-queue/<branch>) and opens
   "Rebase the patch-queue branch against the current branch HEAD."
   (interactive)
   (deb-packaging-pq--ensure-quilt-repo)
-  (deb-packaging-commands--compile "gbp pq rebase"))
+  (deb-packaging-commands--after-compile
+   (deb-packaging-commands--compile "gbp pq rebase")
+   #'deb-packaging-commands--notify-status-refresh))
 
 ;;;###autoload
 (defun deb-packaging-pq-export ()
@@ -132,41 +134,6 @@ on the branch that were never exported are lost."
       (deb-packaging-commands--after-compile
        (deb-packaging-commands--compile "gbp pq drop")
        #'deb-packaging-commands--notify-status-refresh))))
-
-;;; Transient
-
-(defun deb-packaging-pq--transient-header ()
-  "Return a header string showing the current branch and patch-queue state."
-  (let* ((state (deb-packaging-pq--state))
-         (branch (plist-get state :branch))
-         (on-pq (plist-get state :on-pq-p))
-         (exists (plist-get state :exists-p)))
-    (format "%s\n\ngbp pq: patch queue\n%s"
-            (deb-packaging-transients--context-header)
-            (cond
-             (on-pq
-              (format "On patch-queue branch: %s\nExport when ready."
-                      (or branch "detached")))
-             (exists
-              (format "Packaging branch: %s\nPatch-queue ready: switch to edit."
-                      (or branch "detached")))
-             (t
-              (format "Packaging branch: %s\nNo patch-queue: import to start."
-                      (or branch "detached")))))))
-
-;;;###autoload(autoload 'deb-packaging-pq-transient "deb-packaging-pq" nil t)
-(transient-define-prefix deb-packaging-pq-transient ()
-  "Manage Debian quilt patches as git commits via gbp pq."
-  :environment #'deb-packaging-transients--env
-  [:description deb-packaging-pq--transient-header]
-  ["Patch queue"
-   ("i" "Import (quilt -> patch-queue)"  deb-packaging-pq-import)
-   ("s" "Switch (toggle)"                deb-packaging-pq-switch)
-   ("r" "Rebase onto HEAD"               deb-packaging-pq-rebase)
-   ("e" "Export (-> debian/patches)"     deb-packaging-pq-export)
-   ("d" "Drop (delete, no export)"       deb-packaging-pq-drop)]
-  ["Navigation"
-   ("q" "Quit" transient-quit-one)])
 
 (provide 'deb-packaging-pq)
 ;;; deb-packaging-pq.el ends here

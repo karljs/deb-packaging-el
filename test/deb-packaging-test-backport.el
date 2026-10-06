@@ -251,7 +251,7 @@ index 0000000..3333333
 (ert-deftest deb-packaging-test-backport/verification-always-pops ()
   (let ((cmd (deb-packaging-backport--verify-command nil)))
     (should (string-match-p "quilt applied" cmd))
-    (should (string-search "quilt push -a; rc=$?;" cmd))
+    (should (string-search "quilt push -a --fuzz=0; rc=$?;" cmd))
     (should (string-search "trap cleanup EXIT" cmd))
     (should (string-search "cleanup; pop_rc=$?;" cmd))))
 

@@ -22,6 +22,7 @@
 (require 'deb-packaging-config)
 (require 'deb-packaging-ppa)
 (require 'deb-packaging-display)
+(require 'deb-packaging-resume)
 
 ;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging-commands--runner-choices "deb-packaging-commands")
@@ -46,7 +47,8 @@
   "Run FN with the package's transient display action bound.
 Used as :environment for the prefixes in this package."
   (let ((transient-display-buffer-action
-         deb-packaging-display-transient-action))
+         deb-packaging-display-transient-action)
+        (deb-packaging-detect--memo (make-hash-table :test #'equal)))
     (funcall fn)))
 
 (defun deb-packaging-transients--context ()
@@ -55,6 +57,12 @@ Used as :environment for the prefixes in this package."
     (plist-put ctx :default-ppa
                (deb-packaging-ppa-load
                 (plist-get ctx :name) (plist-get ctx :distro)))))
+
+(defun deb-packaging-transients--titled (header title)
+  "Return HEADER's text above group TITLE.
+Transient hides groups without suffixes, so a header rides on the first
+real group's description."
+  (concat (funcall header) "\n\n" (propertize title 'face 'transient-heading)))
 
 (defun deb-packaging-transients--context-header ()
   "Return a compact header for package operation transients."
@@ -102,6 +110,8 @@ Used as :environment for the prefixes in this package."
 (declare-function deb-packaging-dev-open "deb-packaging-dev")
 (declare-function deb-packaging-dev-project "deb-packaging-dev")
 (declare-function deb-packaging-dev-exec "deb-packaging-dev")
+(declare-function deb-packaging-dev--container-exists-p "deb-packaging-dev")
+(declare-function deb-packaging-dev--container-name "deb-packaging-dev")
 
 ;;; 1. Source build (dpkg-buildpackage)
 
@@ -120,8 +130,8 @@ Used as :environment for the prefixes in this package."
   "Build the Debian source package, or fetch its orig tarball."
   :value #'deb-packaging-transients--source-default-value
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["Builder"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "Builder"))
    ("-b" "Builder" "--builder="
     :class transient-option
     :choices ("dpkg-buildpackage" "gbp")
@@ -169,7 +179,7 @@ proposed can add the `proposed' candidate in the -e menu."
 Restores the saved extra-repository set for the current package and
 changelog distro; nothing extra when no set was saved (the chroot's own
 sources.list provides the distro's pockets)."
-  (append (list "--builder=sbuild" "-A" (concat "--arch="
+  (append (list "--builder=sbuild" "--keep-failed" "-A" (concat "--arch="
                               (deb-packaging-config--effective-architecture)))
           (mapcar (lambda (r) (concat "--extra-repository=" r))
                   (deb-packaging-transients--effective-repos))))
@@ -294,8 +304,8 @@ sbuild builds the .dsc in a chroot; dpkg-buildpackage and gbp build the
 working tree on the host."
   :value #'deb-packaging-transients--binary-default-value
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["Builder"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "Builder"))
    ("-b" "Builder" "--builder="
     :class transient-option
     :choices ("sbuild" "dpkg-buildpackage" "gbp")
@@ -311,14 +321,8 @@ working tree on the host."
     ("-A" "Build arch-all packages"  "-A")
     ("-v" "Verbose"                  "-v")
     ("-u" "apt upgrade"              "--apt-upgrade")
-    ("-S" "Purge session"
-     "--purge-session="
-     :class transient-option
-     :choices ("always" "successful" "never"))
-    ("-P" "Purge build dir"
-     "--purge-build="
-     :class transient-option
-     :choices ("always" "successful" "never"))
+    ("-k" "Keep failed builds for resuming" "--keep-failed")
+    ("-T" "Skip tests (nocheck)" "--profiles=nocheck")
     ("-F" "Shell on build failure"
      deb-packaging-transients--sbuild-shell)
     ("-e" "Extra repository"
@@ -337,7 +341,13 @@ working tree on the host."
     ("b" "Build binaries" deb-packaging-commands-binary-build)
     ("q" "Quit" transient-quit-one)]
    ["Setup"
-    ("c" "Create sbuild chroot" deb-packaging-infra-create-schroot)]])
+    ("c" "Create sbuild chroot" deb-packaging-infra-create-schroot)]]
+  ["Failed build kept for resuming"
+   :if deb-packaging-resume-current
+   ("r" "Resume with the checkout's debian/ changes" deb-packaging-resume-build)
+   ("o" "Open the build tree" deb-packaging-resume-open-tree)
+   ("x" "Shell in the build session" deb-packaging-resume-shell)
+   ("d" "Discard it" deb-packaging-resume-discard)])
 
 ;;; Suffix availability
 ;;
@@ -362,11 +372,14 @@ NEEDS lists tool names (strings) and artifact kinds (symbols)."
                        (unless (alist-get need arts)
                          (alist-get need deb-packaging-transients--artifact-needs))))))
 
+(defun deb-packaging-transients--label-why (text why)
+  "Return TEXT, suffixed with WHY it is unavailable when non-nil."
+  (if why (format "%s (%s)" text why) text))
+
 (defun deb-packaging-transients--label (text needs)
   "Return TEXT, suffixed with why NEEDS are unmet."
-  (if-let ((why (deb-packaging-transients--why-not needs)))
-      (format "%s (%s)" text why)
-    text))
+  (deb-packaging-transients--label-why
+   text (deb-packaging-transients--why-not needs)))
 
 ;;; 3. Lint: lintian (Debian policy) and ubuntu-lint (Ubuntu upload rules)
 
@@ -415,8 +428,8 @@ NEEDS lists tool names (strings) and artifact kinds (symbols)."
   "Check the built packages against Debian policy with lintian."
   :value deb-packaging-transients--lint-default-args
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["lintian options"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "lintian options"))
    ("-i" deb-packaging-transients--lintian-info)
    ("-I" deb-packaging-transients--lintian-display-info)
    ("-P" deb-packaging-transients--lintian-pedantic)
@@ -438,8 +451,8 @@ NEEDS lists tool names (strings) and artifact kinds (symbols)."
   "Check Ubuntu upload rules (changelog, maintainer, bug refs) with ubuntu-lint."
   :value deb-packaging-transients--lint-default-args
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["ubuntu-lint options"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "ubuntu-lint options"))
    ("-v" deb-packaging-transients--ubuntu-lint-verbose)
    ("-C" deb-packaging-transients--ubuntu-lint-context)
    ("-a" deb-packaging-transients--ubuntu-lint-level)]
@@ -455,8 +468,8 @@ NEEDS lists tool names (strings) and artifact kinds (symbols)."
 Each check reads only its own tool's options."
   :value deb-packaging-transients--lint-default-args
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  [["lintian options"
+  [:description deb-packaging-transients--context-header
+   ["lintian options"
     ("-i" deb-packaging-transients--lintian-info)
     ("-I" deb-packaging-transients--lintian-display-info)
     ("-P" deb-packaging-transients--lintian-pedantic)
@@ -509,8 +522,8 @@ Each check reads only its own tool's options."
 The test image's distro comes from the changelog."
   :value #'deb-packaging-transients--test-default-value
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["Options"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "Options"))
    ("-u"  "Upgrade packages before test"   "--apt-upgrade")
    ("-P"  "Use dependencies from proposed" "--apt-pocket=proposed")
    ("-f"  "Drop to shell on failure"       "--shell-fail")
@@ -544,8 +557,8 @@ The test image's distro comes from the changelog."
   "Upload to a Launchpad PPA with dput."
   :value #'deb-packaging-transients--upload-default-value
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["PPA"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "PPA"))
    ("-p"  "PPA (required)"
     "--ppa="
     :class transient-option
@@ -566,8 +579,8 @@ The test image's distro comes from the changelog."
   "Remove build artifacts from the output directory."
   :value '("--stale")
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["What to remove"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "What to remove"))
    ("-a" "Current-version artifacts" "--artifacts")
    ("-S" "Stale artifacts (other versions)" "--stale")]
   ["Run"
@@ -581,8 +594,8 @@ The test image's distro comes from the changelog."
   "Reset the source tree to a pristine state."
   :value '("--quilt" "--pc" "--files")
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["Reset source tree"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-transients--context-header "Reset source tree"))
    ("-q" "Pop quilt patches"     "--quilt")
    ("-p" "Remove .pc/ directory" "--pc")
    ("-f" "Remove debian/files"   "--files")]
@@ -593,21 +606,39 @@ The test image's distro comes from the changelog."
 ;;; 8. Dev shell (LXD)
 
 ;;;###autoload(autoload 'deb-packaging-dev-transient "deb-packaging-transients" nil t)
+(defun deb-packaging-transients--no-dev-container-p ()
+  "Return non-nil when this package has no dev container yet."
+  (not (ignore-errors
+         (deb-packaging-dev--container-exists-p
+          (deb-packaging-dev--container-name
+           (deb-packaging-detect--package-name)
+           (deb-packaging-config--effective-distro))))))
+
+(defun deb-packaging-transients--not-in-container-file-p ()
+  "Return non-nil unless the current buffer visits a file in a container."
+  (not (and buffer-file-name (string-prefix-p "/lxc:" buffer-file-name))))
+
 (transient-define-prefix deb-packaging-dev-transient ()
-  "Develop upstream source in an LXD container with LSP."
+  "Work on the upstream source in an LXD container with build-deps and LSP."
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-transients--context-header]
-  ["Dev shell"
-   ("e" "Dev shell (C-u=reprovision)" deb-packaging-dev-shell)
-   ("o" "Open existing container (dired)" deb-packaging-dev-open)
-   ("p" "Open project (find file)" deb-packaging-dev-project)
-   ("x" "Shell into container" deb-packaging-dev-exec)
-   ("B" "Generate compile_commands.json" deb-packaging-dev-compile-db)
-   ("E" "Start eglot" deb-packaging-dev-eglot)]
-  ["Manage"
-   ("k" "Destroy dev container" deb-packaging-dev-destroy)]
-  ["Navigation"
-   ("q" "Quit" transient-quit-one)])
+  [:description deb-packaging-transients--context-header
+   ["Container"
+    ("e" "Create or update (C-u: reinstall everything)" deb-packaging-dev-shell)
+    ("d" "Delete" deb-packaging-dev-destroy
+     :inapt-if deb-packaging-transients--no-dev-container-p)]
+   ["Work in it"
+    ("f" "Find a file" deb-packaging-dev-project
+     :inapt-if deb-packaging-transients--no-dev-container-p)
+    ("o" "Browse the source (dired)" deb-packaging-dev-open
+     :inapt-if deb-packaging-transients--no-dev-container-p)
+    ("x" "Shell" deb-packaging-dev-exec
+     :inapt-if deb-packaging-transients--no-dev-container-p)]
+   ["Language server"
+    ("c" "Generate compile_commands.json (C/C++)" deb-packaging-dev-compile-db
+     :inapt-if deb-packaging-transients--no-dev-container-p)
+    ("l" "Start eglot in this buffer" deb-packaging-dev-eglot
+     :inapt-if deb-packaging-transients--not-in-container-file-p)
+    ("q" "Quit" transient-quit-one)]])
 
 (provide 'deb-packaging-transients)
 ;;; deb-packaging-transients.el ends here

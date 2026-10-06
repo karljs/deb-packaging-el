@@ -29,6 +29,7 @@
 (require 'deb-packaging-ppa)
 (require 'deb-packaging-transients)
 (require 'deb-packaging-display)
+(require 'deb-packaging-develop)
 
 ;; Cross-file references not pulled in by require (avoids load cycles).
 (declare-function deb-packaging-dispatch "deb-packaging")
@@ -36,8 +37,8 @@
 (declare-function deb-packaging-infra-show-ppa-package "deb-packaging-infra")
 (declare-function deb-packaging-dev--list-containers "deb-packaging-dev")
 (declare-function deb-packaging-propagate-transient "deb-packaging-propagate")
-(declare-function deb-packaging-pq-transient "deb-packaging-pq")
-(declare-function deb-packaging-pq--state "deb-packaging-pq")
+(declare-function deb-packaging-propagate--existing-clone "deb-packaging-propagate")
+(declare-function deb-packaging-update-transient "deb-packaging-update")
 (declare-function deb-packaging-ppa-tests-show "deb-packaging-ppa-tests")
 
 (defvar-local deb-packaging-status--context nil
@@ -73,8 +74,13 @@ Return a plist, or nil outside a Debian package tree."
     (deb-packaging-ppa-test   . deb-packaging-ppa-tests-show)
     (deb-packaging-ppa        . deb-packaging-upload-transient)
     (deb-packaging-stale      . deb-packaging-commands-clean-transient)
+    (deb-packaging-branch     . deb-packaging-branch-transient)
+    (deb-packaging-patches    . deb-packaging-patches-transient)
+    (deb-packaging-changelog  . deb-packaging-changelog-transient)
+    (deb-packaging-upstream   . deb-packaging-update-transient)
     (deb-packaging-dev        . deb-packaging-dev-transient)
-    (deb-packaging-pq         . deb-packaging-pq-transient))
+    (deb-packaging-submit     . deb-packaging-submit-transient)
+    (deb-packaging-forward    . deb-packaging-propagate-transient))
   "Map status-buffer section types to the command RET runs.")
 
 ;;; Faces
@@ -312,6 +318,8 @@ REASON says why the phase cannot run now, or is nil when it can."
                     (unless (alist-get 'debs arts) "Needs binaries")))
           (cons 'dput
                 (or (funcall tool "dput")
+                    (and (equal (plist-get ctx :changelog-distro) "UNRELEASED")
+                         "Changelog is UNRELEASED (C, then r)")
                     (unless (alist-get 'source-changes arts)
                       "Needs a source package"))))))
 
@@ -326,8 +334,10 @@ REASON says why the phase cannot run now, or is nil when it can."
                 (funcall state 'source-build (and (alist-get 'dsc arts)
                                                   (alist-get 'source-changes arts))))
           (cons 'binary-build
-                (funcall state 'binary-build (and (alist-get 'binary-changes arts)
-                                                  (alist-get 'debs arts))))
+                (if (deb-packaging-resume--load ctx)
+                    'failed
+                  (funcall state 'binary-build (and (alist-get 'binary-changes arts)
+                                                    (alist-get 'debs arts)))))
           (cons 'autopkgtest (funcall state 'autopkgtest nil))
           (cons 'dput (funcall state 'dput nil)))))
 
@@ -337,13 +347,6 @@ Walks phases in flow order; picks which phase smart-fold expands."
   (car (cl-find 'ready (deb-packaging-status--phase-states ctx) :key #'cdr)))
 
 ;;; Header
-
-(defun deb-packaging-status--kept-session-note ()
-  "Return a note naming the session kept by the last sbuild run, or nil."
-  (when-let* ((summary (deb-packaging-commands--run-summary 'binary-build))
-              (kept (plist-get summary :kept-session)))
-    (format "Session kept: %s ('e' on it in the infra schroots buffer ends it)"
-            kept)))
 
 (defun deb-packaging-status--group-stale-by-version (stale-files)
   "Group STALE-FILES by version, returning an alist of (version . files).
@@ -372,6 +375,10 @@ Unparseable versions group under \"unknown\"."
                         'font-lock-face 'deb-packaging-status-path)
             "\n"
             (propertize (plist-get ctx :distro) 'font-lock-face 'deb-packaging-status-distro)
+            (let ((raw (plist-get ctx :changelog-distro)))
+              (if (and raw (not (equal raw (plist-get ctx :distro))))
+                  (format " (changelog: %s)" raw)
+                ""))
             " | "
             (cond ((and host-arch (not (equal target-arch host-arch)))
                    (format "%s (host %s)" target-arch host-arch))
@@ -379,7 +386,8 @@ Unparseable versions group under \"unknown\"."
                   (t "unknown arch"))
             " | "
             (if (plist-get ctx :repo-dir)
-                (concat (or (plist-get ctx :branch) "detached HEAD")
+                (concat (if (deb-packaging-develop--git-ubuntu-p) "git-ubuntu " "")
+                        (or (plist-get ctx :branch) "detached HEAD")
                         (if (plist-get ctx :dirty-p) " (modified)" ""))
               "not a git repository")
             "\n\n")))
@@ -411,44 +419,176 @@ Unparseable versions group under \"unknown\"."
           (dolist (f (cdr group))
             (insert "    " (deb-packaging-status--dim (file-name-nondirectory f)) "\n")))))))
 
-(defun deb-packaging-status--insert-pq (ctx)
-  "Insert a patch-queue line when CTX has a gbp pq branch."
-  (when (and (plist-get ctx :repo-dir)
-             (equal (plist-get ctx :source-format) "3.0 (quilt)"))
-    (let ((state (ignore-errors (deb-packaging-pq--state))))
-      (when (plist-get state :exists-p)
-        (magit-insert-section (deb-packaging-pq)
-          (insert (deb-packaging-status--header-field
-                   "Patch queue"
-                   (concat
-                    (if (plist-get state :on-pq-p)
-                        (propertize (format "editing on %s" (plist-get state :branch))
-                                    'font-lock-face 'deb-packaging-status-running)
-                      (format "%s exists" (plist-get state :pq-branch)))
-                    (deb-packaging-status--dim " (u)")))
-                  "\n"))))))
+;;; Develop rows
+
+(defun deb-packaging-status--info-heading (label value &optional indent)
+  "Return a row heading showing LABEL and a VALUE instead of a status word."
+  (let ((indent (make-string (or indent 2) ?\s)))
+    (concat indent
+            (propertize (deb-packaging-status--pad
+                         label (- deb-packaging-status--label-width (length indent)))
+                        'font-lock-face 'magit-section-heading)
+            value)))
+
+(defun deb-packaging-status--warn (text)
+  "Return TEXT in the warning face."
+  (propertize text 'font-lock-face 'warning))
+
+(defun deb-packaging-status--insert-warnings (warnings)
+  "Insert each non-nil entry of WARNINGS as an indented warning line."
+  (dolist (w (delq nil warnings))
+    (insert deb-packaging-status--indent (deb-packaging-status--warn w) "\n")))
+
+(defun deb-packaging-status--on-base-branch-p (facts)
+  "Return non-nil when FACTS show an unmodified mirror of the upstream branch."
+  (let ((branch (plist-get facts :branch))
+        (upstream (plist-get facts :upstream)))
+    (and branch upstream (eq (plist-get facts :ahead) 0)
+         (string-suffix-p branch upstream))))
+
+(defun deb-packaging-status--insert-branch (ctx facts)
+  "Insert the Branch row from CTX and FACTS."
+  (let* ((branch (plist-get facts :branch))
+         (upstream (plist-get facts :upstream))
+         (ahead (plist-get facts :ahead))
+         (bug (plist-get facts :bug))
+         (base (deb-packaging-status--on-base-branch-p facts)))
+    (magit-insert-section (deb-packaging-branch nil (not base))
+      (magit-insert-heading
+        (deb-packaging-status--info-heading
+         "Branch"
+         (concat
+          (cond ((not (plist-get ctx :repo-dir))
+                 (deb-packaging-status--dim "not a git repository"))
+                ((null branch) (deb-packaging-status--warn "detached HEAD"))
+                (upstream
+                 (format "%s, %d commit%s ahead of %s"
+                         branch ahead (if (= ahead 1) "" "s") upstream))
+                (t branch))
+          (if bug (deb-packaging-status--dim (format "  LP: #%s" bug)) ""))))
+      (magit-insert-section-body
+        (when base
+          (deb-packaging-status--insert-note
+           "Start a fix branch before committing (f, then n)"))))))
+
+(defun deb-packaging-status--insert-patches (ctx facts)
+  "Insert the Patches row from CTX and FACTS; TAB lists the patches."
+  (let* ((patches (plist-get facts :patches))
+         (pq (plist-get facts :pq))
+         (format (plist-get ctx :source-format))
+         (quilt (or (null format) (string-match-p "quilt\\|1\\.0" format))))
+    (magit-insert-section (deb-packaging-patches nil (not (plist-get pq :on-pq-p)))
+      (magit-insert-heading
+        (deb-packaging-status--info-heading
+         "Patches"
+         (cond ((not quilt)
+                (deb-packaging-status--dim "native package: edit the source directly"))
+               (t (concat (if patches
+                              (format "%d in debian/patches" (length patches))
+                            (deb-packaging-status--dim "none"))
+                          (cond ((plist-get pq :on-pq-p)
+                                 (propertize "  editing as commits"
+                                             'font-lock-face 'deb-packaging-status-running))
+                                ((plist-get pq :exists-p)
+                                 (deb-packaging-status--dim "  patch queue exists"))
+                                (t "")))))))
+      (magit-insert-section-body
+        (when (plist-get pq :on-pq-p)
+          (deb-packaging-status--insert-note
+           "Each patch is a commit here; finish with a, then x"))
+        (dolist (patch patches)
+          (deb-packaging-status--insert-file-line (cdr patch)))))))
+
+(defun deb-packaging-status--changelog-warnings (facts)
+  "Return warnings about the changelog for FACTS."
+  (list (and (plist-get facts :ahead) (> (plist-get facts :ahead) 0)
+             (not (plist-get facts :changelog-changed))
+             "No changelog entry for these commits yet (C, then a)")
+        (and (plist-get facts :unreleased)
+             "UNRELEASED: finalize before uploading (C, then r)")
+        (and (plist-get facts :maintainer-stale)
+             "Maintainer is still the Debian one (C, then m)")))
+
+(defun deb-packaging-status--insert-changelog (ctx facts)
+  "Insert the Changelog row from CTX and FACTS."
+  (let ((warnings (delq nil (deb-packaging-status--changelog-warnings facts))))
+    (magit-insert-section (deb-packaging-changelog nil (null warnings))
+      (magit-insert-heading
+        (deb-packaging-status--info-heading
+         "Changelog"
+         (concat (plist-get ctx :version) " "
+                 (let ((raw (plist-get ctx :changelog-distro)))
+                   (if (equal raw "UNRELEASED") (deb-packaging-status--warn raw) raw)))))
+      (magit-insert-section-body
+        (deb-packaging-status--insert-warnings warnings)))))
+
+(defun deb-packaging-status--insert-upstream (ctx facts)
+  "Insert the Upstream row from CTX and FACTS when debian/watch exists."
+  (when (plist-get facts :watch)
+    (let* ((record (deb-packaging-commands-run-record 'upstream-check))
+           (summary (plist-get record :summary))
+           (current (deb-packaging-detect--upstream-version (plist-get ctx :version))))
+      (magit-insert-section (deb-packaging-upstream)
+        (insert
+         (deb-packaging-status--info-heading
+          "Upstream"
+          (concat
+           current
+           (cond ((eq (plist-get record :status) 'running)
+                  (propertize "  checking" 'font-lock-face 'deb-packaging-status-running))
+                 ((plist-get summary :newer)
+                  (deb-packaging-status--warn
+                   (format "  %s available (N, then u)" (plist-get summary :newest))))
+                 (summary (deb-packaging-status--dim "  up to date"))
+                 (t (deb-packaging-status--dim "  not checked (N, then c)")))))
+         "\n")))))
 
 (defun deb-packaging-status--insert-dev (ctx)
-  "Insert a dev-container line when CTX's package has LXD containers."
+  "Insert the Dev shell row for CTX's LXD dev container."
   (let* ((name (plist-get ctx :name))
-         (containers (and name (deb-packaging-dev--list-containers
-                                (format "deb-dev-%s-" name))))
          (target (format "deb-dev-%s-%s" name (plist-get ctx :distro)))
-         (current (cl-find target containers
+         (current (cl-find target (deb-packaging-dev--list-containers
+                                   (format "deb-dev-%s-" name))
                            :key (lambda (c) (plist-get c :name)) :test #'equal)))
-    (when containers
-      (magit-insert-section (deb-packaging-dev)
-        (insert (deb-packaging-status--header-field
-                 "Dev shell"
-                 (concat
-                  (if current
-                      (format "%s %s" target (downcase (plist-get current :status)))
-                    (format "%d container%s, none for %s"
-                            (length containers)
-                            (if (cdr containers) "s" "")
-                            (plist-get ctx :distro)))
-                  (deb-packaging-status--dim " (e)")))
-                "\n")))))
+    (magit-insert-section (deb-packaging-dev)
+      (insert (deb-packaging-status--info-heading
+               "Dev shell"
+               (if current
+                   (format "%s %s" target (downcase (plist-get current :status)))
+                 (deb-packaging-status--dim
+                  "none (e: container with build-deps and LSP)")))
+              "\n"))))
+
+;;; Submit rows
+
+(defun deb-packaging-status--submit-blocker (facts)
+  "Return why a merge proposal cannot be submitted per FACTS, or nil."
+  (cond ((not (executable-find "git-ubuntu")) "git-ubuntu is not installed")
+        ((not (and (plist-get facts :ahead) (> (plist-get facts :ahead) 0)))
+         "Needs commits on a fix branch")))
+
+(defun deb-packaging-status--insert-submit (facts)
+  "Insert the Merge proposal row for a git-ubuntu clone per FACTS."
+  (when (plist-get facts :git-ubuntu)
+    (let* ((blocker (deb-packaging-status--submit-blocker facts))
+           (state (deb-packaging-status--phase-state 'submit nil (not blocker))))
+      (magit-insert-section (deb-packaging-submit nil (not blocker))
+        (magit-insert-heading
+          (deb-packaging-status--row-heading
+           "Merge proposal" (if (eq state 'done) 'submitted state) 'submit
+           (deb-packaging-status--dim "via git ubuntu submit")))
+        (magit-insert-section-body
+          (deb-packaging-status--insert-blocker state blocker))))))
+
+(defun deb-packaging-status--insert-forward ()
+  "Insert the Forward row (send the fix to Debian or upstream)."
+  (magit-insert-section (deb-packaging-forward)
+    (insert (deb-packaging-status--info-heading
+             "Forward"
+             (if (deb-packaging-propagate--existing-clone)
+                 "Debian clone ready (P, then o)"
+               (deb-packaging-status--dim "to Debian (salsa) or upstream")))
+            "\n")))
 
 ;;; Local rows
 
@@ -517,8 +657,13 @@ BLOCKER says why it cannot run, or is nil."
                             (transient-args 'deb-packaging-binary-build-transient)))
               (deb-packaging-status--insert-note
                "Drops into a chroot shell on build failure"))
-            (when-let ((note (deb-packaging-status--kept-session-note)))
-              (deb-packaging-status--insert-note note))))
+            (when-let ((kept (deb-packaging-resume--load ctx)))
+              (deb-packaging-status--insert-warnings
+               (list "Failed build kept: fix it in the checkout, then b, then r to resume"))
+              (deb-packaging-status--insert-fields
+               (list (cons "Kept tree" (abbreviate-file-name
+                                        (deb-packaging-resume--host-path
+                                         (plist-get kept :tree)))))))))
         (dolist (c bin-changes) (deb-packaging-status--insert-file-line c))
         (dolist (d debs) (deb-packaging-status--insert-file-line d))))))
 
@@ -702,8 +847,9 @@ BLOCKER says why it cannot run, or is nil."
 
 (defun deb-packaging-status--render ()
   "Render the status buffer from freshly collected context."
-  (let ((ctx (deb-packaging-status--collect-context))
-        (inhibit-read-only t))
+  (let* ((deb-packaging-detect--memo (make-hash-table :test #'equal))
+         (ctx (deb-packaging-status--collect-context))
+         (inhibit-read-only t))
     (setq deb-packaging-status--context ctx)
     (erase-buffer)
     (magit-insert-section (deb-packaging-status-root)
@@ -711,7 +857,8 @@ BLOCKER says why it cannot run, or is nil."
           (insert (propertize "Not in a Debian package directory."
                               'font-lock-face 'error)
                   "\n\nVisit a tree containing debian/changelog, then press g.\n")
-        (let* ((phases (deb-packaging-status--phase-states ctx))
+        (let* ((facts (deb-packaging-develop--facts ctx))
+               (phases (deb-packaging-status--phase-states ctx))
                (blockers (deb-packaging-status--blockers ctx))
                ;; Nothing ready: expand the first blocked row so it says why.
                (next (car (or (cl-find 'ready phases :key #'cdr)
@@ -726,9 +873,16 @@ BLOCKER says why it cannot run, or is nil."
           (deb-packaging-status--insert-header ctx)
           (deb-packaging-status--insert-ppa-line ctx)
           (deb-packaging-status--insert-stale ctx)
-          (deb-packaging-status--insert-pq ctx)
-          (deb-packaging-status--insert-dev ctx)
           (insert "\n")
+          (magit-insert-section (deb-packaging-develop)
+            (magit-insert-heading
+              (propertize "Develop" 'font-lock-face 'magit-section-heading))
+            (deb-packaging-status--insert-branch ctx facts)
+            (deb-packaging-status--insert-patches ctx facts)
+            (deb-packaging-status--insert-changelog ctx facts)
+            (deb-packaging-status--insert-upstream ctx facts)
+            (deb-packaging-status--insert-dev ctx)
+            (insert "\n"))
           (magit-insert-section (deb-packaging-local)
             (magit-insert-heading
               (propertize "Local" 'font-lock-face 'magit-section-heading))
@@ -742,7 +896,13 @@ BLOCKER says why it cannot run, or is nil."
               (propertize "Launchpad" 'font-lock-face 'magit-section-heading))
             (funcall row #'deb-packaging-status--insert-upload 'dput)
             (deb-packaging-status--insert-ppa-builds ctx)
-            (deb-packaging-status--insert-ppa-tests))))
+            (deb-packaging-status--insert-ppa-tests)
+            (insert "\n"))
+          (magit-insert-section (deb-packaging-submit-group)
+            (magit-insert-heading
+              (propertize "Submit" 'font-lock-face 'magit-section-heading))
+            (deb-packaging-status--insert-submit facts)
+            (deb-packaging-status--insert-forward))))
       ;; Show the root once so fold indicators appear before any manual toggle.
       (when magit-root-section
         (magit-section-show magit-root-section)))))
@@ -813,7 +973,8 @@ filesystem each time."
     (deb-packaging-commands-ubuntu-lint . ubuntu-lint)
     (deb-packaging-test . autopkgtest)
     (deb-packaging-ppa-test . ppa-tests)
-    (deb-packaging-upload . dput))
+    (deb-packaging-upload . dput)
+    (deb-packaging-submit . submit))
   "Map status row section types to their latest run keys.")
 
 (defun deb-packaging-status--run-key-at-point ()
@@ -867,6 +1028,11 @@ Navigation and folding come from `magit-section-mode'."
   :parent magit-section-mode-map
   "RET" #'deb-packaging-status-visit
   "o"   #'deb-packaging-status-open-output
+  "f"   #'deb-packaging-branch-transient
+  "a"   #'deb-packaging-patches-transient
+  "C"   #'deb-packaging-changelog-transient
+  "N"   #'deb-packaging-update-transient
+  "e"   #'deb-packaging-dev-transient
   "s"   #'deb-packaging-commands-source-build-transient
   "b"   #'deb-packaging-binary-build-transient
   "l"   #'deb-packaging-lint-transient
@@ -874,13 +1040,14 @@ Navigation and folding come from `magit-section-mode'."
   "U"   #'deb-packaging-upload-transient
   "B"   #'deb-packaging-infra-show-ppa-package
   "T"   #'deb-packaging-ppa-tests-show
+  "M"   #'deb-packaging-submit-transient
+  "P"   #'deb-packaging-propagate-transient
   "c"   #'deb-packaging-commands-clean-transient
   "K"   #'deb-packaging-commands-kill-output-buffers
   "r"   #'deb-packaging-commands-reset-transient
-  "e"   #'deb-packaging-dev-transient
-  "u"   #'deb-packaging-pq-transient
+  "R"   #'deb-packaging-commands-regenerate
+  "G"   #'deb-packaging-get-transient
   "i"   #'deb-packaging-infra-dispatch
-  "P"   #'deb-packaging-propagate-transient
   "?"   #'deb-packaging-dispatch
   "g"   #'deb-packaging-status-refresh
   "q"   #'quit-window)
@@ -895,13 +1062,17 @@ Navigation and folding come from `magit-section-mode'."
 ;;;###autoload
 (defun deb-packaging-status ()
   "Open the Debian packaging status buffer.
-Outside a package tree, prompt for one first (like `magit-status')."
+Outside a package tree, offer to clone or open one instead."
   (interactive)
-  (let* ((pkg-dir (or (condition-case nil
-                          (deb-packaging-detect--find-package-dir nil t)
-                        (user-error nil))
-                      (deb-packaging-detect--read-package-dir)))
-         (name (deb-packaging-detect--package-name pkg-dir))
+  (if-let ((pkg-dir (condition-case nil
+                        (deb-packaging-detect--find-package-dir nil t)
+                      (user-error nil))))
+      (deb-packaging-status--open pkg-dir)
+    (call-interactively #'deb-packaging-get-transient)))
+
+(defun deb-packaging-status--open (pkg-dir)
+  "Open and render the status buffer for PKG-DIR."
+  (let* ((name (deb-packaging-detect--package-name pkg-dir))
          (buf (get-buffer-create
                (deb-packaging-status--buffer-name name pkg-dir))))
     ;; Pre-warm the PPA candidate cache in the background so the first

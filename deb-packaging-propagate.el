@@ -686,24 +686,48 @@ last step of this workflow."
                       (propertize "C-c a" 'face 'bold))))
     (setq header-line-format deb-packaging-propagate--saved-header-line)))
 
+;; Re-arm C-c a whenever a propagate clone's Magit status is (re)created.
+(defun deb-packaging-propagate--maybe-enable-clone-mode ()
+  "Enable `deb-packaging-propagate-clone-mode' in a propagate clone."
+  (when (magit-get "deb-packaging.source-dir")
+    (deb-packaging-propagate-clone-mode +1)))
+
+(add-hook 'magit-status-mode-hook #'deb-packaging-propagate--maybe-enable-clone-mode)
+
+(defun deb-packaging-propagate--existing-clone ()
+  "Return the current package's Debian clone directory, or nil."
+  (when-let* ((name (deb-packaging-detect--package-name))
+              (dir (deb-packaging-propagate--clone-dir name)))
+    (and (deb-packaging-propagate--clone-exists-p dir) dir)))
+
+(defun deb-packaging-propagate-open-clone ()
+  "Open the package's Debian clone in Magit, ready to apply fixes."
+  (interactive)
+  (let ((dir (or (deb-packaging-propagate--existing-clone)
+                 (user-error "No Debian clone yet; prepare one with d"))))
+    (magit-status-setup-buffer dir)
+    (message "In the Debian clone: C-c a applies a fix, then push with Magit")))
+
 ;;; Transient
 
 (defun deb-packaging-propagate--transient-header ()
   "Return the propagate transient header."
-  (format "%s\n\nPropagate fixes across distros"
+  (format "%s\n\nForward a fix to Debian (salsa) or upstream"
           (deb-packaging-transients--context-header)))
 
 ;;;###autoload(autoload 'deb-packaging-propagate-transient "deb-packaging-propagate" nil t)
 (transient-define-prefix deb-packaging-propagate-transient ()
-  "Propagate fixes to Debian and upstream."
+  "Forward fixes to Debian and upstream."
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-propagate--transient-header]
-  ["Actions"
-   ("e" "Export .patch (upstream)..."   deb-packaging-propagate-export-patch)
-   ("d" "Prepare Debian clone (salsa)..." deb-packaging-propagate-clone)
-   ("P" "Apply item to existing clone..." deb-packaging-propagate-apply)]
-  ["Navigation"
-   ("q" "Quit" transient-quit-one)])
+  [:description deb-packaging-propagate--transient-header
+   ["Upstream"
+    ("e" "Export a patch or commits as a .patch file..."
+     deb-packaging-propagate-export-patch)]
+   ["Debian (salsa)"
+    ("d" "Clone the Debian repo and start a branch..." deb-packaging-propagate-clone)
+    ("o" "Open that clone to apply fixes" deb-packaging-propagate-open-clone
+     :inapt-if-not deb-packaging-propagate--existing-clone)
+    ("q" "Quit" transient-quit-one)]])
 
 (provide 'deb-packaging-propagate)
 ;;; deb-packaging-propagate.el ends here

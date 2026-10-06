@@ -147,8 +147,9 @@ Same exit-code rerouting as `deb-packaging-update--check-command'.")
   (interactive)
   (let ((pkg-dir (deb-packaging-update--pkg-dir)))
     (deb-packaging-update--ensure-binaries '("uscan"))
-    (let ((default-directory pkg-dir))
-      (deb-packaging-commands--compile deb-packaging-update--check-command))))
+    (deb-packaging-commands--run-command
+     "upstream-check" (list "sh" "-c" deb-packaging-update--check-command)
+     pkg-dir 'upstream-check)))
 
 (defun deb-packaging-update--pristine-tar-p (pkg-dir)
   "Return non-nil when PKG-DIR's repository has a pristine-tar branch."
@@ -261,12 +262,11 @@ method chosen at the prompt (default detected from the tree):
 The method (gbp import-orig or uupdate) is asked for on every update;
 the header shows what will be suggested."
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-update--transient-header]
-  ["Check"
-   ("c" "Check for new upstream (no download)" deb-packaging-update-check)]
-  ["Update"
-   ("u" "Update to new upstream version..." deb-packaging-update-new-upstream)
-   ("q" "Quit" transient-quit-one)])
+  [:description deb-packaging-update--transient-header
+   ["Upstream"
+    ("c" "Check for a newer version (no download)" deb-packaging-update-check)
+    ("u" "Update to the newest version..." deb-packaging-update-new-upstream)
+    ("q" "Quit" transient-quit-one)]])
 
 (provide 'deb-packaging-update)
 ;;; deb-packaging-update.el ends here

@@ -186,6 +186,8 @@ picks subjects, with RET selecting everything."
          (format "Origin: upstream, %s\n" origin)
        "Origin: upstream\n")
      (when author (format "Author: %s\n" author))
+     (when-let ((bug (plist-get block :bug)))
+       (format "Bug-Ubuntu: https://bugs.launchpad.net/bugs/%s\n" bug))
      (format "Last-Update: %s\n" (format-time-string "%Y-%m-%d")))))
 
 (defun deb-packaging-backport--add-to-series (patches-dir name)
@@ -244,14 +246,15 @@ An existing file must be confirmed for overwrite or a new name given."
 
 (defun deb-packaging-backport--verify-command (check-only)
   "Return the quilt verification command for CHECK-ONLY."
+  ;; --fuzz=0: dpkg-source refuses fuzz, so a fuzzy pass would still fail the build.
   (if check-only
-      "QUILT_PATCHES=debian/patches quilt push -a --dry-run"
+      "QUILT_PATCHES=debian/patches quilt push -a --fuzz=0 --dry-run"
     (concat
      "test -z \"$(QUILT_PATCHES=debian/patches quilt applied 2>/dev/null)\""
      " || { echo 'Quilt patches already applied; refusing to alter existing state'; exit 2; }; "
      "cleanup() { QUILT_PATCHES=debian/patches quilt pop -a; }; "
      "trap cleanup EXIT; trap 'exit 130' HUP INT TERM; "
-     "QUILT_PATCHES=debian/patches quilt push -a; rc=$?; "
+     "QUILT_PATCHES=debian/patches quilt push -a --fuzz=0; rc=$?; "
      "cleanup; pop_rc=$?; trap - EXIT HUP INT TERM; "
      "[ $rc -eq 0 ] && [ $pop_rc -eq 0 ]")))
 
@@ -281,7 +284,8 @@ commits imports as one quilt patch per commit.  Each patch gets a
       (dolist (block selected)
         (let* ((subject (or (plist-get block :subject)
                             (read-string "Description: ")))
-               (block (plist-put block :subject subject))
+               (block (plist-put (plist-put block :subject subject)
+                                 :bug (deb-packaging-detect--launchpad-bug pkg-dir)))
                (slug (deb-packaging-propagate--slug subject))
                (default-name (concat
                               (if (string-empty-p slug) "backport" slug)

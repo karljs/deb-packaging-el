@@ -44,17 +44,17 @@
         (deb-packaging-dispatch))
       (should (equal called '(transient))))))
 
-(ert-deftest deb-packaging-test-dispatch/outside-package-prompts-via-status ()
+(ert-deftest deb-packaging-test-dispatch/outside-package-offers-get ()
   (let ((tmp (make-temp-file "deb-pkg-test-" t)))
     (unwind-protect
         (let ((default-directory tmp)
               (called nil))
-          (cl-letf (((symbol-function 'deb-packaging-status)
-                     (lambda () (push 'status called)))
+          (cl-letf (((symbol-function 'deb-packaging-get-transient)
+                     (lambda () (interactive) (push 'get called)))
                     ((symbol-function 'deb-packaging-dispatch-transient)
                      (lambda () (push 'transient called))))
             (deb-packaging-dispatch))
-          (should (equal (nreverse called) '(status transient))))
+          (should (equal called '(get))))
       (delete-directory tmp t))))
 
 (ert-deftest deb-packaging-test-dispatch/header-uses-shared-context ()
@@ -111,7 +111,11 @@ the learned key dead."
                     deb-packaging-commands-clean-transient
                     deb-packaging-commands-reset-transient
                     deb-packaging-dev-transient
-                    deb-packaging-pq-transient
+                    deb-packaging-branch-transient
+                    deb-packaging-patches-transient
+                    deb-packaging-changelog-transient
+                    deb-packaging-submit-transient
+                    deb-packaging-get-transient
                     deb-packaging-propagate-transient
                     deb-packaging-update-transient
                      deb-packaging-infra-dispatch
@@ -140,13 +144,33 @@ the learned key dead."
                  ":key \"p\"[^)]*:command deb-packaging-upload-transient"
                  layout))))
 
-(ert-deftest deb-packaging-test-dispatch/dispatch-binds-clone ()
-  "The git-ubuntu clone entry point is reachable from the dispatch."
-  (let ((layout (deb-packaging-test-dispatch--layout
-                 'deb-packaging-dispatch-transient)))
+(ert-deftest deb-packaging-test-dispatch/dispatch-binds-get-a-package ()
+  (should (string-match-p
+           ":key \"G\"[^)]*:command deb-packaging-get-transient"
+           (deb-packaging-test-dispatch--layout 'deb-packaging-dispatch-transient)))
+  (let ((get (deb-packaging-test-dispatch--layout 'deb-packaging-get-transient)))
+    (should (string-match-p "deb-packaging-clone-git-ubuntu" get))
+    (should (string-match-p "deb-packaging-clone-gbp" get))))
+
+(ert-deftest deb-packaging-test-dispatch/status-and-hub-share-keys ()
+  "Every hub key that opens a package menu does the same in status."
+  (dolist (pair '(("f" . deb-packaging-branch-transient)
+                  ("a" . deb-packaging-patches-transient)
+                  ("C" . deb-packaging-changelog-transient)
+                  ("N" . deb-packaging-update-transient)
+                  ("e" . deb-packaging-dev-transient)
+                  ("s" . deb-packaging-commands-source-build-transient)
+                  ("b" . deb-packaging-binary-build-transient)
+                  ("l" . deb-packaging-lint-transient)
+                  ("t" . deb-packaging-test-transient)
+                  ("U" . deb-packaging-upload-transient)
+                  ("M" . deb-packaging-submit-transient)
+                  ("P" . deb-packaging-propagate-transient)
+                  ("G" . deb-packaging-get-transient)))
+    (should (eq (lookup-key deb-packaging-status-mode-map (car pair)) (cdr pair)))
     (should (string-match-p
-             ":key \"C\".*:command deb-packaging-clone-git-ubuntu"
-              layout))))
+             (format ":key \"%s\"[^)]*:command %s" (car pair) (cdr pair))
+             (deb-packaging-test-dispatch--layout 'deb-packaging-dispatch-transient)))))
 
 (ert-deftest deb-packaging-test-dispatch/builders-are-options-not-entries ()
   "Builders are a --builder= choice inside Source/Binaries, not hub rows."
@@ -180,7 +204,14 @@ the learned key dead."
                     deb-packaging-lintian-transient
                     deb-packaging-ubuntu-lint-transient
                     deb-packaging-test-transient
-                    deb-packaging-upload-transient))
+                    deb-packaging-upload-transient
+                    deb-packaging-branch-transient
+                    deb-packaging-patches-transient
+                    deb-packaging-changelog-transient
+                    deb-packaging-submit-transient
+                    deb-packaging-propagate-transient
+                    deb-packaging-get-transient
+                    deb-packaging-infra-dispatch))
     (unwind-protect
         (transient-setup prefix)
       (transient-quit-all))))

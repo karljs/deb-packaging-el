@@ -34,6 +34,7 @@
 (require 'deb-packaging-backport)
 (require 'deb-packaging-pq)
 (require 'deb-packaging-update)
+(require 'deb-packaging-develop)
 (require 'deb-packaging-status)
 (require 'deb-packaging-clone)
 
@@ -62,45 +63,45 @@
   "Debian packaging commands.
 The target distro comes from the changelog; other transients inherit it."
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging--dispatch-header]
-  [["Local"
-    ("s" "Source package..." deb-packaging-commands-source-build-transient)
-    ("b" "Binaries..."       deb-packaging-binary-build-transient)
-    ("l" "Lint..."           deb-packaging-lint-transient)
-    ("t" "Autopkgtest..."    deb-packaging-test-transient)]
+  [:description deb-packaging--dispatch-header
+   ["Develop"
+    ("f" "Fix branch..."       deb-packaging-branch-transient)
+    ("a" "Patches..."          deb-packaging-patches-transient)
+    ("C" "Changelog..."        deb-packaging-changelog-transient)
+    ("N" "Upstream version..." deb-packaging-update-transient)
+    ("e" "Dev shell..."        deb-packaging-dev-transient)]
+   ["Local"
+    ("s" "Source package..."   deb-packaging-commands-source-build-transient)
+    ("b" "Binaries..."         deb-packaging-binary-build-transient)
+    ("l" "Lint..."             deb-packaging-lint-transient)
+    ("t" "Autopkgtest..."      deb-packaging-test-transient)]
    ["Launchpad"
-    ("U" "Upload..."         deb-packaging-upload-transient)
-    ("p" "PPAs"              deb-packaging-infra-ppas)
-    ("T" "PPA tests"         deb-packaging-ppa-tests-show)]]
-  [["Develop"
-    ("e" "Dev shell..."               deb-packaging-dev-transient)
-    ("g" "Regenerate templated files" deb-packaging-commands-regenerate)
-    ("u" "Patch queue (gbp pq)..."    deb-packaging-pq-transient)
-    ("n" "New upstream version..."    deb-packaging-update-transient)
-    ("B" "Backport upstream patch..." deb-packaging-backport-patch)
-    ("P" "Propagate..."               deb-packaging-propagate-transient)]
-   ["Cleanup"
+    ("U" "Upload..."           deb-packaging-upload-transient)
+    ("B" "PPA builds"          deb-packaging-infra-show-ppa-package)
+    ("T" "PPA tests"           deb-packaging-ppa-tests-show)]
+   ["Submit"
+    ("M" "Merge proposal..."   deb-packaging-submit-transient)
+    ("P" "Forward to Debian or upstream..." deb-packaging-propagate-transient)]]
+  [["Maintain"
     ("c" "Clean artifacts..."        deb-packaging-commands-clean-transient)
     ("K" "Kill build-output buffers" deb-packaging-commands-kill-output-buffers)
-    ("r" "Reset source tree..."      deb-packaging-commands-reset-transient)]
+    ("r" "Reset source tree..."      deb-packaging-commands-reset-transient)
+    ("R" "Regenerate debian/control" deb-packaging-commands-regenerate)]
    ["Other"
-    ("C" "Clone with git-ubuntu..." deb-packaging-clone-git-ubuntu)
-    ("L" "Clone with gbp..."        deb-packaging-clone-gbp)
-    ("i" "Infrastructure..."        deb-packaging-infra-dispatch)
-    ("q" "Quit"                     transient-quit-one)]])
+    ("G" "Get another package..."    deb-packaging-get-transient)
+    ("i" "Infrastructure (chroots, images, PPAs)..." deb-packaging-infra-dispatch)
+    ("q" "Quit"                      transient-quit-one)]])
 
 ;;;###autoload
 (defun deb-packaging-dispatch ()
   "Open the packaging dispatch transient.
-Outside a package tree, go through `deb-packaging-status' first: it
-prompts for a package and lands in its status buffer, which becomes the
-context the transient's commands run in."
+Outside a package tree, offer to clone or open a package instead."
   (interactive)
-  (unless (condition-case nil
-              (deb-packaging-detect--find-package-dir nil t)
-            (user-error nil))
-    (deb-packaging-status))
-  (deb-packaging-dispatch-transient))
+  (if (condition-case nil
+          (deb-packaging-detect--find-package-dir nil t)
+        (user-error nil))
+      (deb-packaging-dispatch-transient)
+    (call-interactively #'deb-packaging-get-transient)))
 
 (defconst deb-packaging--optional-tools
   '("autopkgtest" "dput" "gbp" "git-ubuntu" "lintian" "lxc"

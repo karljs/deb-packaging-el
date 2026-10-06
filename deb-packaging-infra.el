@@ -1448,8 +1448,8 @@ processes (refresh cancels them) only clean up."
 
 (transient-define-prefix deb-packaging-infra-ppa-config-transient ()
   "Configure supported Launchpad PPA settings."
-  [:description deb-packaging-infra--ppa-config-header]
-  ["Settings"
+  [:description (lambda () (deb-packaging-transients--titled
+                              #'deb-packaging-infra--ppa-config-header "Settings"))
    ("-n" "Display name" "--displayname="
     :class transient-option :prompt "PPA display name: " :always-read t)
    ("-d" "Description" "--description="
@@ -1477,13 +1477,15 @@ processes (refresh cancels them) only clean up."
 (transient-define-prefix deb-packaging-infra-dispatch ()
   "Manage build and test infrastructure."
   :environment #'deb-packaging-transients--env
-  [:description deb-packaging-infra--header]
-  ["Infrastructure"
-   ("s" "Schroots (sbuild)..."          deb-packaging-infra-schroots)
-   ("l" "LXD (images + dev containers)..." deb-packaging-infra-lxd)
-   ("v" "QEMU images (autopkgtest)..."  deb-packaging-infra-qemu-images)]
-  ["Navigation"
-   ("q" "Quit" transient-quit-one)])
+  [:description deb-packaging-infra--header
+   ["Build"
+    ("s" "sbuild chroots"                deb-packaging-infra-schroots)]
+   ["Test"
+    ("l" "LXD images and dev containers" deb-packaging-infra-lxd)
+    ("v" "QEMU images"                   deb-packaging-infra-qemu-images)]
+   ["Launchpad"
+    ("p" "Your PPAs"                     deb-packaging-infra-ppas)
+    ("q" "Quit" transient-quit-one)]])
 
 (provide 'deb-packaging-infra)
 ;;; deb-packaging-infra.el ends here
