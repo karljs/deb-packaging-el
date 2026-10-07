@@ -20,6 +20,7 @@
 (require 'comint)
 (require 'ansi-color)
 (require 'compile)
+(require 'term)
 (require 'transient)
 (require 'deb-packaging-detect)
 (require 'deb-packaging-config)
@@ -318,6 +319,21 @@ the package tree when the process itself must run in the parent build dir."
       (deb-packaging-commands--notify-status-refresh))
     (deb-packaging-display-buffer buf-name 'output)
     buf-name))
+
+(defun deb-packaging-commands--run-terminal (name args)
+  "Run ARGS in a char-mode `term' buffer named after NAME; return the buffer.
+For commands that authenticate through PAM: authd draws a TUI that reads
+raw keys, which comint cannot drive."
+  (let* ((buf-name (generate-new-buffer-name
+                    (format "*deb-%s-%s*" name (format-time-string "%H:%M:%S"))))
+         (buf (get-buffer-create buf-name)))
+    (with-current-buffer buf
+      (term-mode)
+      (term-exec buf buf-name (car args) nil (cdr args))
+      (term-char-mode)
+      (setq deb-packaging-display-category 'output))
+    (deb-packaging-display-buffer buf 'output)
+    buf))
 
 ;;; Compilation wrapper
 
@@ -724,6 +740,14 @@ The --dist chroot selection always comes from the changelog."
                              '("--purge-build=successful" "--purge-session=successful"
                                "--purge-deps=successful" "--build-path=")))))
         (setq ctx (plist-put (copy-sequence ctx) :target-arch arch))
+        (when-let ((why (deb-packaging-config--emulation-missing
+                         arch (deb-packaging-config--host-architecture ctx))))
+          (user-error "%s" why))
+        ;; ponytail: schroot installed = schroot mode; unshare-only setups skip this.
+        (when (and (executable-find "schroot")
+                   (not (deb-packaging-detect--schroot-exists-p distro arch)))
+          (user-error "No %s-%s chroot; create it with c in this menu (mk-sbuild --arch=%s %s)"
+                      distro arch arch distro))
         (when-let ((kept (deb-packaging-resume--load ctx)))
           (unless (y-or-n-p "A failed build is kept for resuming (r).  Discard it and start fresh? ")
             (user-error "Kept build left alone; resume it with r in the Binaries menu"))
@@ -770,6 +794,23 @@ Remove %s from the binary-build -e menu, or publish the series."
             (deb-packaging-resume--watch-sbuild buffer ctx))
           buffer)))))
 
+(defun deb-packaging-commands-set-architecture (architecture)
+  "Save ARCHITECTURE as the target for the current package and distro."
+  (interactive
+   (list (completing-read
+          (format "Target architecture (default %s): "
+                  (deb-packaging-config--effective-architecture))
+          (mapcar #'car deb-packaging-config--qemu-architectures)
+          nil nil nil nil (deb-packaging-config--effective-architecture))))
+  (let ((name (deb-packaging-detect--package-name
+               (deb-packaging-detect--find-package-dir nil t))))
+    (unless name
+      (user-error "Not in a Debian package directory"))
+    (deb-packaging-config-save-architecture
+     name (deb-packaging-config--effective-distro) architecture)
+    (deb-packaging-commands--notify-status-refresh)
+    (message "Target architecture: %s" architecture)))
+
 (defun deb-packaging-commands--require-host-arch ()
   "Signal a `user-error' unless the target architecture is the host's."
   (let ((ctx (deb-packaging-commands--package-context
@@ -792,18 +833,73 @@ Remove %s from the binary-build -e menu, or publish the series."
 
 (defcustom deb-packaging-commands-test-runners
   '(("lxd"  . "autopkgtest/ubuntu/%s/%s")
-    ("qemu" . "autopkgtest-%s-%s.img"))
+    ("qemu" . "autopkgtest-%s-%s.img")
+    ("schroot" . "%s-%s"))
   "Alist of runner name to image path template (%s = distro, %s = architecture).
-QEMU image names are relative to `deb-packaging-config-qemu-dir'."
+QEMU image names are relative to `deb-packaging-config-qemu-dir'.
+The schroot runner reuses the sbuild chroot."
   :type '(alist :key-type string :value-type string)
   :group 'deb-packaging)
 
 (defcustom deb-packaging-commands-test-build-hints
   '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s/%s")
-    ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s"))
-  "Alist of runner name to build command template (%s = distro, %s = architecture)."
+    ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s")
+    ("schroot" . "mk-sbuild --arch=%2$s %1$s"))
+  "Alist of runner name to build command template.
+Arguments: distro, architecture, `deb-packaging-config-qemu-dir'."
   :type '(alist :key-type string :value-type string)
   :group 'deb-packaging)
+
+(defcustom deb-packaging-commands-qemu-foreign-cpus (min 4 (num-processors))
+  "vCPUs for an emulated (foreign-architecture) QEMU testbed."
+  :type 'integer
+  :group 'deb-packaging)
+
+(defun deb-packaging-commands--default-runner (&optional context)
+  "Return the default autopkgtest runner for CONTEXT's target architecture."
+  (if (deb-packaging-config--foreign-p context) "schroot" "lxd"))
+
+;; EFI paths are the ones autopkgtest-virt-qemu loads.
+(defconst deb-packaging-commands--qemu-system-deps
+  '(("amd64" "qemu-system-x86") ("i386" "qemu-system-x86")
+    ("arm64" "qemu-system-arm" "/usr/share/AAVMF/AAVMF_CODE.fd" "qemu-efi-aarch64")
+    ("armhf" "qemu-system-arm" "/usr/share/AAVMF/AAVMF32_CODE.fd" "qemu-efi-arm")
+    ("ppc64el" "qemu-system-ppc") ("s390x" "qemu-system-s390x")
+    ("riscv64" "qemu-system-riscv, or qemu-system-misc on older releases"
+     "/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd" "qemu-efi-riscv64"))
+  "Debian architecture to (QEMU-PACKAGE [EFI-FILE EFI-PACKAGE]).")
+
+(defun deb-packaging-commands--runner-unusable (runner target host)
+  "Return why RUNNER cannot test TARGET binaries on HOST, or nil."
+  (pcase runner
+    ("lxd"
+     (cond ((not (deb-packaging-config--native-architecture-p target host))
+            (format "LXD can't run %s on %s; use the schroot or qemu runner"
+                    target host))
+           ((not (executable-find "lxc"))
+            "lxc is not installed (sudo snap install lxd)")))
+    ("schroot" (deb-packaging-config--emulation-missing target host))
+    ("qemu"
+     (pcase-let* ((cmd (concat "qemu-system-"
+                               (or (cdr (assoc target
+                                               deb-packaging-config--qemu-architectures))
+                                   target)))
+                  (`(,pkg ,efi ,efi-pkg)
+                   (cdr (assoc target deb-packaging-commands--qemu-system-deps))))
+       (cond ((not (executable-find cmd))
+              (format "%s is not installed (sudo apt install %s)"
+                      cmd (or pkg "the matching qemu-system-* package")))
+             ((and efi (not (file-exists-p efi)))
+              (format "%s needs EFI firmware (sudo apt install %s)"
+                      target efi-pkg)))))))
+
+(defun deb-packaging-commands--qemu-foreign-args (target host)
+  "Return extra autopkgtest-virt-qemu args for TARGET on HOST."
+  (unless (deb-packaging-config--native-architecture-p target host)
+    ;; TCG boots far slower than the 60s reboot default.
+    (list (concat "--dpkg-architecture=" target)
+          "--timeout-reboot=300"
+          (format "--cpus=%d" deb-packaging-commands-qemu-foreign-cpus))))
 
 (defun deb-packaging-commands--runner-choices ()
   "Return the configured autopkgtest runner names from
@@ -837,8 +933,10 @@ Keys: :runner, :image, :exists."
                      (deb-packaging-commands--lxd-image-exists-p image))
                     ((equal runner "qemu")
                      (file-exists-p image))
+                    ((equal runner "schroot")
+                     (deb-packaging-detect--schroot-exists-p distro architecture))
                     (t nil)))))
-    (list :runner runner :image image :exists exists)))
+    (list :runner runner :image (if (stringp exists) exists image) :exists exists)))
 
 (defun deb-packaging-commands--test-image-build-hint
     (runner distro &optional architecture)
@@ -847,7 +945,8 @@ Return nil if RUNNER has no registered hint."
   (when-let ((template (cdr (assoc runner deb-packaging-commands-test-build-hints))))
     (format template distro
             (or architecture
-                (deb-packaging-config--effective-architecture)))))
+                (deb-packaging-config--effective-architecture))
+            (directory-file-name deb-packaging-config-qemu-dir))))
 
 (defun deb-packaging-commands-autopkgtest (&optional args)
   "Run autopkgtest with ARGS from the test transient.
@@ -862,9 +961,10 @@ The test image's distro comes from the changelog."
       (unless debs
         (user-error "No .deb files found; run a binary build first"))
       (let* ((runner (or (transient-arg-value "--runner=" args)
-                         "lxd"))
+                         (deb-packaging-commands--default-runner ctx)))
               (distro (plist-get ctx :distro))
               (architecture (plist-get ctx :target-arch))
+              (host (deb-packaging-config--host-architecture ctx))
               (image-info (deb-packaging-commands--test-image-info
                            runner distro architecture))
              (image (plist-get image-info :image))
@@ -874,8 +974,11 @@ The test image's distro comes from the changelog."
                              (or (string-prefix-p "--runner=" a)
                                  (string-prefix-p "--ppa=" a)))
                            args)))
+        (when-let ((why (deb-packaging-commands--runner-unusable
+                         runner architecture host)))
+          (user-error "%s" why))
         (when (and image (not image-exists))
-          (user-error "%s image '%s' not found.\nBuild it with:\n  %s"
+          (user-error "%s test image '%s' not found.\nCreate it with i in this menu, or run:\n  %s"
                       (capitalize runner)
                       image
                        (or (deb-packaging-commands--test-image-build-hint
@@ -887,6 +990,8 @@ The test image's distro comes from the changelog."
                  passthrough
                  debs
                  (list "." "--" runner)
+                 (when (equal runner "qemu")
+                   (deb-packaging-commands--qemu-foreign-args architecture host))
                  (when image (list image)))
          pkg-dir
          'autopkgtest)))))

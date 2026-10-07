@@ -565,7 +565,7 @@ SESSIONS a list of session name strings."
 (ert-deftest deb-packaging-test-display/infra-delete-schroot-at-point ()
   "With point on a chroot row, `d' deletes that chroot."
   (let (ran)
-    (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+    (cl-letf (((symbol-function 'deb-packaging-commands--run-terminal)
                (lambda (_name args &rest _) (setq ran args) nil))
               ((symbol-function 'yes-or-no-p) #'always))
       (deb-packaging-test-display--with-schroots-buffer

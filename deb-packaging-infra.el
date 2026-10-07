@@ -163,13 +163,14 @@ The parent is the longest chroot name that is a prefix of SESSION."
 
 (defun deb-packaging-infra-create-schroot ()
   "Create a schroot with mk-sbuild.
-mk-sbuild self-sudos; the comint buffer's pty carries its prompt."
+mk-sbuild self-sudos; the terminal buffer carries its prompt."
   (interactive)
   (let* ((distro (read-string
                   (format "Distro (default %s): "
                           (deb-packaging-config--effective-distro))
                   nil nil (deb-packaging-config--effective-distro)))
          (arch (deb-packaging-infra--read-architecture)))
+    ;; mk-sbuild installs qemu-user-static itself for foreign arches.
     (when (yes-or-no-p (format "Run: mk-sbuild --arch=%s %s? " arch distro))
       (deb-packaging-infra--run-privileged
        "mk-sbuild"
@@ -254,12 +255,11 @@ Keeps the row of a deleted item from lingering until a manual `g'."
        (deb-packaging-commands--refresh-buffer mode refresh-fn)))))
 
 (defun deb-packaging-infra--run-privileged (name args mode refresh-fn)
-  "Run a privileged command through the comint runner; refresh on success.
-ARGS is the command list; interactive sudo and mk-sbuild need a pty for
-their password prompts (authd included), which the comint output buffer
-provides.  MODE and REFRESH-FN refresh the affected list buffer when the
-command exits 0, mirroring `deb-packaging-infra--compile-then-refresh'."
-  (let ((buf (deb-packaging-commands--run-command name args)))
+  "Run a privileged command in a terminal buffer; refresh on success.
+ARGS is the command list.  MODE and REFRESH-FN refresh the affected list
+buffer when the command exits 0, mirroring
+`deb-packaging-infra--compile-then-refresh'."
+  (let ((buf (deb-packaging-commands--run-terminal name args)))
     (when-let ((proc (get-buffer-process buf)))
       (deb-packaging-commands--wrap-sentinel
        proc
@@ -312,9 +312,8 @@ Use schroot at point, or prompt."
       (let ((msg (format "Will delete:\n  Config: %s\n  Directory: %s\n\nProceed?"
                          config-file directory)))
         (when (yes-or-no-p msg)
-          ;; One sh -c so both sudo calls share the pty (and its cached
-          ;; credential); --run-command shell-quotes per-arg, so && only
-          ;; survives inside a single -c string.
+          ;; One sh -c so both sudo calls share the terminal (and its
+          ;; cached credential).
           (deb-packaging-infra--run-privileged
            "schroot-delete"
            (list "sh" "-c"
@@ -462,6 +461,9 @@ Each plist has :name, :type, :status, and type-specific keys."
                   nil nil (deb-packaging-config--effective-distro)))
          (arch (deb-packaging-infra--read-architecture))
          (cmd (format "autopkgtest-build-lxd ubuntu-daily:%s/%s" distro arch)))
+    (when-let ((why (deb-packaging-commands--runner-unusable
+                     "lxd" arch (deb-packaging-config--host-architecture))))
+      (user-error "%s" why))
     (when (yes-or-no-p (format "Run: %s? " cmd))
       (deb-packaging-commands--compile cmd))))
 
@@ -657,7 +659,7 @@ Each plist has keys: :name, :path, :size."
 
 (defun deb-packaging-infra-create-qemu ()
   "Create a QEMU image for autopkgtest.
-The image dir is often root-owned; sudo (with its prompt in the comint
+The image dir is often root-owned; sudo (with its prompt in the terminal
 buffer) is used only when it is not user-writable."
   (interactive)
   (let* ((distro (read-string

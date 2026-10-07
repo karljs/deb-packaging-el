@@ -284,6 +284,12 @@ context, which must not block."
   "Return non-nil when CTX targets an architecture other than the host's."
   (not (equal (plist-get ctx :target-arch) (plist-get ctx :host-arch))))
 
+(defun deb-packaging-status--test-runner (ctx)
+  "Return the runner the Autopkgtest menu would use for CTX."
+  (or (transient-arg-value
+       "--runner=" (ignore-errors (transient-args 'deb-packaging-test-transient)))
+      (deb-packaging-commands--default-runner ctx)))
+
 (defun deb-packaging-status--source-builder ()
   "Return the builder the Source package menu would use."
   (deb-packaging-status--builder 'deb-packaging-commands-source-build-transient
@@ -309,12 +315,17 @@ REASON says why the phase cannot run now, or is nil when it can."
                 (or (funcall tool binary-builder)
                     (funcall git binary-builder)
                     (cond ((equal binary-builder "sbuild")
-                           (unless (alist-get 'dsc arts) "Needs a source package"))
+                           (or (deb-packaging-config--emulation-missing
+                                (plist-get ctx :target-arch) (plist-get ctx :host-arch))
+                               (unless (alist-get 'dsc arts) "Needs a source package")))
                           ((deb-packaging-status--cross-p ctx)
                            (format "Only sbuild can build for %s"
                                    (plist-get ctx :target-arch))))))
           (cons 'autopkgtest
                 (or (funcall tool "autopkgtest")
+                    (deb-packaging-commands--runner-unusable
+                     (deb-packaging-status--test-runner ctx)
+                     (plist-get ctx :target-arch) (plist-get ctx :host-arch))
                     (unless (alist-get 'debs arts) "Needs binaries")))
           (cons 'dput
                 (or (funcall tool "dput")
@@ -771,10 +782,7 @@ BLOCKER says why it cannot run, or is nil."
       (magit-insert-section-body
         (deb-packaging-status--insert-blocker state blocker)
         (when debs
-          (let* ((runner (or (transient-arg-value
-                              "--runner=" (ignore-errors
-                                            (transient-args 'deb-packaging-test-transient)))
-                             "lxd"))
+          (let* ((runner (deb-packaging-status--test-runner ctx))
                  (info (deb-packaging-commands--test-image-info runner distro arch))
                  (image (plist-get info :image))
                  (exists (plist-get info :exists)))
@@ -787,6 +795,9 @@ BLOCKER says why it cannot run, or is nil."
                              (propertize (concat image " missing (press t, then i)")
                                          'font-lock-face
                                          'deb-packaging-status-failed))))))
+            (when (equal runner "schroot")
+              (deb-packaging-status--insert-note
+               "Skips tests needing isolation-container, isolation-machine or reboots"))
             (when (member "--shell-fail"
                           (ignore-errors (transient-args 'deb-packaging-test-transient)))
               (deb-packaging-status--insert-note
@@ -1047,6 +1058,7 @@ Navigation and folding come from `magit-section-mode'."
   "r"   #'deb-packaging-commands-reset-transient
   "R"   #'deb-packaging-commands-regenerate
   "G"   #'deb-packaging-get-transient
+  "A"   #'deb-packaging-commands-set-architecture
   "i"   #'deb-packaging-infra-dispatch
   "?"   #'deb-packaging-dispatch
   "g"   #'deb-packaging-status-refresh

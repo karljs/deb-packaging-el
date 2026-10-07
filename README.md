@@ -116,9 +116,23 @@ Ubuntu devel for a new delta on a Debian upload. The header shows both.
 
 The target resolves from the saved package and distribution choice, the
 configured default, the host architecture, then `amd64` as a final fallback.
-The status buffer shows host and target separately when they differ. Architecture
-selection is passed to sbuild and autopkgtest. Local `dpkg-buildpackage -b`
-builds are limited to the host architecture.
+Set it with `A` in the status buffer or dispatch. The status buffer shows host
+and target separately when they differ. Architecture selection is passed to
+sbuild and autopkgtest. Local `dpkg-buildpackage -b` builds are limited to the
+host architecture.
+
+Foreign architectures (anything the host can't run natively; i386 on amd64
+and armhf on arm64 are native) run under emulation:
+
+- Builds: `mk-sbuild --arch=arm64` and sbuild need `qemu-user-static`.
+- Tests default to the `schroot` runner, which reuses the sbuild chroot. It
+  skips tests that need `isolation-container`, `isolation-machine`, or reboots.
+- The `qemu` runner boots a full VM under TCG (slow). It needs the matching
+  `qemu-system-*` package, plus EFI firmware on arm64, armhf and riscv64.
+  The run refuses with the package to install when either is missing.
+- LXD can't run foreign-architecture containers.
+
+An arm64 session on amd64: `A arm64`, `b c` (chroot), `s s`, `b b`, then `t t`.
 
 ## Launchpad PPAs
 

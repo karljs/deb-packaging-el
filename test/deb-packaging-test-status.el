@@ -235,6 +235,18 @@
       (should (equal (alist-get 'binary-build blockers) "sbuild is not installed"))
       (should (equal (alist-get 'dput blockers) "dput is not installed")))))
 
+(ert-deftest deb-packaging-test-status/blockers-foreign-arch-without-binfmt ()
+  (deb-packaging-test-status--with-tools
+    (let* ((deb-packaging-config--binfmt-dir "/nonexistent/")
+           (ctx (plist-put (plist-put (deb-packaging-test-status--ctx
+                                       '((dsc . "foo.dsc") (debs . ("x.deb"))))
+                                      :target-arch "arm64")
+                           :host-arch "amd64"))
+           (blockers (cl-letf (((symbol-function 'transient-args) #'ignore))
+                       (deb-packaging-status--blockers ctx))))
+      (should (string-match-p "qemu-user-static" (alist-get 'binary-build blockers)))
+      (should (string-match-p "qemu-user-static" (alist-get 'autopkgtest blockers))))))
+
 (ert-deftest deb-packaging-test-status/lint-rollup-ready-with-success-on-source ()
   (deb-packaging-test-status--with-tools
     (let ((deb-packaging-commands--run-history nil))

@@ -18,7 +18,7 @@
                 (equal (plist-get (car entry) :address) address))
               tabulated-list-entries))
 
-;;; Privileged commands run via the comint runner (pty for authd prompts)
+;;; Privileged commands run in a terminal (authd's PAM TUI needs raw keys)
 
 (ert-deftest deb-packaging-test-infra/delete-qemu-plain-rm-when-writable ()
   (let (args)
@@ -26,19 +26,19 @@
                (lambda () (list (list :name "img" :path "/x.img"))))
               ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
               ((symbol-function 'file-writable-p) (lambda (&rest _) t))
-              ((symbol-function 'deb-packaging-commands--run-command)
+              ((symbol-function 'deb-packaging-commands--run-terminal)
                (lambda (_name a &rest _) (setq args a) nil)))
       (deb-packaging-infra-delete-qemu "img")
       (should (equal args '("rm" "/x.img"))))))
 
 (ert-deftest deb-packaging-test-infra/delete-qemu-sudo-when-not-writable ()
-  "Interactive sudo (no -n): the prompt renders in the comint buffer."
+  "Interactive sudo (no -n): the prompt renders in the terminal buffer."
   (let (args)
     (cl-letf (((symbol-function 'deb-packaging-infra--list-qemu-images)
                (lambda () (list (list :name "img" :path "/x.img"))))
               ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
               ((symbol-function 'file-writable-p) (lambda (&rest _) nil))
-              ((symbol-function 'deb-packaging-commands--run-command)
+              ((symbol-function 'deb-packaging-commands--run-terminal)
                (lambda (_name a &rest _) (setq args a) nil)))
       (deb-packaging-infra-delete-qemu "img")
       (should (equal args '("sudo" "rm" "/x.img"))))))
@@ -51,7 +51,7 @@
                  (list (list :name "s" :config-file "/etc/schroot/s"
                              :directory "/srv/schroot/s"))))
               ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
-              ((symbol-function 'deb-packaging-commands--run-command)
+              ((symbol-function 'deb-packaging-commands--run-terminal)
                (lambda (_name a &rest _) (setq args a) nil)))
       (deb-packaging-infra-delete-schroot "s")
       (should (equal args
@@ -70,11 +70,22 @@
                  (when (equal program "dpkg")
                    (insert "amd64"))
                  0))
-              ((symbol-function 'deb-packaging-commands--run-command)
+              ((symbol-function 'deb-packaging-commands--run-terminal)
                (lambda (_name a &rest _) (setq args a) nil)))
       (deb-packaging-infra-create-schroot)
-       (should (equal probed '("dpkg")))
+       (should (equal (delete-dups probed) '("dpkg")))
       (should (equal args '("mk-sbuild" "--arch=amd64" "noble"))))))
+
+(ert-deftest deb-packaging-test-infra/create-lxd-refuses-foreign-arch ()
+  (let (ran)
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "noble"))
+              ((symbol-function 'completing-read) (lambda (&rest _) "arm64"))
+              ((symbol-function 'deb-packaging-config--host-architecture)
+               (lambda (&rest _) "amd64"))
+              ((symbol-function 'deb-packaging-commands--compile)
+               (lambda (&rest _) (setq ran t))))
+      (should (string-match-p "LXD can't run" (cadr (should-error (deb-packaging-infra-create-lxd) :type 'user-error))))
+      (should-not ran))))
 
 ;;; ppa show rendering
 
@@ -427,7 +438,7 @@ The sentinel fires during the wait, while the mode buffer is alive."
                     ((symbol-function 'file-writable-p) (lambda (&rest _) t))
                     ((symbol-function 'deb-packaging-infra-refresh-qemu-images)
                      (lambda () (cl-incf (car refreshed))))
-                    ((symbol-function 'deb-packaging-commands--run-command)
+                    ((symbol-function 'deb-packaging-commands--run-terminal)
                      (lambda (_name _a &rest _)
                        (make-process :name "qdel" :buffer buf
                                      :command command :noquery t)
@@ -446,6 +457,23 @@ The sentinel fires during the wait, while the mode buffer is alive."
   (let ((refreshed (list 0)))
     (deb-packaging-test-infra--delete-qemu-with-command '("false") refreshed)
     (should (= (car refreshed) 0))))
+
+(ert-deftest deb-packaging-test-infra/run-terminal-passes-raw-keys-to-a-tty ()
+  "regression: authd's PAM TUI needs a real tty and unbuffered keys."
+  (cl-letf (((symbol-function 'deb-packaging-display-buffer) #'ignore))
+    (let* ((buf (deb-packaging-commands--run-terminal
+                 "t" '("sh" "-c" "test -t 0 && stty raw -echo && k=$(dd bs=1 count=1 2>/dev/null) && echo \"got:$k\"")))
+           (proc (get-buffer-process buf)))
+      (unwind-protect
+          (progn
+            (should (eq (buffer-local-value 'major-mode buf) 'term-mode))
+            (should (eq (buffer-local-value 'deb-packaging-display-category buf) 'output))
+            (accept-process-output proc 0.3)
+            (process-send-string proc "y")
+            (deb-packaging-test-run--wait proc)
+            (should (eq (process-exit-status proc) 0))
+            (should (string-match-p "got:y" (with-current-buffer buf (buffer-string)))))
+        (kill-buffer buf)))))
 
 ;;; Honest lxc start/stop
 

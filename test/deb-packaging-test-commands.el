@@ -356,12 +356,38 @@ and re-emit without doubling the argument."
                  (lambda (_name args &optional _dir _key _buffer-dir)
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-repos-save) #'ignore)
+                ((symbol-function 'deb-packaging-config--emulation-missing) #'ignore)
+                ((symbol-function 'deb-packaging-detect--schroot-exists-p) (lambda (d a) (format "%s-%s" d a)))
                 ((symbol-function 'deb-packaging-config-save-architecture)
                  (lambda (package distro arch)
                    (setq captured-save (list package distro arch)))))
         (deb-packaging-commands-binary-build '("--arch=arm64")))
       (should (member "--arch=arm64" captured-args))
       (should (equal captured-save '("mypkg" "noble" "arm64"))))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-foreign-arch-needs-binfmt ()
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let ((deb-packaging-config--binfmt-dir "/nonexistent/") ran)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (&rest _) (setq ran t)))
+                ((symbol-function 'deb-packaging-config--host-architecture)
+                 (lambda (&rest _) "amd64")))
+        (should (string-match-p "qemu-user-static" (cadr (should-error (deb-packaging-commands-binary-build '("--arch=arm64")) :type 'user-error)))))
+      (should-not ran))))
+
+(ert-deftest deb-packaging-test-commands/set-architecture-saves-and-refreshes ()
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble")
+    (let (saved refreshed)
+      (cl-letf (((symbol-function 'deb-packaging-config-save-architecture)
+                 (lambda (&rest a) (setq saved a)))
+                ((symbol-function 'deb-packaging-commands--notify-status-refresh)
+                 (lambda () (setq refreshed t))))
+        (deb-packaging-commands-set-architecture "arm64"))
+      (should (equal saved '("mypkg" "noble" "arm64")))
+      (should refreshed))))
 
 (ert-deftest deb-packaging-test-commands/sbuild-multiple-extra-repos ()
   "sbuild receives one expanded --extra-repository= flag per entry."
@@ -374,7 +400,8 @@ and re-emit without doubling the argument."
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-repos-save)
                  (lambda (pkg distro entries)
-                   (setq captured-save (list pkg distro entries)))))
+                   (setq captured-save (list pkg distro entries))))
+                ((symbol-function 'deb-packaging-detect--schroot-exists-p) (lambda (d a) (format "%s-%s" d a))))
         (deb-packaging-test--with-mocked-process
             '(("dpkg" . "amd64") ("curl" . "200"))
           (deb-packaging-commands-binary-build
@@ -398,7 +425,8 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble"
               :artifacts (("mypkg_1.0-1.dsc" . "")))
     (let (captured-save)
-      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+      (cl-letf (((symbol-function 'deb-packaging-detect--schroot-exists-p) (lambda (d a) (format "%s-%s" d a)))
+                ((symbol-function 'deb-packaging-commands--run-command)
                  (lambda (_name _args &optional _dir _key _buffer-dir)))
                  ((symbol-function 'deb-packaging-repos-save)
                   (lambda (pkg distro entries)
@@ -412,7 +440,8 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble"
               :artifacts (("mypkg_1.0-1.dsc" . "")))
     (let (captured-args)
-      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+      (cl-letf (((symbol-function 'deb-packaging-detect--schroot-exists-p) (lambda (d a) (format "%s-%s" d a)))
+                ((symbol-function 'deb-packaging-commands--run-command)
                  (lambda (_name args &optional _dir _key _buffer-dir)
                    (setq captured-args args)))
                 ((symbol-function 'deb-packaging-repos-save) #'ignore))
@@ -451,7 +480,8 @@ and re-emit without doubling the argument."
       '(:name "mypkg" :version "1.0-1" :distro "noble"
               :artifacts (("mypkg_1.0-1.dsc" . "")))
     (let (captured-dir captured-buffer-dir)
-      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+      (cl-letf (((symbol-function 'deb-packaging-detect--schroot-exists-p) (lambda (d a) (format "%s-%s" d a)))
+                ((symbol-function 'deb-packaging-commands--run-command)
                  (lambda (_name _args &optional dir _key buffer-dir)
                    (setq captured-dir dir
                          captured-buffer-dir buffer-dir)))
@@ -608,7 +638,7 @@ default would duplicate them (or break Debian builds)."
 (ert-deftest deb-packaging-test-commands/test-image-build-hint-qemu ()
   (should (string= (deb-packaging-commands--test-image-build-hint
                     "qemu" "noble" "amd64")
-                   "autopkgtest-buildvm-ubuntu-cloud -r noble -a amd64")))
+                   "autopkgtest-buildvm-ubuntu-cloud -r noble -a amd64 -o /var/lib/adt-images")))
 
 (ert-deftest deb-packaging-test-commands/test-image-build-hint-unknown ()
   (should (null (deb-packaging-commands--test-image-build-hint "docker" "noble"))))
@@ -788,6 +818,100 @@ default would duplicate them (or break Debian builds)."
                      '("autopkgtest" "--apt-upgrade"
                        "--apt-pocket=proposed"))))))
 
+(defmacro deb-packaging-test-commands--with-arm64-debs (&rest body)
+  "Run BODY in an arm64-targeted tree with built debs on an amd64 host."
+  (declare (indent 0))
+  `(deb-packaging-test--with-package-tree
+       '(:name "mypkg" :version "1.0-1" :distro "noble"
+               :artifacts
+               (("mypkg_1.0-1_arm64.changes"
+                 . "Format: 1.8\n\nFiles:\n d41d8cd98f00b204e9800998ecf8427e 1234 admin optional mypkg_1.0-1_arm64.deb\n")
+                ("mypkg_1.0-1_arm64.deb" . "")))
+     (cl-letf (((symbol-function 'deb-packaging-config-load-architecture)
+                (lambda (&rest _) "arm64"))
+               ((symbol-function 'deb-packaging-config--host-architecture)
+                (lambda (&rest _) "amd64")))
+       ,@body)))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-foreign-defaults-to-schroot ()
+  (deb-packaging-test-commands--with-arm64-debs
+    (let (captured)
+      (cl-letf (((symbol-function 'deb-packaging-config--emulation-missing) #'ignore)
+                ((symbol-function 'deb-packaging-detect--schroot-exists-p)
+                 (lambda (distro arch) (format "%s-%s" distro arch)))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &rest _) (setq captured args))))
+        (deb-packaging-commands-autopkgtest nil))
+      (should (equal (last captured 3) '("--" "schroot" "noble-arm64"))))))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-qemu-foreign-args ()
+  (deb-packaging-test-commands--with-arm64-debs
+    (let ((deb-packaging-commands-qemu-foreign-cpus 3) captured)
+      (cl-letf (((symbol-function 'file-exists-p) (lambda (_) t))
+                ((symbol-function 'executable-find) (lambda (_) "/usr/bin/x"))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &rest _) (setq captured args))))
+        (deb-packaging-commands-autopkgtest '("--runner=qemu")))
+      (should (equal (cdr (member "--" captured))
+                     '("qemu" "--dpkg-architecture=arm64" "--timeout-reboot=300"
+                       "--cpus=3"
+                       "/var/lib/adt-images/autopkgtest-noble-arm64.img"))))))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-lxd-refuses-foreign ()
+  (deb-packaging-test-commands--with-arm64-debs
+    (let (ran)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (&rest _) (setq ran t))))
+        (should (string-match-p
+                 "LXD can't run arm64"
+                 (cadr (should-error (deb-packaging-commands-autopkgtest '("--runner=lxd"))
+                                     :type 'user-error)))))
+      (should-not ran))))
+
+(ert-deftest deb-packaging-test-commands/runner-unusable-native-pairs ()
+  (cl-letf (((symbol-function 'executable-find) (lambda (_) "/usr/bin/x")))
+    (should-not (deb-packaging-commands--runner-unusable "lxd" "i386" "amd64")))
+  (should-not (deb-packaging-commands--runner-unusable "schroot" "amd64" "amd64"))
+  (should-not (deb-packaging-commands--qemu-foreign-args "i386" "amd64"))
+  (should (deb-packaging-commands--runner-unusable "lxd" "s390x" "amd64")))
+
+(ert-deftest deb-packaging-test-commands/runner-unusable-names-packages ()
+  (cl-letf (((symbol-function 'executable-find) #'ignore))
+    (should (string-match-p "snap install lxd"
+                            (deb-packaging-commands--runner-unusable "lxd" "amd64" "amd64")))
+    (should (string-match-p "qemu-system-ppc64le .*apt install qemu-system-ppc\\b"
+                            (deb-packaging-commands--runner-unusable "qemu" "ppc64el" "amd64"))))
+  (cl-letf (((symbol-function 'executable-find) (lambda (_) "/usr/bin/x"))
+            ((symbol-function 'file-exists-p) #'ignore))
+    (should (string-match-p "qemu-efi-aarch64"
+                            (deb-packaging-commands--runner-unusable "qemu" "arm64" "amd64")))
+    (should-not (deb-packaging-commands--runner-unusable "qemu" "s390x" "amd64"))))
+
+(ert-deftest deb-packaging-test-commands/sbuild-missing-chroot-points-to-mk-sbuild ()
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (ran)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (&rest _) (setq ran t)))
+                ((symbol-function 'deb-packaging-config--emulation-missing) #'ignore)
+                ((symbol-function 'executable-find) (lambda (_) "/usr/bin/schroot"))
+                ((symbol-function 'deb-packaging-detect--schroot-exists-p) #'ignore))
+        (should (string-match-p
+                 "mk-sbuild --arch=arm64 noble"
+                 (cadr (should-error (deb-packaging-commands-binary-build '("--arch=arm64"))
+                                     :type 'user-error)))))
+      (should-not ran))))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-missing-schroot-points-to-mk-sbuild ()
+  (deb-packaging-test-commands--with-arm64-debs
+    (cl-letf (((symbol-function 'deb-packaging-config--emulation-missing) #'ignore)
+              ((symbol-function 'deb-packaging-detect--schroot-exists-p) #'ignore))
+      (should (string-match-p
+               "mk-sbuild --arch=arm64 noble"
+               (cadr (should-error (deb-packaging-commands-autopkgtest nil)
+                                   :type 'user-error)))))))
+
 ;;; git ubuntu export-orig
 
 (ert-deftest deb-packaging-test-commands/export-orig-runs-git-ubuntu ()
@@ -902,7 +1026,8 @@ Binds `captured-args' to whatever sbuild would run."
        (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
                   (lambda (_name args &optional _dir _key _buffer-dir)
                     (setq captured-args args)))
-                 ((symbol-function 'deb-packaging-repos-save) #'ignore))
+                 ((symbol-function 'deb-packaging-repos-save) #'ignore)
+                 ((symbol-function 'deb-packaging-detect--schroot-exists-p) (lambda (d a) (format "%s-%s" d a))))
          ,@body))))
 
 (ert-deftest deb-packaging-test-commands/sbuild-errors-on-unpublished-ppa ()

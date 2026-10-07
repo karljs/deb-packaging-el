@@ -26,6 +26,7 @@
 
 ;; Forward-declare helpers to silence the byte-compiler.
 (declare-function deb-packaging-commands--runner-choices "deb-packaging-commands")
+(declare-function deb-packaging-commands--default-runner "deb-packaging-commands")
 (declare-function deb-packaging-commands--package-context "deb-packaging-commands")
 
 ;; Tool-specific variables live in deb-packaging-commands.el.
@@ -186,8 +187,7 @@ sources.list provides the distro's pockets)."
 
 (defun deb-packaging-transients--read-architecture (prompt initial-input _history)
   "Read a Debian architecture with common values as completion candidates."
-  (completing-read prompt '("amd64" "arm64" "armhf" "i386" "ppc64el"
-                            "riscv64" "s390x")
+  (completing-read prompt (mapcar #'car deb-packaging-config--qemu-architectures)
                    nil nil initial-input))
 
 (defun deb-packaging-transients--seed-from-prefix (obj arg-prefix)
@@ -505,16 +505,17 @@ Each check reads only its own tool's options."
 
 (defun deb-packaging-transients--test-default-value ()
   "Dynamic default for the test transient."
-  (list "--apt-upgrade" "--runner=lxd"))
+  (list "--apt-upgrade"
+        (concat "--runner=" (deb-packaging-commands--default-runner))))
 
 (defun deb-packaging-transients--create-test-image ()
   "Create the image selected in the autopkgtest transient."
   (interactive)
-  (if (equal (transient-arg-value "--runner="
-                                  (transient-args 'deb-packaging-test-transient))
-             "qemu")
-      (deb-packaging-infra-create-qemu)
-    (deb-packaging-infra-create-lxd)))
+  (pcase (transient-arg-value "--runner="
+                              (transient-args 'deb-packaging-test-transient))
+    ("qemu" (deb-packaging-infra-create-qemu))
+    ("schroot" (deb-packaging-infra-create-schroot))
+    (_ (deb-packaging-infra-create-lxd))))
 
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()

@@ -80,6 +80,11 @@ Falls back to `deb-packaging-config-default-distro' outside a tree."
     (with-temp-file file
       (insert architecture "\n"))))
 
+(defun deb-packaging-config--host-architecture (&optional context)
+  "Return the host architecture from CONTEXT or dpkg."
+  (or (plist-get context :host-arch)
+      (deb-packaging-detect--call-process-string "dpkg" "--print-architecture")))
+
 (defun deb-packaging-config--effective-architecture (&optional context)
   "Return the active target architecture for CONTEXT or the current package."
   (when (and deb-packaging-config-default-architecture
@@ -92,11 +97,46 @@ Falls back to `deb-packaging-config-default-distro' outside a tree."
          (distro (or (plist-get context :distro)
                      (deb-packaging-config--effective-distro)))
          (saved (and name distro
-                     (deb-packaging-config-load-architecture name distro)))
-         (host (or (plist-get context :host-arch)
-                   (deb-packaging-detect--call-process-string
-                    "dpkg" "--print-architecture"))))
-    (or saved deb-packaging-config-default-architecture host "amd64")))
+                     (deb-packaging-config-load-architecture name distro))))
+    (or saved deb-packaging-config-default-architecture
+        (deb-packaging-config--host-architecture context) "amd64")))
+
+;; Also the qemu-system-* suffix autopkgtest derives (ppc64el -> ppc64le).
+(defconst deb-packaging-config--qemu-architectures
+  '(("amd64" . "x86_64") ("arm64" . "aarch64") ("armhf" . "arm")
+    ("i386" . "i386") ("ppc64el" . "ppc64le") ("riscv64" . "riscv64")
+    ("s390x" . "s390x"))
+  "Debian architecture to QEMU architecture name.")
+
+(defvar deb-packaging-config--binfmt-dir "/proc/sys/fs/binfmt_misc/")
+
+(defun deb-packaging-config--native-architecture-p (target host)
+  "Return non-nil when a HOST machine runs TARGET binaries without emulation."
+  (or (equal target host)
+      (member (cons host target) '(("amd64" . "i386") ("arm64" . "armhf")))))
+
+(defun deb-packaging-config--foreign-p (&optional context)
+  "Return non-nil when CONTEXT's target architecture needs emulation."
+  (not (deb-packaging-config--native-architecture-p
+        (or (plist-get context :target-arch)
+            (deb-packaging-config--effective-architecture context))
+        (deb-packaging-config--host-architecture context))))
+
+(defun deb-packaging-config--emulation-missing (target host)
+  "Return why HOST cannot run TARGET binaries through qemu-user, or nil."
+  (unless (deb-packaging-config--native-architecture-p target host)
+    (let* ((qemu (cdr (assoc target deb-packaging-config--qemu-architectures)))
+           (entry (and qemu (expand-file-name (concat "qemu-" qemu)
+                                              deb-packaging-config--binfmt-dir))))
+      ;; Without the F flag the interpreter path is resolved inside the
+      ;; chroot, where it doesn't exist (noble's dynamic qemu-user-binfmt).
+      (unless (and entry (file-readable-p entry)
+                   (with-temp-buffer
+                     (insert-file-contents entry)
+                     (and (looking-at-p "enabled")
+                          (re-search-forward "^flags: .*F" nil t))))
+        (format "Running %s on %s needs qemu-user-static (sudo apt install qemu-user-static)"
+                target host)))))
 
 ;;; Propagation
 

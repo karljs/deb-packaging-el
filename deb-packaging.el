@@ -89,6 +89,7 @@ The target distro comes from the changelog; other transients inherit it."
     ("R" "Regenerate debian/control" deb-packaging-commands-regenerate)]
    ["Other"
     ("G" "Get another package..."    deb-packaging-get-transient)
+    ("A" "Target architecture"       deb-packaging-commands-set-architecture)
     ("i" "Infrastructure (chroots, images, PPAs)..." deb-packaging-infra-dispatch)
     ("q" "Quit"                      transient-quit-one)]])
 
