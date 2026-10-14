@@ -55,23 +55,34 @@ Session-only.")
 (defconst deb-packaging-commands--unscoped 'unscoped)
 
 (defun deb-packaging-commands--run-scope (&optional dir context)
-  "Return the package and distro scope containing DIR, or nil."
+  "Return the package and distro scope containing DIR, or nil.
+Third element is the changelog version: run records do not survive a dch."
   (if context
       (list (plist-get context :pkg-dir)
             (plist-get context :distro)
-            (plist-get context :target-arch))
+            (plist-get context :target-arch)
+            (plist-get context :version))
     (when-let ((pkg-dir (deb-packaging-detect--find-package-dir dir)))
       (let ((default-directory pkg-dir))
         (list (file-truename pkg-dir)
               (nth 2 (deb-packaging-detect--parse-changelog pkg-dir))
-              (deb-packaging-config--effective-architecture))))))
+              (deb-packaging-config--effective-architecture)
+              (nth 1 (deb-packaging-detect--parse-changelog pkg-dir)))))))
+
+(defconst deb-packaging-commands--version-free-keys '(upstream-check clean)
+  "Run keys whose outcome does not depend on the changelog version.")
 
 (defun deb-packaging-commands--scoped-run-key (key &optional scope)
-  "Return KEY namespaced to package SCOPE when available."
+  "Return KEY namespaced to package SCOPE when available.
+Version-free keys drop the version so they survive a dch."
   (if (eq scope deb-packaging-commands--unscoped)
       key
     (if-let ((pkg-dir (or scope (deb-packaging-commands--run-scope))))
-        (cons pkg-dir key)
+        (cons (if (and (memq key deb-packaging-commands--version-free-keys)
+                       (= (length pkg-dir) 4))
+                  (butlast pkg-dir)
+                pkg-dir)
+              key)
       key)))
 
 (defun deb-packaging-commands--record-run (key status buf-name &optional summary scope run-id)

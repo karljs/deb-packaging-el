@@ -107,6 +107,20 @@ per record, not the first run's time forever."
                              :status)
                   'success)))))
 
+(ert-deftest deb-packaging-test-run/records-are-version-scoped ()
+  (let ((deb-packaging-commands--run-history nil))
+    (deb-packaging-test--with-package-tree
+        '(:name "foo" :version "1.0-1")
+      (deb-packaging-commands--record-run 'source-build 'success "*b*")
+      (deb-packaging-commands--record-run 'upstream-check 'success "*u*")
+      (deb-packaging-test--write-file
+       (expand-file-name "debian/changelog" pkg-dir)
+       (deb-packaging-test--changelog "foo" "1.0-1ubuntu1" "noble"))
+      (should-not (deb-packaging-commands-run-record 'source-build))
+      (should (eq (plist-get (deb-packaging-commands-run-record 'upstream-check)
+                             :status)
+                  'success)))))
+
 (ert-deftest deb-packaging-test-run/explicit-unscoped-key-ignores-ambient-package ()
   (deb-packaging-test--with-package-tree
       '(:name "foo" :version "1.0-1")
