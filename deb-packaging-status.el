@@ -301,6 +301,7 @@ REASON says why the phase cannot run now, or is nil when it can."
   (let* ((arts (plist-get ctx :artifacts))
          (source-builder (deb-packaging-status--source-builder))
          (binary-builder (deb-packaging-status--binary-builder))
+         (test-artifact (deb-packaging-transients--test-artifact))
          (tool (lambda (name) (unless (executable-find name)
                                 (format "%s is not installed" name))))
          (git (lambda (builder) (and (equal builder "gbp")
@@ -326,7 +327,10 @@ REASON says why the phase cannot run now, or is nil when it can."
                     (deb-packaging-commands--runner-unusable
                      (deb-packaging-status--test-runner ctx)
                      (plist-get ctx :target-arch) (plist-get ctx :host-arch))
-                    (unless (alist-get 'debs arts) "Needs binaries")))
+                    (unless (alist-get test-artifact arts)
+                      (if (eq test-artifact 'dsc)
+                          "Needs a source package"
+                        "Needs binaries"))))
           (cons 'dput
                 (or (funcall tool "dput")
                     (and (equal (plist-get ctx :changelog-distro) "UNRELEASED")
@@ -334,10 +338,11 @@ REASON says why the phase cannot run now, or is nil when it can."
                     (unless (alist-get 'source-changes arts)
                       "Needs a source package"))))))
 
-(defun deb-packaging-status--phase-states (ctx)
-  "Return an alist of (run-key . state) for the flow phases in CTX."
+(defun deb-packaging-status--phase-states (ctx &optional blockers)
+  "Return an alist of (run-key . state) for the flow phases in CTX.
+BLOCKERS is `deb-packaging-status--blockers' output when already known."
   (let* ((arts (plist-get ctx :artifacts))
-         (blockers (deb-packaging-status--blockers ctx))
+         (blockers (or blockers (deb-packaging-status--blockers ctx)))
          (state (lambda (key done)
                   (deb-packaging-status--phase-state
                    key done (not (alist-get key blockers))))))
@@ -869,8 +874,8 @@ BLOCKER says why it cannot run, or is nil."
                               'font-lock-face 'error)
                   "\n\nVisit a tree containing debian/changelog, then press g.\n")
         (let* ((facts (deb-packaging-develop--facts ctx))
-               (phases (deb-packaging-status--phase-states ctx))
                (blockers (deb-packaging-status--blockers ctx))
+               (phases (deb-packaging-status--phase-states ctx blockers))
                ;; Nothing ready: expand the first blocked row so it says why.
                (next (car (or (cl-find 'ready phases :key #'cdr)
                               (cl-find 'blocked phases :key #'cdr))))

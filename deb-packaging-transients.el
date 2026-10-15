@@ -517,6 +517,26 @@ Each check reads only its own tool's options."
     ("schroot" (deb-packaging-infra-create-schroot))
     (_ (deb-packaging-infra-create-lxd))))
 
+(defun deb-packaging-transients--test-artifact ()
+  "Artifact kind the test source mode needs: dsc or debs."
+  ;; ponytail: transient-args on the inactive prefix re-initializes every
+  ;; suffix, and this transient's :inapt-if reads this function: recursive
+  ;; re-init, seconds per status render. The transient-history head is the
+  ;; same last-used value without the init.
+  (let ((args (if (eq transient-current-command
+                      'deb-packaging-test-transient)
+                  (ignore-errors
+                    (transient-args 'deb-packaging-test-transient))
+                (car (alist-get 'deb-packaging-test-transient
+                                transient-history)))))
+    (if (equal (transient-arg-value "--source=" args) "dsc")
+        'dsc
+      'debs)))
+
+(defun deb-packaging-transients--test-needs ()
+  "Artifact needs of the test source selected in the test transient."
+  (list "autopkgtest" (deb-packaging-transients--test-artifact)))
+
 ;;;###autoload(autoload 'deb-packaging-test-transient "deb-packaging-transients" nil t)
 (transient-define-prefix deb-packaging-test-transient ()
   "Run autopkgtest locally.
@@ -528,6 +548,7 @@ The test image's distro comes from the changelog."
    ("-u"  "Upgrade packages before test"   "--apt-upgrade")
    ("-P"  "Use dependencies from proposed" "--apt-pocket=proposed")
    ("-f"  "Drop to shell on failure"       "--shell-fail")
+   ("-d"  "Run tests from the built .dsc"  "--source=dsc")
    ("-r"  "Test runner"
       "--runner="
       :class transient-option
@@ -536,8 +557,11 @@ The test image's distro comes from the changelog."
       :allow-empty nil)]
   [["Run"
     ("t" deb-packaging-commands-autopkgtest
-     :description (lambda () (deb-packaging-transients--label "Run autopkgtest" '("autopkgtest" debs)))
-     :inapt-if (lambda () (deb-packaging-transients--why-not '("autopkgtest" debs))))
+     :description (lambda () (deb-packaging-transients--label
+                              "Run autopkgtest"
+                              (deb-packaging-transients--test-needs)))
+     :inapt-if (lambda () (deb-packaging-transients--why-not
+                           (deb-packaging-transients--test-needs))))
     ("q" "Quit" transient-quit-one)]
    ["Setup"
     ("i" "Create test image" deb-packaging-transients--create-test-image)]])

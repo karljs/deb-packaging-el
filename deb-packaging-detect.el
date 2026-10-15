@@ -458,7 +458,7 @@ package tree.  Keys:
   :repo-dir      canonical Git top-level, or nil
   :git-p         non-nil inside a Git repository
   :branch        current branch, or nil for detached HEAD/non-Git
-  :dirty-p       non-nil for staged, unstaged, untracked, or submodule changes
+  :dirty-p       non-nil for staged or unstaged tracked-file changes
   :vcs-url       URL from Vcs-Git, or nil
   :vcs-branch    branch from Vcs-Git -b, or nil
   :artifacts     alist from `deb-packaging-detect--scan-artifacts'
@@ -493,10 +493,11 @@ package tree.  Keys:
             :git-p (and repo-dir t)
             :branch (when repo-dir (magit-get-current-branch))
             :dirty-p (and repo-dir
-                          (magit-git-lines "status" "--porcelain"
-                                           "--untracked-files=normal"
-                                           "--ignore-submodules=none")
-                          t)
+                           ;; -uno: untracked enumeration walks every file,
+                           ;; minutes on llvm-sized trees.
+                           (deb-packaging-detect--call-process-string
+                            "git" "status" "--porcelain" "--untracked-files=no")
+                           t)
             :vcs-url (car vcs-git)
             :vcs-branch (cadr vcs-git)
             :artifacts artifacts

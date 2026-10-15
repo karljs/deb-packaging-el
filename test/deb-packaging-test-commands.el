@@ -606,7 +606,7 @@ default would duplicate them (or break Debian builds)."
 ;;; deb-packaging-commands--test-image-info
 
 (ert-deftest deb-packaging-test-commands/test-image-info-lxd-exists ()
-  (deb-packaging-test--with-mocked-process '(("lxc" . 0))
+  (deb-packaging-test--with-mocked-process '(("lxc" . "image exists"))
     (let ((info (deb-packaging-commands--test-image-info "lxd" "noble" "amd64")))
       (should (equal (plist-get info :runner) "lxd"))
       (should (string= (plist-get info :image)
@@ -814,9 +814,98 @@ default would duplicate them (or break Debian builds)."
                            captured-args))
       (should-not (cl-some (lambda (a) (string-prefix-p "--runner=" a))
                            captured-args))
+      (should-not (cl-some (lambda (a) (string-prefix-p "--source=" a))
+                           captured-args))
+      (should (member "." captured-args))
       (should (equal (cl-subseq captured-args 0 3)
                      '("autopkgtest" "--apt-upgrade"
                        "--apt-pocket=proposed"))))))
+
+;;; autopkgtest --source=dsc
+
+(defmacro deb-packaging-test-commands--with-dsc (&rest body)
+  "Run BODY in a tree with a built .dsc, debs, and a stubbed LXD runner."
+  (declare (indent 0))
+  `(deb-packaging-test--with-package-tree
+       '(:name "mypkg" :version "1.0-1" :distro "noble"
+               :artifacts
+               (("mypkg_1.0-1.dsc" . "")
+                ("mypkg_1.0-1_amd64.changes"
+                 . "Format: 1.8\n\nFiles:\n d41d8cd98f00b204e9800998ecf8427e 1234 admin optional mypkg_1.0-1_amd64.deb\n")
+                ("mypkg_1.0-1_amd64.deb" . "")))
+     (cl-letf (((symbol-function 'executable-find) (lambda (_) "/usr/bin/x"))
+               ((symbol-function 'deb-packaging-commands--test-image-info)
+                (lambda (&rest _)
+                  (list :runner "lxd"
+                        :image "autopkgtest/ubuntu/noble/amd64"
+                        :exists t))))
+       ,@body)))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-dsc-uses-built-dsc ()
+  "--source=dsc runs tests from the built .dsc instead of the tree."
+  (deb-packaging-test-commands--with-dsc
+    (let (captured)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &rest _) (setq captured args))))
+        (deb-packaging-commands-autopkgtest '("--source=dsc" "--runner=lxd")))
+      (should (equal captured
+                     (list "autopkgtest"
+                           (expand-file-name "mypkg_1.0-1_amd64.deb" pkg-parent-dir)
+                           (expand-file-name "mypkg_1.0-1.dsc" pkg-parent-dir)
+                           "--" "lxd" "autopkgtest/ubuntu/noble/amd64"))))))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-dsc-requires-dsc ()
+  "--source=dsc without a built .dsc is a user-error, not a run."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts
+              (("mypkg_1.0-1_amd64.changes"
+                . "Format: 1.8\n\nFiles:\n d41d8cd98f00b204e9800998ecf8427e 1234 admin optional mypkg_1.0-1_amd64.deb\n")
+               ("mypkg_1.0-1_amd64.deb" . "")))
+    (let (ran)
+      (cl-letf (((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (&rest _) (setq ran t))))
+        (should (string-match-p
+                 "No .dsc found"
+                 (cadr (should-error (deb-packaging-commands-autopkgtest '("--source=dsc"))
+                                     :type 'user-error)))))
+      (should-not ran))))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-dsc-no-debs-declined ()
+  "Declining the testbed-build warning in dsc mode runs nothing."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (ran)
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (&rest _) (setq ran t))))
+        (should (string-match-p
+                 "binary build first"
+                 (cadr (should-error (deb-packaging-commands-autopkgtest '("--source=dsc"))
+                                     :type 'user-error)))))
+      (should-not ran))))
+
+(ert-deftest deb-packaging-test-commands/autopkgtest-dsc-no-debs-builds-in-testbed ()
+  "Accepting the warning runs autopkgtest on the bare .dsc."
+  (deb-packaging-test--with-package-tree
+      '(:name "mypkg" :version "1.0-1" :distro "noble"
+              :artifacts (("mypkg_1.0-1.dsc" . "")))
+    (let (captured)
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                ((symbol-function 'executable-find) (lambda (_) "/usr/bin/x"))
+                ((symbol-function 'deb-packaging-commands--test-image-info)
+                 (lambda (&rest _)
+                   (list :runner "lxd"
+                         :image "autopkgtest/ubuntu/noble/amd64"
+                         :exists t)))
+                ((symbol-function 'deb-packaging-commands--run-command)
+                 (lambda (_name args &rest _) (setq captured args))))
+        (deb-packaging-commands-autopkgtest '("--source=dsc" "--runner=lxd")))
+      (should (equal captured
+                     (list "autopkgtest"
+                           (expand-file-name "mypkg_1.0-1.dsc" pkg-parent-dir)
+                           "--" "lxd" "autopkgtest/ubuntu/noble/amd64"))))))
 
 (defmacro deb-packaging-test-commands--with-arm64-debs (&rest body)
   "Run BODY in an arm64-targeted tree with built debs on an amd64 host."

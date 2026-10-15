@@ -247,6 +247,20 @@
       (should (string-match-p "qemu-user-static" (alist-get 'binary-build blockers)))
       (should (string-match-p "qemu-user-static" (alist-get 'autopkgtest blockers))))))
 
+(ert-deftest deb-packaging-test-status/blockers-autopkgtest-follows-test-source ()
+  "The Autopkgtest blocker needs binaries for the tree, the .dsc for dsc mode."
+  (deb-packaging-test-status--with-tools
+    (let ((ctx (plist-put (plist-put (deb-packaging-test-status--ctx '((dsc . "foo.dsc")))
+                                     :host-arch "amd64")
+                          :target-arch "amd64")))
+      (let ((blockers (cl-letf (((symbol-function 'transient-args) #'ignore))
+                          (deb-packaging-status--blockers ctx))))
+        (should (equal (alist-get 'autopkgtest blockers) "Needs binaries")))
+      (let ((transient-history
+             '((deb-packaging-test-transient . (("--source=dsc"))))))
+        (should-not (alist-get 'autopkgtest
+                                (deb-packaging-status--blockers ctx)))))))
+
 (ert-deftest deb-packaging-test-status/lint-rollup-ready-with-success-on-source ()
   (deb-packaging-test-status--with-tools
     (let ((deb-packaging-commands--run-history nil))

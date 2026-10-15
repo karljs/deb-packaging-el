@@ -195,6 +195,14 @@ the learned key dead."
              ":key \"-P\"[^)]*:argument \"--apt-pocket=proposed\""
              layout))))
 
+(ert-deftest deb-packaging-test-dispatch/autopkgtest-binds-test-source ()
+  "The local autopkgtest transient can run tests from the built .dsc."
+  (let ((layout (deb-packaging-test-dispatch--layout
+                 'deb-packaging-test-transient)))
+    (should (string-match-p
+             ":key \"-d\"[^)]*:argument \"--source=dsc\""
+             layout))))
+
 (ert-deftest deb-packaging-test-dispatch/package-menus-open ()
   "regression: a -n infix shadowed -nc and the source menu failed to open."
   (dolist (prefix '(deb-packaging-dispatch-transient

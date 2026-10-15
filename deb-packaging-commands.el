@@ -919,9 +919,12 @@ Arguments: distro, architecture, `deb-packaging-config-qemu-dir'."
 
 (defun deb-packaging-commands--lxd-image-exists-p (image)
   "Return non-nil if LXD IMAGE exists locally.
-Nil when lxc is not installed (the image is then not available either)."
-  (ignore-errors
-    (zerop (call-process "lxc" nil nil nil "image" "info" image))))
+Nil when lxc is not installed (the image is then not available either).
+Memoized per render via `deb-packaging-detect--call-process-string';
+lxc image info is a daemon round-trip."
+  (and (deb-packaging-detect--call-process-string
+        "lxc" "image" "info" image)
+       t))
 
 (defun deb-packaging-commands--test-image-info (&optional runner distro architecture)
   "Return a plist describing the test image for RUNNER and DISTRO.
@@ -961,29 +964,39 @@ Return nil if RUNNER has no registered hint."
 
 (defun deb-packaging-commands-autopkgtest (&optional args)
   "Run autopkgtest with ARGS from the test transient.
-The test image's distro comes from the changelog."
+The test image's distro comes from the changelog.  Tests run from the
+working tree; --source=dsc runs them from the built .dsc instead."
   (interactive (list (transient-args 'deb-packaging-test-transient)))
   (let* ((pkg-dir (deb-packaging-detect--find-package-dir nil t))
          (ctx (deb-packaging-commands--package-context pkg-dir)))
     (unless ctx
       (user-error "Not in a Debian package directory"))
     (let* ((artifacts (plist-get ctx :artifacts))
-           (debs (alist-get 'debs artifacts)))
+           (debs (alist-get 'debs artifacts))
+           (from-dsc (equal (transient-arg-value "--source=" args) "dsc"))
+           (testsrc (if from-dsc
+                        (or (alist-get 'dsc artifacts)
+                            (user-error "No .dsc found; run a source build first"))
+                      ".")))
       (unless debs
-        (user-error "No .deb files found; run a binary build first"))
+        (if from-dsc
+            (unless (y-or-n-p "No .deb files found; autopkgtest will build the package inside the testbed. Continue? ")
+              (user-error "Run a binary build first, or retry and confirm the testbed build"))
+          (user-error "No .deb files found; run a binary build first")))
       (let* ((runner (or (transient-arg-value "--runner=" args)
                          (deb-packaging-commands--default-runner ctx)))
-              (distro (plist-get ctx :distro))
-              (architecture (plist-get ctx :target-arch))
-              (host (deb-packaging-config--host-architecture ctx))
-              (image-info (deb-packaging-commands--test-image-info
-                           runner distro architecture))
+             (distro (plist-get ctx :distro))
+             (architecture (plist-get ctx :target-arch))
+             (host (deb-packaging-config--host-architecture ctx))
+             (image-info (deb-packaging-commands--test-image-info
+                          runner distro architecture))
              (image (plist-get image-info :image))
              (image-exists (plist-get image-info :exists))
              (passthrough (cl-remove-if
                            (lambda (a)
                              (or (string-prefix-p "--runner=" a)
-                                 (string-prefix-p "--ppa=" a)))
+                                 (string-prefix-p "--ppa=" a)
+                                 (string-prefix-p "--source=" a)))
                            args)))
         (when-let ((why (deb-packaging-commands--runner-unusable
                          runner architecture host)))
@@ -1000,7 +1013,7 @@ The test image's distro comes from the changelog."
          (append (list "autopkgtest")
                  passthrough
                  debs
-                 (list "." "--" runner)
+                 (list testsrc "--" runner)
                  (when (equal runner "qemu")
                    (deb-packaging-commands--qemu-foreign-args architecture host))
                  (when image (list image)))

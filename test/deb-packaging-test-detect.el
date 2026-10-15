@@ -584,7 +584,8 @@
       (should (equal (plist-get ctx :vcs-url)
                      "https://example.com/foo.git"))
       (should (equal (plist-get ctx :vcs-branch) "debian/noble")))
-    (deb-packaging-test--write-file (expand-file-name "untracked" repo-dir) "x")
+    ;; -uno: untracked files do not count as dirty, modify a tracked one.
+    (deb-packaging-test--write-file (expand-file-name "debian/control" repo-dir) "x")
     (should (plist-get (deb-packaging-detect--scan-context repo-dir) :dirty-p))))
 
 (ert-deftest deb-packaging-test-detect/scan-context-detached-head ()
