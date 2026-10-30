@@ -244,8 +244,8 @@
                            :host-arch "amd64"))
            (blockers (cl-letf (((symbol-function 'transient-args) #'ignore))
                        (deb-packaging-status--blockers ctx))))
-      (should (string-match-p "qemu-user-static" (alist-get 'binary-build blockers)))
-      (should (string-match-p "qemu-user-static" (alist-get 'autopkgtest blockers))))))
+      (should (string-match-p "qemu-user" (alist-get 'binary-build blockers)))
+      (should (string-match-p "qemu-user" (alist-get 'autopkgtest blockers))))))
 
 (ert-deftest deb-packaging-test-status/blockers-autopkgtest-follows-test-source ()
   "The Autopkgtest blocker needs binaries for the tree, the .dsc for dsc mode."

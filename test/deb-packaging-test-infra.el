@@ -58,8 +58,8 @@
                      (list "sh" "-c"
                            "sudo rm -rf /srv/schroot/s && sudo rm /etc/schroot/s"))))))
 
-(ert-deftest deb-packaging-test-infra/create-schroot-runs-mk-sbuild-on-confirm ()
-  "mk-sbuild self-sudos; only the active target architecture is probed."
+(ert-deftest deb-packaging-test-infra/create-schroot-runs-sbuild-createchroot-on-confirm ()
+  "sbuild-createchroot is sbuild's own tool; no mk-sbuild on the path."
   (let (args (probed nil))
     (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "noble"))
               ((symbol-function 'completing-read) (lambda (&rest _) "amd64"))
@@ -73,8 +73,35 @@
               ((symbol-function 'deb-packaging-commands--run-terminal)
                (lambda (_name a &rest _) (setq args a) nil)))
       (deb-packaging-infra-create-schroot)
-       (should (equal (delete-dups probed) '("dpkg")))
-      (should (equal args '("mk-sbuild" "--arch=amd64" "noble"))))))
+       (should (equal (delete-dups (sort probed #'string<))
+                      '("dpkg" "ubuntu-distro-info")))
+       (should (equal
+                args
+                '("sudo" "sbuild-createchroot" "--arch=amd64" "--components=main"
+                  "noble" "/var/lib/schroot/chroots/noble-amd64"
+                  "http://deb.debian.org/debian"))))))
+
+(ert-deftest deb-packaging-test-infra/create-schroot-ubuntu-mirror-and-components ()
+  "An Ubuntu series gets the Ubuntu mirror and all components."
+  (let (args)
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "resolute"))
+              ((symbol-function 'completing-read) (lambda (&rest _) "arm64"))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'call-process)
+               (lambda (program &rest _)
+                 (when (equal program "dpkg") (insert "amd64"))
+                 (when (equal program "ubuntu-distro-info")
+                   (insert "resolute\n"))
+                 0))
+              ((symbol-function 'deb-packaging-commands--run-terminal)
+               (lambda (_name a &rest _) (setq args a) nil)))
+      (deb-packaging-infra-create-schroot)
+      (should (equal
+               args
+               '("sudo" "sbuild-createchroot" "--arch=arm64"
+                 "--components=main,universe,restricted,multiverse"
+                 "resolute" "/var/lib/schroot/chroots/resolute-arm64"
+                 "http://archive.ubuntu.com/ubuntu"))))))
 
 (ert-deftest deb-packaging-test-infra/create-lxd-refuses-foreign-arch ()
   (let (ran)

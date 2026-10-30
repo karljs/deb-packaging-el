@@ -374,7 +374,7 @@ and re-emit without doubling the argument."
                  (lambda (&rest _) (setq ran t)))
                 ((symbol-function 'deb-packaging-config--host-architecture)
                  (lambda (&rest _) "amd64")))
-        (should (string-match-p "qemu-user-static" (cadr (should-error (deb-packaging-commands-binary-build '("--arch=arm64")) :type 'user-error)))))
+        (should (string-match-p "qemu-user" (cadr (should-error (deb-packaging-commands-binary-build '("--arch=arm64")) :type 'user-error)))))
       (should-not ran))))
 
 (ert-deftest deb-packaging-test-commands/set-architecture-saves-and-refreshes ()
@@ -976,7 +976,7 @@ default would duplicate them (or break Debian builds)."
                             (deb-packaging-commands--runner-unusable "qemu" "arm64" "amd64")))
     (should-not (deb-packaging-commands--runner-unusable "qemu" "s390x" "amd64"))))
 
-(ert-deftest deb-packaging-test-commands/sbuild-missing-chroot-points-to-mk-sbuild ()
+(ert-deftest deb-packaging-test-commands/sbuild-missing-chroot-points-to-sbuild-createchroot ()
   (deb-packaging-test--with-package-tree
       '(:name "mypkg" :version "1.0-1" :distro "noble"
               :artifacts (("mypkg_1.0-1.dsc" . "")))
@@ -987,17 +987,17 @@ default would duplicate them (or break Debian builds)."
                 ((symbol-function 'executable-find) (lambda (_) "/usr/bin/schroot"))
                 ((symbol-function 'deb-packaging-detect--schroot-exists-p) #'ignore))
         (should (string-match-p
-                 "mk-sbuild --arch=arm64 noble"
+                 "sbuild-createchroot --arch=arm64 noble"
                  (cadr (should-error (deb-packaging-commands-binary-build '("--arch=arm64"))
                                      :type 'user-error)))))
       (should-not ran))))
 
-(ert-deftest deb-packaging-test-commands/autopkgtest-missing-schroot-points-to-mk-sbuild ()
+(ert-deftest deb-packaging-test-commands/autopkgtest-missing-schroot-points-to-sbuild-createchroot ()
   (deb-packaging-test-commands--with-arm64-debs
     (cl-letf (((symbol-function 'deb-packaging-config--emulation-missing) #'ignore)
               ((symbol-function 'deb-packaging-detect--schroot-exists-p) #'ignore))
       (should (string-match-p
-               "mk-sbuild --arch=arm64 noble"
+               "sbuild-createchroot --arch=arm64 noble"
                (cadr (should-error (deb-packaging-commands-autopkgtest nil)
                                    :type 'user-error)))))))
 

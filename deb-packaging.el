@@ -106,7 +106,7 @@ Outside a package tree, offer to clone or open a package instead."
 
 (defconst deb-packaging--optional-tools
   '("autopkgtest" "dput" "gbp" "git-ubuntu" "lintian" "lxc"
-    "mk-sbuild" "ppa" "sbuild" "ubuntu-lint")
+    "sbuild-createchroot" "ppa" "sbuild" "ubuntu-lint")
   "Optional external tools used by some workflows.")
 
 ;;;###autoload

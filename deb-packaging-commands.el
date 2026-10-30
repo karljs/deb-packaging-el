@@ -757,7 +757,7 @@ The --dist chroot selection always comes from the changelog."
         ;; ponytail: schroot installed = schroot mode; unshare-only setups skip this.
         (when (and (executable-find "schroot")
                    (not (deb-packaging-detect--schroot-exists-p distro arch)))
-          (user-error "No %s-%s chroot; create it with c in this menu (mk-sbuild --arch=%s %s)"
+          (user-error "No %s-%s chroot; create it with c in this menu (sbuild-createchroot --arch=%s %s)"
                       distro arch arch distro))
         (when-let ((kept (deb-packaging-resume--load ctx)))
           (unless (y-or-n-p "A failed build is kept for resuming (r).  Discard it and start fresh? ")
@@ -855,7 +855,7 @@ The schroot runner reuses the sbuild chroot."
 (defcustom deb-packaging-commands-test-build-hints
   '(("lxd"  . "autopkgtest-build-lxd ubuntu-daily:%s/%s")
     ("qemu" . "autopkgtest-buildvm-ubuntu-cloud -r %s -a %s -o %s")
-    ("schroot" . "mk-sbuild --arch=%2$s %1$s"))
+    ("schroot" . "sbuild-createchroot --arch=%2$s %1$s"))
   "Alist of runner name to build command template.
 Arguments: distro, architecture, `deb-packaging-config-qemu-dir'."
   :type '(alist :key-type string :value-type string)

@@ -162,19 +162,42 @@ The parent is the longest chroot name that is a prefix of SESSION."
     architecture))
 
 (defun deb-packaging-infra-create-schroot ()
-  "Create a schroot with mk-sbuild.
-mk-sbuild self-sudos; the terminal buffer carries its prompt."
+  "Create a schroot with sbuild-createchroot.
+sbuild's own tool: debootstrap plus the /etc/schroot/chroot.d config,
+policy-rc.d, sources.list. Used instead of mk-sbuild, whose foreign-arch
+qemu-user-static probe and install aborts on releases without the package."
   (interactive)
   (let* ((distro (read-string
                   (format "Distro (default %s): "
                           (deb-packaging-config--effective-distro))
                   nil nil (deb-packaging-config--effective-distro)))
-         (arch (deb-packaging-infra--read-architecture)))
-    ;; mk-sbuild installs qemu-user-static itself for foreign arches.
-    (when (yes-or-no-p (format "Run: mk-sbuild --arch=%s %s? " arch distro))
+         (arch (deb-packaging-infra--read-architecture))
+         (host (deb-packaging-config--host-architecture))
+         (ubuntu (member
+                  distro
+                  (split-string
+                   (or (deb-packaging-detect--call-process-string
+                        "ubuntu-distro-info" "--all")
+                       ""))))
+         (args (list "sudo" "sbuild-createchroot"
+                     (format "--arch=%s" arch)
+                     (format "--components=%s"
+                             (if ubuntu
+                                 "main,universe,restricted,multiverse"
+                               "main"))
+                     distro
+                     (format "/var/lib/schroot/chroots/%s-%s" distro arch)
+                     (if ubuntu
+                         "http://archive.ubuntu.com/ubuntu"
+                       "http://deb.debian.org/debian"))))
+    (when (yes-or-no-p
+           (format "Run: %s? " (mapconcat #'shell-quote-argument args " ")))
+      ;; debootstrap's second stage runs through binfmt; fail up front
+      ;; with the fix rather than a cryptic error deep in the bootstrap.
+      (when-let ((why (deb-packaging-config--emulation-missing arch host)))
+        (user-error "%s" why))
       (deb-packaging-infra--run-privileged
-       "mk-sbuild"
-       (list "mk-sbuild" (format "--arch=%s" arch) distro)
+       "sbuild-createchroot" args
        'deb-packaging-infra-schroots-mode
        #'deb-packaging-infra-refresh-schroots))))
 

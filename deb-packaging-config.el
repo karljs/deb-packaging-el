@@ -135,7 +135,7 @@ Falls back to `deb-packaging-config-default-distro' outside a tree."
                      (insert-file-contents entry)
                      (and (looking-at-p "enabled")
                           (re-search-forward "^flags: .*F" nil t))))
-        (format "Running %s on %s needs qemu-user-static (sudo apt install qemu-user-static)"
+        (format "Running %s on %s needs qemu-user (sudo apt install qemu-user qemu-user-binfmt)"
                 target host)))))
 
 ;;; Propagation
